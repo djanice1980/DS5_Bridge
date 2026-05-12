@@ -6,7 +6,8 @@
 
 DS5 Bridge lets you use a real Sony DualSense or DualSense Edge controller
 wirelessly through a Raspberry Pi Pico 2 W. The controller pairs to the Pico over
-Bluetooth, and your PC sees a standard DualSense-compatible USB controller.
+Bluetooth, and your PC sees a standard DualSense-compatible USB controller. The
+firmware is intended for PC use.
 
 The public release includes the companion firmware and a Windows companion app
 for tuning the controller without reflashing the Pico.
@@ -90,7 +91,7 @@ it mutes controller haptics and speaker output together.
   <img src="assets/readme/app-system.png" width="680" alt="System controls in the DS5 Bridge companion app">
 </p>
 
-## ⚠️ Troubleshooting
+## Troubleshooting
 
 - If the speaker test tone plays through any speaker other than the controller,
   restart the companion app and try the speaker test again.
@@ -196,3 +197,8 @@ dependencies retain their own license terms.
   for report structure notes.
 - [Paliverse/DualSenseX](https://github.com/Paliverse/DualSenseX) for speaker
   report packet references.
+
+## Disclaimer
+
+This project was vibecoded, so the occasional peculiarity may show through.
+That said, it has been tested and edited with care.

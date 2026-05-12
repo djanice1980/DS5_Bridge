@@ -1,14 +1,14 @@
-# Windows Device Cleanup After Descriptor Testing
+# Windows Device Cleanup After USB Descriptor Testing
 
-Windows does not treat every flashed DS5Dongle_Bridge firmware as one updated
-controller. If the USB identity changes, Windows creates a new PnP instance and
-keeps the old one cached.
+Windows does not treat every flashed DS5 Bridge firmware image as an update to
+the same controller. If the USB identity changes, Windows creates a new PnP
+instance and keeps the old one cached.
 
 Common identity-changing fields in this project are:
 
 - USB PID: `0x0CE6` for DualSense, `0x0DF2` for DualSense Edge.
 - USB serial behavior: `iSerialNumber = 0x03` versus `iSerialNumber = 0x00`.
-- Interface layout: standard firmware versus companion firmware, plus any
+- Interface layout: standard firmware, companion firmware, and any
   temporary diagnostic layouts.
 - Audio topology: no audio, speaker-only, speaker plus mic, or different audio
   interface ordering.
@@ -17,26 +17,26 @@ Common identity-changing fields in this project are:
   `DualSense Edge Wireless Controller`, or `Wireless Controller`.
 - USB port/location when no serial number is exposed.
 
-Audio is cached separately. Windows creates MMDevice endpoint records such as
-`Speakers (DualSense Wireless Controller)` and `Headset Microphone (DualSense
-Wireless Controller)`. When stale endpoints with the same friendly name already
-exist, Windows can add duplicate suffixes like `2-`.
+Audio devices are cached separately. Windows creates MMDevice endpoint records
+such as `Speakers (DualSense Wireless Controller)` and `Headset Microphone
+(DualSense Wireless Controller)`. When stale endpoints with the same friendly
+name already exist, Windows can add duplicate suffixes like `2-`.
 
 ## Current Canonical Firmware Identity
 
 The current firmware intentionally exposes no USB serial number:
 
 - `iSerialNumber = 0x00`.
-- Standard firmware uses Sony VID `0x054C`, PID `0x0CE6`, product
+- Standard firmware uses Sony VID `0x054C`, PID `0x0CE6`, and product
   `DualSense Wireless Controller`.
-- DualSense Edge firmware uses Sony VID `0x054C`, PID `0x0DF2`, product
+- DualSense Edge firmware uses Sony VID `0x054C`, PID `0x0DF2`, and product
   `DualSense Edge Wireless Controller`.
 - Audio interfaces come first, followed by the game-facing HID interface.
 - Companion firmware appends the companion vendor HID interface and bridge
   keyboard HID interface after the game-facing HID interface.
 
 Avoid changing those fields during normal firmware work unless the task is
-explicitly descriptor identity testing.
+explicit USB descriptor identity testing.
 
 ## Safe Cleanup Workflow
 
