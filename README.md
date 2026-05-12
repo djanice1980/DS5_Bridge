@@ -90,6 +90,12 @@ it mutes controller haptics and speaker output together.
   <img src="assets/readme/app-system.png" width="680" alt="System controls in the DS5 Bridge companion app">
 </p>
 
+## ⚠️ Troubleshooting
+
+- If the controller speaker sounds unnaturally loud, doubled, or distorted,
+  reboot the PC, reopen DS5 Bridge, and run the speaker test again.
+- Battery level is not reported accurately while the controller is charging.
+
 ## Requirements
 
 - Raspberry Pi Pico 2 W.
