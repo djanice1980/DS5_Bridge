@@ -14,10 +14,10 @@ for tuning the controller without reflashing the Pico.
 ## Quick Start
 
 1. Download the latest release package from this repository.
-2. Hold `BOOTSEL` on the Raspberry Pi Pico 2 W and connect it to your PC.
+2. With the Pico 2 W unplugged, hold `BOOTSEL`, then connect it to your PC.
 3. Copy the release `.uf2` firmware file to the mounted Pico storage device.
 4. Put the DualSense controller into Bluetooth pairing mode.
-5. Reboot or reconnect the Pico 2 W and wait for the controller to pair.
+5. Disconnect and reconnect the Pico 2 W, then wait for the controller to pair.
 6. Open the companion app and choose a preset or customize the controller.
 
 The controller appears on your PC after the bridge connects to the DualSense
@@ -92,6 +92,12 @@ it mutes controller haptics and speaker output together.
 
 ## ⚠️ Troubleshooting
 
+- If the speaker test tone plays through any speaker other than the controller,
+  restart the companion app and try the speaker test again.
+- The DualSense onboard microphone is not supported. Testing found that enabling
+  controller speaker output and microphone input at the same time caused
+  microphone stuttering, so microphone forwarding is disabled; the Pico 2 W does
+  not have enough headroom for reliable full-duplex audio in this bridge.
 - If the controller speaker sounds unnaturally loud, doubled, or distorted,
   reboot the PC, reopen DS5 Bridge, and run the speaker test again.
 - Battery level is not reported accurately while the controller is charging.
