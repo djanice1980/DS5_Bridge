@@ -4,10 +4,13 @@
   <img src="assets/controllers/ds5-bridge_mark.png" width="180" alt="DS5 Bridge mark">
 </p>
 
-[![Build firmware](https://github.com/SundayMoments/DS5_Bridge/actions/workflows/build.yml/badge.svg)](https://github.com/SundayMoments/DS5_Bridge/actions/workflows/build.yml)
-[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/SundayMoments/DS5_Bridge?label=release)](https://github.com/SundayMoments/DS5_Bridge/releases/latest)
-![Platform: Windows companion app and Raspberry Pi Pico 2 W firmware](https://img.shields.io/badge/platform-Windows%20companion%20app%20%7C%20Pico%202%20W%20firmware-287cff)
+<p align="center">
+  <a href="https://github.com/SundayMoments/DS5_Bridge/actions/workflows/build.yml"><img src="https://github.com/SundayMoments/DS5_Bridge/actions/workflows/build.yml/badge.svg" alt="Build firmware status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg" alt="License: AGPL-3.0-only"></a>
+  <a href="https://github.com/SundayMoments/DS5_Bridge/releases/latest"><img src="https://img.shields.io/github/v/release/SundayMoments/DS5_Bridge?label=release" alt="Latest release"></a>
+  <br>
+  <img src="https://img.shields.io/badge/platform-Windows%20companion%20app%20%7C%20Pico%202%20W%20firmware-287cff?logo=windows11&amp;logoColor=white" alt="Platform: Windows companion app and Raspberry Pi Pico 2 W firmware">
+</p>
 
 DS5 Bridge lets you use a real Sony DualSense or DualSense Edge controller
 wirelessly through a Raspberry Pi Pico 2 W. The controller pairs to the Pico over
