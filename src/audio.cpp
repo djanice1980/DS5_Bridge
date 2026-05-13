@@ -145,6 +145,7 @@ static int8_t audio_haptic_buf[SAMPLE_SIZE];
 static int audio_haptic_buf_pos = 0;
 
 static void core1_entry();
+static void reset_core1_audio_pipeline(uint32_t generation);
 
 static void clamp_state_speaker_volume() {
     if (state_data[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] > STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX) {
@@ -927,6 +928,23 @@ void audio_init() {
 
 static OpusEncoder *encoder;
 static WDL_Resampler resampler_audio;
+static uint32_t core1_audio_stream_generation = 0;
+
+static void reset_core1_audio_pipeline(uint32_t generation) {
+    if (encoder != nullptr) {
+        opus_encoder_ctl(encoder, OPUS_RESET_STATE);
+    }
+    resampler_audio.Reset();
+    core1_audio_stream_generation = generation;
+    audio_debug_log(
+        AudioDebugCore1Reset,
+        clamp_debug_u8(queue_get_level(&audio_fifo)),
+        opus_debug_level(),
+        clamp_debug_u8(generation),
+        0,
+        0
+    );
+}
 
 static void core1_entry() {
     int error = 0;
@@ -948,9 +966,14 @@ static void core1_entry() {
         static audio_raw_element audio_element{};
         queue_remove_blocking(&audio_fifo,&audio_element);
 
-        if (audio_element.generation != audio_stream_generation) {
+        uint32_t current_generation = audio_stream_generation;
+        if (audio_element.generation != current_generation) {
             audio_stats_note_generation_drop();
+            reset_core1_audio_pipeline(current_generation);
             continue;
+        }
+        if (core1_audio_stream_generation != current_generation) {
+            reset_core1_audio_pipeline(current_generation);
         }
 
         // Resample 512 frames to 480 frames to avoid noise. Thanks @Junhoo.
@@ -974,6 +997,12 @@ static void core1_entry() {
                 0,
                 0
             );
+            continue;
+        }
+        current_generation = audio_stream_generation;
+        if (audio_element.generation != current_generation) {
+            audio_stats_note_generation_drop();
+            reset_core1_audio_pipeline(current_generation);
             continue;
         }
         critical_section_enter_blocking(&opus_cs);
