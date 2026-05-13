@@ -804,6 +804,24 @@ button {
   gap: 20px;
 }
 
+.audio-heading-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px 14px;
+  min-width: 0;
+}
+
+.audio-heading-controls .status-badge {
+  max-width: 220px;
+  min-height: 34px;
+}
+
+.audio-heading-controls .inline-switch {
+  min-height: 34px;
+}
+
 .feature-card-grid {
   display: grid;
   grid-template-columns: var(--feature-left-column) var(--feature-right-column);

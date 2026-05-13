@@ -6,7 +6,6 @@ import {
   Check,
   ChevronDown,
   Keyboard,
-  Mic,
   Minus,
   Moon,
   MoreHorizontal,
@@ -2092,68 +2091,6 @@ export function App() {
                     </span>
                   </div>
                 </section>
-                <section className="feature-card">
-                  <div className="feature-card-title">
-                    <span className="feature-icon"><Activity size={20} /></span>
-                    <div className="title-copy">
-                      <h3>Host Encoded</h3>
-                      <p>Offloads prepared audio packets when the companion stream is healthy.</p>
-                    </div>
-                  </div>
-                  <div className="behavior-toggle-row">
-                    <div>
-                      <strong>Host Pipeline</strong>
-                      <p>{hostAudioLabel}</p>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={hostAudioEnabled}
-                      className={`switch ${hostAudioEnabled ? 'on' : ''}`}
-                      disabled={!connected || pendingAction !== null}
-                      onClick={toggleHostEncodedAudioEnabled}
-                    >
-                      <span />
-                    </button>
-                  </div>
-                  <div className={`feature-status test-status ${hostAudioTone}`}>
-                    <span className="status-badge" title={hostAudioLabel}>
-                      <span className={`dot ${hostAudioTone}`} />
-                      <strong>{hostAudioLabel}</strong>
-                    </span>
-                  </div>
-                </section>
-                <section className="feature-card">
-                  <div className="feature-card-title">
-                    <span className="feature-icon"><Mic size={20} /></span>
-                    <div className="title-copy">
-                      <h3>Duplex Mic</h3>
-                      <p>Forwards controller mic audio only while host encoded mode is active.</p>
-                    </div>
-                  </div>
-                  <div className="behavior-toggle-row">
-                    <div>
-                      <strong>Microphone</strong>
-                      <p>{duplexMicLabel}</p>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={duplexMicEnabled}
-                      className={`switch ${duplexMicEnabled ? 'on' : ''}`}
-                      disabled={!connected || !hostAudioEnabled || pendingAction !== null}
-                      onClick={toggleDuplexMicEnabled}
-                    >
-                      <span />
-                    </button>
-                  </div>
-                  <div className={`feature-status test-status ${hostAudioStatus?.duplexActive ? 'good' : duplexMicEnabled ? 'warn' : 'idle'}`}>
-                    <span className="status-badge" title={duplexMicLabel}>
-                      <span className={`dot ${hostAudioStatus?.duplexActive ? 'good' : duplexMicEnabled ? 'warn' : 'idle'}`} />
-                      <strong>{duplexMicLabel}</strong>
-                    </span>
-                  </div>
-                </section>
               </div>
           </div>
 
@@ -2169,18 +2106,54 @@ export function App() {
                   <h2>Audio</h2>
                   <p>Adjust controller speaker volume and run a quick test.</p>
                 </div>
-                <div className="inline-switch">
-                  <span>Enabled</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={snapshot.settings.speakerEnabled}
-                    className={`switch ${snapshot.settings.speakerEnabled ? 'on' : ''}`}
-                    disabled={!connected || !speakerVolumeSupported || pendingAction !== null}
-                    onClick={toggleSpeakerEnabled}
-                  >
-                    <span />
-                  </button>
+                <div className="audio-heading-controls">
+                  <span className={`status-badge ${hostAudioTone}`} title={hostAudioLabel}>
+                    <span className={`dot ${hostAudioTone}`} />
+                    <strong>{hostAudioLabel}</strong>
+                  </span>
+                  <div className="inline-switch">
+                    <span>Speaker</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={snapshot.settings.speakerEnabled}
+                      aria-label="Enable controller speaker"
+                      className={`switch ${snapshot.settings.speakerEnabled ? 'on' : ''}`}
+                      disabled={!connected || !speakerVolumeSupported || pendingAction !== null}
+                      onClick={toggleSpeakerEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                  <div className="inline-switch">
+                    <span>Host Encoded</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={hostAudioEnabled}
+                      aria-label="Enable host encoded audio"
+                      className={`switch ${hostAudioEnabled ? 'on' : ''}`}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={toggleHostEncodedAudioEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                  <div className="inline-switch">
+                    <span>Duplex Mic</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={duplexMicEnabled}
+                      aria-label="Enable duplex microphone"
+                      title={duplexMicLabel}
+                      className={`switch ${duplexMicEnabled ? 'on' : ''}`}
+                      disabled={!connected || !hostAudioEnabled || pendingAction !== null}
+                      onClick={toggleDuplexMicEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="feature-card-grid">
