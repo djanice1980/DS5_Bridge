@@ -197,6 +197,8 @@ dependencies retain their own license terms.
   for report structure notes.
 - [Paliverse/DualSenseX](https://github.com/Paliverse/DualSenseX) for speaker
   report packet references.
+- Alex Smith of The Cynic Project for the speaker test sound, "Crystal Cave"
+  (`song18`).
 
 ## Disclaimer
 
