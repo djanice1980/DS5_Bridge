@@ -66,8 +66,14 @@
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
 #define HOST_MIC_USB_CHANNELS 1
-#define HOST_MIC_QUEUE_DEPTH 6
-#define HOST_MIC_USB_WRITE_INTERVAL_US 10000
+#define HOST_MIC_QUEUE_DEPTH 8
+#define HOST_MIC_USB_PACKET_BYTES (48 * HOST_MIC_USB_CHANNELS * sizeof(int16_t))
+#define HOST_MIC_USB_PREFILL_BYTES (10 * HOST_MIC_USB_PACKET_BYTES)
+#define HOST_MIC_USB_FILL_MAX_CHUNKS 6
+#define HOST_MIC_CORE1_BURST_LIMIT 2
+#define HOST_MIC_PLAYOUT_START_DEPTH 3
+#define HOST_MIC_OPUS_FRAME_INTERVAL_US 10000
+#define HOST_MIC_PLC_TARGET_DEPTH 2
 using std::clamp;
 using std::max;
 
@@ -235,7 +241,11 @@ static uint32_t mic_usb_write_short = 0;
 static uint16_t mic_last_decoded_samples = 0;
 static uint16_t mic_last_written_bytes = 0;
 static uint16_t mic_peak_permille = 0;
-static uint32_t mic_last_usb_write_us = 0;
+static volatile bool mic_usb_playout_started = false;
+static mic_decode_element mic_usb_pending{};
+static uint16_t mic_usb_pending_offset = 0;
+static uint16_t mic_usb_pending_len = 0;
+static uint32_t mic_next_plc_us = 0;
 
 static void core1_entry();
 static void reset_core1_audio_pipeline(uint32_t generation);
@@ -491,7 +501,13 @@ static void clear_host_reassembly() {
 static void clear_mic_queues() {
     drain_queue(&mic_fifo);
     drain_queue(&mic_decode_fifo);
-    mic_last_usb_write_us = 0;
+    if (usb_mic_streaming_active()) {
+        tud_audio_clear_ep_in_ff();
+    }
+    mic_usb_playout_started = false;
+    mic_usb_pending_offset = 0;
+    mic_usb_pending_len = 0;
+    mic_next_plc_us = 0;
 }
 
 static void enter_fallback(AudioFallbackReason reason) {
@@ -1378,36 +1394,86 @@ static bool process_usb_audio_packet() {
 }
 
 static void process_mic_usb_output() {
-    const uint32_t now = time_us_32();
-    if (
-        mic_last_usb_write_us != 0
-        && static_cast<uint32_t>(now - mic_last_usb_write_us) < HOST_MIC_USB_WRITE_INTERVAL_US
-    ) {
+    if (!usb_mic_streaming_active()) {
+        if (mic_usb_playout_started || mic_usb_pending_len != 0) {
+            tud_audio_clear_ep_in_ff();
+        }
+        mic_usb_playout_started = false;
+        mic_usb_pending_offset = 0;
+        mic_usb_pending_len = 0;
         return;
     }
 
-    static mic_decode_element decoded{};
-    if (!queue_try_remove(&mic_decode_fifo, &decoded)) {
-        return;
+    tu_fifo_t *ep_in_fifo = tud_audio_get_ep_in_ff();
+    if (!mic_usb_playout_started) {
+        if (queue_get_level(&mic_decode_fifo) < HOST_MIC_PLAYOUT_START_DEPTH) {
+            return;
+        }
+        mic_usb_playout_started = true;
     }
 
-    const uint16_t written = tud_audio_write(decoded.data, decoded.len);
-    mic_last_written_bytes = written;
-    if (written > 0) {
-        mic_last_usb_write_us = now;
-    }
-    if (written != decoded.len) {
-        mic_usb_write_short++;
-        mic_packets_dropped++;
-        audio_debug_log(
-            AudioDebugMicPacket,
-            1,
-            clamp_debug_u8(written),
-            clamp_debug_u8(decoded.len),
-            clamp_debug_u8(mic_packets_dropped),
-            0
-        );
-    } else {
+    uint8_t chunks_written = 0;
+    while (chunks_written < HOST_MIC_USB_FILL_MAX_CHUNKS) {
+        const uint16_t fifo_level = ep_in_fifo != nullptr ? tu_fifo_count(ep_in_fifo) : 0;
+        if (fifo_level >= HOST_MIC_USB_PREFILL_BYTES) {
+            return;
+        }
+
+        if (mic_usb_pending_offset >= mic_usb_pending_len) {
+            if (!queue_try_remove(&mic_decode_fifo, &mic_usb_pending)) {
+                if (fifo_level < HOST_MIC_USB_PACKET_BYTES) {
+                    mic_usb_playout_started = false;
+                    mic_packets_dropped++;
+                    audio_debug_log(
+                        AudioDebugMicPacket,
+                        3,
+                        clamp_debug_u8(fifo_level),
+                        clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
+                        clamp_debug_u8(mic_packets_dropped),
+                        0
+                    );
+                }
+                return;
+            }
+            mic_usb_pending_offset = 0;
+            mic_usb_pending_len = mic_usb_pending.len;
+        }
+
+        const uint16_t remaining = static_cast<uint16_t>(mic_usb_pending_len - mic_usb_pending_offset);
+        uint16_t target_len = std::min<uint16_t>(remaining, HOST_MIC_USB_PACKET_BYTES);
+        if (ep_in_fifo != nullptr) {
+            target_len = std::min<uint16_t>(target_len, tu_fifo_remaining(ep_in_fifo));
+        }
+        if (target_len == 0) {
+            return;
+        }
+
+        const uint8_t *data = reinterpret_cast<uint8_t const *>(mic_usb_pending.data) + mic_usb_pending_offset;
+        const uint16_t written = tud_audio_write(data, target_len);
+        mic_last_written_bytes = written;
+        if (written > 0) {
+            mic_usb_pending_offset = static_cast<uint16_t>(mic_usb_pending_offset + written);
+            chunks_written++;
+        }
+        if (mic_usb_pending_offset >= mic_usb_pending_len) {
+            mic_usb_pending_offset = 0;
+            mic_usb_pending_len = 0;
+        }
+
+        if (written != target_len) {
+            mic_usb_write_short++;
+            mic_packets_dropped++;
+            audio_debug_log(
+                AudioDebugMicPacket,
+                1,
+                clamp_debug_u8(written),
+                clamp_debug_u8(target_len),
+                clamp_debug_u8(mic_packets_dropped),
+                0
+            );
+            return;
+        }
+
         mic_usb_write_success++;
     }
 }
@@ -1416,6 +1482,7 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
     if (data == nullptr || len < HOST_MIC_OPUS_SIZE) {
         if (len != 0) {
             mic_packets_dropped++;
+            audio_debug_log(AudioDebugMicPacket, 6, clamp_debug_u8(len), clamp_debug_u8(mic_packets_dropped), 0, 0);
         }
         return;
     }
@@ -1425,6 +1492,14 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
     if (queue_is_full(&mic_fifo)) {
         queue_try_remove(&mic_fifo, NULL);
         mic_packets_dropped++;
+        audio_debug_log(
+            AudioDebugMicPacket,
+            4,
+            clamp_debug_u8(queue_get_level(&mic_fifo)),
+            clamp_debug_u8(mic_packets_dropped),
+            0,
+            0
+        );
     }
     if (queue_try_add(&mic_fifo, &packet)) {
         mic_packets_received++;
@@ -1438,6 +1513,10 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
         );
     } else {
         mic_packets_dropped++;
+        audio_debug_log(AudioDebugMicPacket, 5, clamp_debug_u8(queue_get_level(&mic_fifo)), clamp_debug_u8(mic_packets_dropped), 0, 0);
+    }
+    if (mic_usb_playout_started && mic_next_plc_us == 0) {
+        mic_next_plc_us = time_us_32() + HOST_MIC_OPUS_FRAME_INTERVAL_US;
     }
 }
 
@@ -1525,6 +1604,50 @@ static void reset_core1_audio_pipeline(uint32_t generation) {
     );
 }
 
+static bool queue_mic_decoded_samples(int16_t const *decoded_mono, int decoded_samples, bool count_packet_decode) {
+    if (decoded_mono == nullptr || decoded_samples <= 0) {
+        return false;
+    }
+
+    static mic_decode_element decoded{};
+    const int frames = std::min(decoded_samples, HOST_MIC_OPUS_FRAMES);
+    uint32_t peak = 0;
+    for (int frame = 0; frame < frames; frame++) {
+        const int32_t sample = decoded_mono[frame];
+        const uint32_t magnitude = static_cast<uint32_t>(sample < 0 ? -sample : sample);
+        if (magnitude > peak) {
+            peak = magnitude;
+        }
+        for (int channel = 0; channel < HOST_MIC_USB_CHANNELS; channel++) {
+            decoded.data[frame * HOST_MIC_USB_CHANNELS + channel] = decoded_mono[frame];
+        }
+    }
+    decoded.len = static_cast<uint16_t>(frames * HOST_MIC_USB_CHANNELS * sizeof(int16_t));
+    if (count_packet_decode) {
+        mic_decode_success++;
+    }
+    mic_last_decoded_samples = static_cast<uint16_t>(decoded_samples);
+    mic_peak_permille = static_cast<uint16_t>(std::min<uint32_t>((peak * 1000U) / 32768U, 1000U));
+    if (queue_is_full(&mic_decode_fifo)) {
+        queue_try_remove(&mic_decode_fifo, NULL);
+        mic_packets_dropped++;
+        audio_debug_log(
+            AudioDebugMicPacket,
+            7,
+            clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
+            clamp_debug_u8(mic_packets_dropped),
+            0,
+            0
+        );
+    }
+    if (!queue_try_add(&mic_decode_fifo, &decoded)) {
+        mic_packets_dropped++;
+        audio_debug_log(AudioDebugMicPacket, 8, clamp_debug_u8(queue_get_level(&mic_decode_fifo)), clamp_debug_u8(mic_packets_dropped), 0, 0);
+        return false;
+    }
+    return true;
+}
+
 static bool core1_process_mic() {
     static mic_packet_element mic_packet{};
     if (!queue_try_remove(&mic_fifo, &mic_packet)) {
@@ -1547,35 +1670,78 @@ static bool core1_process_mic() {
         mic_decode_fail++;
         mic_last_decoded_samples = 0;
         mic_packets_dropped++;
-        audio_debug_log(AudioDebugMicPacket, 0, clamp_debug_u8(mic_packets_dropped), 0, 0, 0);
+        audio_debug_log(AudioDebugMicPacket, 0, clamp_debug_u8(decoded_samples < 0 ? -decoded_samples : decoded_samples), clamp_debug_u8(mic_packets_dropped), 0, 0);
         return true;
     }
 
-    static mic_decode_element decoded{};
-    const int frames = std::min(decoded_samples, HOST_MIC_OPUS_FRAMES);
-    uint32_t peak = 0;
-    for (int frame = 0; frame < frames; frame++) {
-        const int32_t sample = decoded_mono[frame];
-        const uint32_t magnitude = static_cast<uint32_t>(sample < 0 ? -sample : sample);
-        if (magnitude > peak) {
-            peak = magnitude;
-        }
-        for (int channel = 0; channel < HOST_MIC_USB_CHANNELS; channel++) {
-            decoded.data[frame * HOST_MIC_USB_CHANNELS + channel] = decoded_mono[frame];
-        }
+    queue_mic_decoded_samples(decoded_mono, decoded_samples, true);
+    mic_next_plc_us = time_us_32() + HOST_MIC_OPUS_FRAME_INTERVAL_US;
+    return true;
+}
+
+static bool core1_process_mic_plc() {
+    if (
+        mic_decoder == nullptr
+        || !mic_usb_playout_started
+        || !usb_mic_streaming_active()
+        || queue_get_level(&mic_decode_fifo) >= HOST_MIC_PLC_TARGET_DEPTH
+        || !queue_is_empty(&mic_fifo)
+    ) {
+        return false;
     }
-    decoded.len = static_cast<uint16_t>(frames * HOST_MIC_USB_CHANNELS * sizeof(int16_t));
-    mic_decode_success++;
-    mic_last_decoded_samples = static_cast<uint16_t>(decoded_samples);
-    mic_peak_permille = static_cast<uint16_t>(std::min<uint32_t>((peak * 1000U) / 32768U, 1000U));
-    if (queue_is_full(&mic_decode_fifo)) {
-        queue_try_remove(&mic_decode_fifo, NULL);
-        mic_packets_dropped++;
+
+    const uint32_t now = time_us_32();
+    if (mic_next_plc_us == 0) {
+        mic_next_plc_us = now + HOST_MIC_OPUS_FRAME_INTERVAL_US;
+        return false;
     }
-    if (!queue_try_add(&mic_decode_fifo, &decoded)) {
+    if (!time_reached(now, mic_next_plc_us)) {
+        return false;
+    }
+
+    static int16_t decoded_mono[HOST_MIC_OPUS_FRAMES * HOST_MIC_INPUT_CHANNELS];
+    const int decoded_samples = opus_decode(
+        mic_decoder,
+        nullptr,
+        0,
+        decoded_mono,
+        HOST_MIC_OPUS_FRAMES,
+        false
+    );
+    if (decoded_samples <= 0) {
+        mic_decode_fail++;
+        mic_last_decoded_samples = 0;
         mic_packets_dropped++;
+        audio_debug_log(AudioDebugMicPacket, 9, clamp_debug_u8(decoded_samples < 0 ? -decoded_samples : decoded_samples), clamp_debug_u8(mic_packets_dropped), 0, 0);
+        mic_next_plc_us = now + HOST_MIC_OPUS_FRAME_INTERVAL_US;
+        return true;
+    }
+
+    queue_mic_decoded_samples(decoded_mono, decoded_samples, false);
+    audio_debug_log(
+        AudioDebugMicPacket,
+        10,
+        clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
+        clamp_debug_u8(decoded_samples),
+        0,
+        0
+    );
+    mic_next_plc_us += HOST_MIC_OPUS_FRAME_INTERVAL_US;
+    if (time_reached(now, mic_next_plc_us + HOST_MIC_OPUS_FRAME_INTERVAL_US)) {
+        mic_next_plc_us = now + HOST_MIC_OPUS_FRAME_INTERVAL_US;
     }
     return true;
+}
+
+static bool core1_process_mic_burst() {
+    bool did_mic = false;
+    for (uint8_t packet = 0; packet < HOST_MIC_CORE1_BURST_LIMIT; packet++) {
+        if (!core1_process_mic()) {
+            break;
+        }
+        did_mic = true;
+    }
+    return did_mic;
 }
 
 static bool core1_process_speaker() {
@@ -1653,9 +1819,10 @@ static void core1_entry() {
     }
 
     while (true) {
+        const bool did_mic = core1_process_mic_burst();
+        const bool did_mic_plc = core1_process_mic_plc();
         const bool did_speaker = core1_process_speaker();
-        const bool did_mic = core1_process_mic();
-        if (!did_speaker && !did_mic) {
+        if (!did_speaker && !did_mic && !did_mic_plc) {
             sleep_us(250);
         }
     }

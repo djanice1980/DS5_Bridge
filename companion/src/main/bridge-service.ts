@@ -212,6 +212,36 @@ function limitedByte(value: number, suffix = '+'): string {
   return value === 255 ? `${value}${suffix}` : String(value);
 }
 
+function formatMicDebugEvent(prefix: string, args: number[]): string {
+  const [type, arg1, arg2, arg3, arg4] = args;
+  switch (type) {
+    case 0:
+      return `${prefix} [HostPico] MIC decode-fail code=${arg1} dropped=${arg2}`;
+    case 1:
+      return `${prefix} [HostPico] MIC usb-short written=${arg1} target=${arg2} dropped=${arg3}`;
+    case 2:
+      return `${prefix} [HostPico] MIC packet rx=${arg1} raw_fifo=${arg2}`;
+    case 3:
+      return `${prefix} [HostPico] MIC playout-underrun usb_fifo=${arg1} decoded_fifo=${arg2} dropped=${arg3}`;
+    case 4:
+      return `${prefix} [HostPico] MIC raw-fifo-overflow raw_fifo=${arg1} dropped=${arg2}`;
+    case 5:
+      return `${prefix} [HostPico] MIC raw-fifo-add-fail raw_fifo=${arg1} dropped=${arg2}`;
+    case 6:
+      return `${prefix} [HostPico] MIC short-packet len=${arg1} dropped=${arg2}`;
+    case 7:
+      return `${prefix} [HostPico] MIC decoded-fifo-overflow decoded_fifo=${arg1} dropped=${arg2}`;
+    case 8:
+      return `${prefix} [HostPico] MIC decoded-fifo-add-fail decoded_fifo=${arg1} dropped=${arg2}`;
+    case 9:
+      return `${prefix} [HostPico] MIC plc-fail code=${arg1} dropped=${arg2}`;
+    case 10:
+      return `${prefix} [HostPico] MIC plc decoded_fifo=${arg1} samples=${arg2}`;
+    default:
+      return `${prefix} [HostPico] MIC type=${type} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
+  }
+}
+
 function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
   const [arg0, arg1, arg2, arg3, arg4] = event.args;
   const prefix = `#${event.sequence} t=${event.timeUs}us`;
@@ -253,7 +283,7 @@ function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
     case AUDIO_DEBUG_EVENT.HOST_FRAME:
       return `${prefix} [HostPico] FRAME submitted audio_fifo=${arg0} received=${arg1} generation=${arg2} packet=${arg3} reportSeq=${arg4}`;
     case AUDIO_DEBUG_EVENT.MIC_PACKET:
-      return `${prefix} [HostPico] MIC arg0=${arg0} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
+      return formatMicDebugEvent(prefix, event.args);
     default:
       return `${prefix} [Audio] UNKNOWN code=${event.eventCode} args=${event.args.join(',')}`;
   }
