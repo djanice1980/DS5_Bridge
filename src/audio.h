@@ -39,6 +39,14 @@ struct audio_host_status {
     uint32_t host_frames_dropped;
     uint32_t mic_packets_received;
     uint32_t mic_packets_dropped;
+    uint32_t mic_decode_success;
+    uint32_t mic_decode_fail;
+    uint32_t mic_usb_write_success;
+    uint32_t mic_usb_write_short;
+    uint16_t mic_last_decoded_samples;
+    uint16_t mic_last_written_bytes;
+    uint16_t mic_peak_permille;
+    bool mic_usb_streaming;
 };
 
 void audio_init();

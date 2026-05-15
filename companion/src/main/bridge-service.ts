@@ -42,7 +42,7 @@ import type {
   CompanionSettings,
   HidDeviceSummary
 } from '../shared/types';
-import { HostAudioEngine, type HostAudioFramePayload } from './host-audio-engine';
+import { HostAudioEngine, MicKeepaliveEngine, type HostAudioFramePayload } from './host-audio-engine';
 import { SettingsStore } from './settings-store';
 
 const POLL_INTERVAL_MS = 500;
@@ -286,6 +286,7 @@ export class BridgeService extends EventEmitter {
   private pollTimer: NodeJS.Timeout | null = null;
   private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
   private readonly hostAudioEngine = new HostAudioEngine();
+  private readonly micKeepaliveEngine = new MicKeepaliveEngine();
   private snapshot: BridgeSnapshot;
   private lastEmittedSnapshotSignature: string | null = null;
   private commandSequence = 0;
@@ -334,6 +335,16 @@ export class BridgeService extends EventEmitter {
       }
       this.emitSnapshot();
     });
+    this.micKeepaliveEngine.on('error', (error: Error) => {
+      this.appendAudioDebugLines([`[MicKeepalive] error: ${error.message}`]);
+      this.emitSnapshot();
+    });
+    this.micKeepaliveEngine.on('status', (line: string) => {
+      if (line) {
+        this.appendAudioDebugLines([`[MicKeepalive] ${line}`]);
+      }
+      this.emitSnapshot();
+    });
   }
 
   start(): void {
@@ -356,6 +367,7 @@ export class BridgeService extends EventEmitter {
       this.hostAudioHeartbeatTimer = null;
     }
     void this.hostAudioEngine.stop();
+    void this.micKeepaliveEngine.stop();
     this.closeDevice();
   }
 
@@ -920,6 +932,19 @@ export class BridgeService extends EventEmitter {
     await this.hostAudioEngine.start(this.devicePath);
   }
 
+  private async updateMicKeepaliveEngine(controllerConnected: boolean): Promise<void> {
+    try {
+      if (!controllerConnected) {
+        await this.micKeepaliveEngine.stop();
+        return;
+      }
+      await this.micKeepaliveEngine.start();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAudioDebugLines([`[MicKeepalive] error: ${message}`]);
+    }
+  }
+
   private async pulseHostAudio(): Promise<void> {
     const settings = this.settingsStore.get();
     if (!settings.hostEncodedAudioEnabled || this.hostAudioHeartbeatBusy) {
@@ -1057,6 +1082,7 @@ export class BridgeService extends EventEmitter {
       })
     };
     this.emitSnapshot();
+    await this.updateMicKeepaliveEngine(status.controllerConnected);
 
     if (status.controllerConnected) {
       if (this.controllerConnectedSince === 0) {
@@ -1322,6 +1348,7 @@ export class BridgeService extends EventEmitter {
     this.hostAudioChunkWriteCount = 0;
     this.hostAudioFrameDropCount = 0;
     void this.hostAudioEngine.stop();
+    void this.micKeepaliveEngine.stop();
   }
 
   private emitSnapshot(): void {

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -72,7 +72,7 @@ export class HostAudioEngine extends EventEmitter {
         resolve();
       });
 
-      helper.stdin.end();
+      helper.stdin?.end();
       helper.kill();
     });
   }
@@ -132,6 +132,74 @@ export class HostAudioEngine extends EventEmitter {
       } satisfies HostAudioFramePayload);
       this.sequence = (this.sequence + 1) & 0xffff;
     }
+  }
+}
+
+export class MicKeepaliveEngine extends EventEmitter {
+  private process: ChildProcess | null = null;
+  private starting: Promise<void> | null = null;
+
+  async start(): Promise<void> {
+    if (this.process) {
+      return;
+    }
+    if (this.starting) {
+      return this.starting;
+    }
+
+    this.starting = this.startInternal().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  async stop(): Promise<void> {
+    const helper = this.process;
+    this.process = null;
+    if (!helper) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        if (!helper.killed) {
+          helper.kill('SIGKILL');
+        }
+        resolve();
+      }, 500);
+
+      helper.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+
+      helper.stdin?.end();
+      helper.kill();
+    });
+  }
+
+  isActive(): boolean {
+    return this.process !== null;
+  }
+
+  private async startInternal(): Promise<void> {
+    const helperPath = resolveHelperPath();
+    const helper = spawn(helperPath, ['--mic-keepalive-only', '--mic-device-name', 'DS5 Bridge'], {
+      windowsHide: true,
+      stdio: ['pipe', 'ignore', 'pipe']
+    });
+
+    this.process = helper;
+    helper.stderr.on('data', (chunk: Buffer) => {
+      this.emit('status', chunk.toString('utf8').trim());
+    });
+    helper.on('error', (error) => this.emit('error', error));
+    helper.on('exit', (code, signal) => {
+      if (this.process === helper) {
+        this.process = null;
+        this.emit('status', `mic keepalive helper exited (${signal ?? code ?? 'unknown'})`);
+      }
+    });
   }
 }
 

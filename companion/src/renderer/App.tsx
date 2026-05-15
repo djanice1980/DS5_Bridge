@@ -1138,7 +1138,15 @@ export function App() {
         `duplexRequested=${host.duplexRequested ? 'true' : 'false'}`,
         `duplexActive=${host.duplexActive ? 'true' : 'false'}`,
         `micPacketsReceived=${host.micPacketsReceived}`,
-        `micPacketsDropped=${host.micPacketsDropped}`
+        `micPacketsDropped=${host.micPacketsDropped}`,
+        `micDecodeSuccess=${host.micDecodeSuccess}`,
+        `micDecodeFail=${host.micDecodeFail}`,
+        `micUsbWriteSuccess=${host.micUsbWriteSuccess}`,
+        `micUsbWriteShort=${host.micUsbWriteShort}`,
+        `micLastDecodedSamples=${host.micLastDecodedSamples}`,
+        `micLastWrittenBytes=${host.micLastWrittenBytes}`,
+        `micPeakPermille=${host.micPeakPermille}`,
+        `micUsbStreaming=${host.micUsbStreaming ? 'true' : 'false'}`
       );
     }
     if (stats) {

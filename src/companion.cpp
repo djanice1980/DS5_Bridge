@@ -598,6 +598,14 @@ uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
     write_u32(buffer + 28, status.host_frames_dropped);
     write_u32(buffer + 32, status.mic_packets_received);
     write_u32(buffer + 36, status.mic_packets_dropped);
+    write_u32(buffer + 40, status.mic_decode_success);
+    write_u32(buffer + 44, status.mic_decode_fail);
+    write_u32(buffer + 48, status.mic_usb_write_success);
+    write_u32(buffer + 52, status.mic_usb_write_short);
+    write_u16(buffer + 56, status.mic_last_decoded_samples);
+    write_u16(buffer + 58, status.mic_last_written_bytes);
+    write_u16(buffer + 60, status.mic_peak_permille);
+    buffer[62] = status.mic_usb_streaming ? 1 : 0;
     return COMPANION_PAYLOAD_SIZE;
 }
 

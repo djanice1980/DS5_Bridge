@@ -226,6 +226,13 @@ static uint32_t host_frames_received = 0;
 static uint32_t host_frames_dropped = 0;
 static uint32_t mic_packets_received = 0;
 static uint32_t mic_packets_dropped = 0;
+static uint32_t mic_decode_success = 0;
+static uint32_t mic_decode_fail = 0;
+static uint32_t mic_usb_write_success = 0;
+static uint32_t mic_usb_write_short = 0;
+static uint16_t mic_last_decoded_samples = 0;
+static uint16_t mic_last_written_bytes = 0;
+static uint16_t mic_peak_permille = 0;
 
 static void core1_entry();
 static void reset_core1_audio_pipeline(uint32_t generation);
@@ -850,7 +857,7 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         packet[0] = REPORT_ID;
         packet[2] = 0x11 | (1 << 7);
         packet[3] = 7;
-        packet[4] = 0b11111110;
+        packet[4] = 0b11111111;
         const uint8_t buffer_length = haptics_buffer_length;
         packet[5] = buffer_length;
         packet[6] = buffer_length;
@@ -1078,6 +1085,14 @@ void audio_get_host_status(audio_host_status *status) {
     status->host_frames_dropped = host_frames_dropped;
     status->mic_packets_received = mic_packets_received;
     status->mic_packets_dropped = mic_packets_dropped;
+    status->mic_decode_success = mic_decode_success;
+    status->mic_decode_fail = mic_decode_fail;
+    status->mic_usb_write_success = mic_usb_write_success;
+    status->mic_usb_write_short = mic_usb_write_short;
+    status->mic_last_decoded_samples = mic_last_decoded_samples;
+    status->mic_last_written_bytes = mic_last_written_bytes;
+    status->mic_peak_permille = mic_peak_permille;
+    status->mic_usb_streaming = usb_mic_streaming_active();
 }
 
 void audio_set_haptics_buffer_length(uint8_t length) {
@@ -1368,7 +1383,9 @@ static void process_mic_usb_output() {
     }
 
     const uint16_t written = tud_audio_write(decoded.data, decoded.len);
+    mic_last_written_bytes = written;
     if (written != decoded.len) {
+        mic_usb_write_short++;
         mic_packets_dropped++;
         audio_debug_log(
             AudioDebugMicPacket,
@@ -1378,6 +1395,8 @@ static void process_mic_usb_output() {
             clamp_debug_u8(mic_packets_dropped),
             0
         );
+    } else {
+        mic_usb_write_success++;
     }
 }
 
@@ -1513,6 +1532,8 @@ static bool core1_process_mic() {
         false
     );
     if (decoded_samples <= 0) {
+        mic_decode_fail++;
+        mic_last_decoded_samples = 0;
         mic_packets_dropped++;
         audio_debug_log(AudioDebugMicPacket, 0, clamp_debug_u8(mic_packets_dropped), 0, 0, 0);
         return true;
@@ -1520,12 +1541,21 @@ static bool core1_process_mic() {
 
     static mic_decode_element decoded{};
     const int frames = std::min(decoded_samples, HOST_MIC_OPUS_FRAMES);
+    uint32_t peak = 0;
     for (int frame = 0; frame < frames; frame++) {
+        const int32_t sample = decoded_mono[frame];
+        const uint32_t magnitude = static_cast<uint32_t>(sample < 0 ? -sample : sample);
+        if (magnitude > peak) {
+            peak = magnitude;
+        }
         for (int channel = 0; channel < HOST_MIC_USB_CHANNELS; channel++) {
             decoded.data[frame * HOST_MIC_USB_CHANNELS + channel] = decoded_mono[frame];
         }
     }
     decoded.len = static_cast<uint16_t>(frames * HOST_MIC_USB_CHANNELS * sizeof(int16_t));
+    mic_decode_success++;
+    mic_last_decoded_samples = static_cast<uint16_t>(decoded_samples);
+    mic_peak_permille = static_cast<uint16_t>(std::min<uint32_t>((peak * 1000U) / 32768U, 1000U));
     if (queue_is_full(&mic_decode_fifo)) {
         queue_try_remove(&mic_decode_fifo, NULL);
         mic_packets_dropped++;

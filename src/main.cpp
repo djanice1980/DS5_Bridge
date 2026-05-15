@@ -177,14 +177,16 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
                 const bool hostClearsLeds = dualsense_host_output_clears_leds(outputData + 3, payloadLen);
 #ifdef ENABLE_COMPANION
+                uint8_t companionOutput[sizeof(outputData)]{};
+                memcpy(companionOutput, outputData, sizeof(companionOutput));
                 bool sanitizedHostOutput = sanitize_dualsense_host_output_payload(
-                    outputData + 3,
+                    companionOutput + 3,
                     payloadLen,
                     companion_lightbar_override_enabled()
                 );
-                sanitizedHostOutput = bt_sanitize_host_speaker_amp_ownership(outputData, sizeof(outputData))
+                sanitizedHostOutput = bt_sanitize_host_speaker_amp_ownership(companionOutput, sizeof(companionOutput))
                     || sanitizedHostOutput;
-                sanitizedHostOutput = companion_apply_trigger_effect_intensity(outputData + 3, payloadLen)
+                sanitizedHostOutput = companion_apply_trigger_effect_intensity(companionOutput + 3, payloadLen)
                     || sanitizedHostOutput;
                 if (sanitizedHostOutput) {
                     uint8_t forwardedHostReport[48]{};
@@ -193,7 +195,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                         : bufsize;
                     if (forwardedLen > 0) {
                         forwardedHostReport[0] = buffer[0];
-                        memcpy(forwardedHostReport + 1, outputData + 3, forwardedLen - 1);
+                        memcpy(forwardedHostReport + 1, companionOutput + 3, forwardedLen - 1);
                         companion_note_host_output_report(forwardedHostReport, forwardedLen);
                     }
                 }
@@ -210,17 +212,14 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 );
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
 #else
-                sanitize_dualsense_host_output_payload(outputData + 3, payloadLen);
-                bt_sanitize_host_speaker_amp_ownership(outputData, sizeof(outputData));
-                audio_set_state_data(outputData + 3, static_cast<uint8_t>(payloadLen));
-#endif
-                if (usb_speaker_streaming_active()) {
-                    if (hostClearsLeds) {
-                        bt_schedule_lightbar_restore(750);
-                    }
-                    break;
+                uint8_t audioStateData[sizeof(outputData) - 3]{};
+                if (payloadLen > 0) {
+                    memcpy(audioStateData, outputData + 3, payloadLen);
                 }
-                bt_write_classified_output(outputData, sizeof(outputData));
+                sanitize_dualsense_host_output_payload(audioStateData, payloadLen);
+                audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
+#endif
+                bt_write(outputData, sizeof(outputData));
                 if (hostClearsLeds) {
                     bt_schedule_lightbar_restore(750);
                 }

@@ -249,6 +249,14 @@ export interface HostAudioStatusPayload {
   hostFramesDropped: number;
   micPacketsReceived: number;
   micPacketsDropped: number;
+  micDecodeSuccess: number;
+  micDecodeFail: number;
+  micUsbWriteSuccess: number;
+  micUsbWriteShort: number;
+  micLastDecodedSamples: number;
+  micLastWrittenBytes: number;
+  micPeakPermille: number;
+  micUsbStreaming: boolean;
   protocolVersion: string;
 }
 
@@ -497,6 +505,14 @@ export function parseHostAudioStatusReport(report: ArrayLike<number>): HostAudio
     hostFramesDropped: readU32(report, 29),
     micPacketsReceived: readU32(report, 33),
     micPacketsDropped: readU32(report, 37),
+    micDecodeSuccess: readU32(report, 41),
+    micDecodeFail: readU32(report, 45),
+    micUsbWriteSuccess: readU32(report, 49),
+    micUsbWriteShort: readU32(report, 53),
+    micLastDecodedSamples: readU16(report, 57),
+    micLastWrittenBytes: readU16(report, 59),
+    micPeakPermille: readU16(report, 61),
+    micUsbStreaming: report[63] === 1,
     protocolVersion: `${report[5]}.${report[6]}`
   };
 }

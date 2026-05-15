@@ -24,6 +24,7 @@ static volatile bool usb_suspended = false;
 static volatile bool usb_suspend_disconnect_requested = false;
 static bool usb_suspend_disconnect = true;
 static volatile bool usb_speaker_streaming = false;
+static volatile bool usb_mic_streaming = false;
 static bool usb_reconnect_requested = false;
 static bool usb_reconnect_connect_pending = false;
 static uint32_t usb_reconnect_at_us = 0;
@@ -116,6 +117,10 @@ bool usb_speaker_streaming_active() {
     return usb_speaker_streaming;
 }
 
+bool usb_mic_streaming_active() {
+    return usb_mic_streaming;
+}
+
 extern "C" bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
     (void)rhport;
     const uint8_t itf = tu_u16_low(p_request->wIndex);
@@ -123,6 +128,8 @@ extern "C" bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t cons
 
     if (itf == 1) {
         usb_speaker_streaming = alt != 0;
+    } else if (itf == 2) {
+        usb_mic_streaming = alt != 0;
     }
 
     return true;

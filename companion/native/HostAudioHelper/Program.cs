@@ -29,6 +29,7 @@ static class AudioConstants
     public const int HidReportBytes = 64;
     public const int HidWriteTimeoutMilliseconds = 4;
     public const int DiagnosticsIntervalMilliseconds = 2000;
+    public const int MicKeepaliveBufferMilliseconds = 10;
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
 }
 
@@ -50,6 +51,7 @@ sealed class HostAudioHelper : IDisposable
     private readonly Task diagnosticsTask;
     private MMDeviceEnumerator? enumerator;
     private WasapiLoopbackCapture? capture;
+    private WasapiCapture? micCapture;
     private HidStream? hidStream;
     private int picoBlockFrameIndex;
     private bool picoBlockHasHaptics;
@@ -64,6 +66,9 @@ sealed class HostAudioHelper : IDisposable
     private ushort frameSequence;
     private int peakSamplePermille;
     private long capturedCallbacks;
+    private long micCallbacks;
+    private long micCapturedFrames;
+    private int micPeakPermille;
     private bool disposed;
 
     public HostAudioHelper(HelperOptions options)
@@ -120,6 +125,7 @@ sealed class HostAudioHelper : IDisposable
         disposed = true;
         Stop();
         capture?.Dispose();
+        micCapture?.Dispose();
         hidStream?.Dispose();
         enumerator?.Dispose();
         reportQueue.CompleteAdding();
@@ -138,6 +144,12 @@ sealed class HostAudioHelper : IDisposable
     private void Start()
     {
         enumerator = new MMDeviceEnumerator();
+        if (options.MicKeepaliveOnly)
+        {
+            StartMicKeepalive(enumerator);
+            return;
+        }
+
         TryOpenCompanionHid();
         var device = SelectRenderEndpoint(enumerator, options.DeviceName);
         capture = new WasapiLoopbackCapture(device);
@@ -162,6 +174,14 @@ sealed class HostAudioHelper : IDisposable
     {
         try
         {
+            micCapture?.StopRecording();
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"error: mic keepalive stop failed: {error.Message}");
+        }
+        try
+        {
             capture?.StopRecording();
         }
         catch (Exception error)
@@ -169,6 +189,26 @@ sealed class HostAudioHelper : IDisposable
             Console.Error.WriteLine($"error: stop failed: {error.Message}");
         }
         stopped.Set();
+    }
+
+    private void StartMicKeepalive(MMDeviceEnumerator enumerator)
+    {
+        var device = SelectCaptureEndpoint(enumerator, options.MicDeviceName ?? options.DeviceName);
+        micCapture = new WasapiCapture(device, false, AudioConstants.MicKeepaliveBufferMilliseconds);
+        micCapture.DataAvailable += OnMicDataAvailable;
+        micCapture.RecordingStopped += (_, eventArgs) =>
+        {
+            if (eventArgs.Exception is not null)
+            {
+                Console.Error.WriteLine($"error: mic keepalive stopped: {eventArgs.Exception.Message}");
+            }
+            stopped.Set();
+        };
+
+        Console.Error.WriteLine(
+            $"status: mic keepalive opening '{device.FriendlyName}' {micCapture.WaveFormat.SampleRate}Hz {micCapture.WaveFormat.Channels}ch {micCapture.WaveFormat.BitsPerSample}bit {micCapture.WaveFormat.Encoding}");
+        micCapture.StartRecording();
+        Console.Error.WriteLine("status: mic keepalive started");
     }
 
     private void TryOpenCompanionHid()
@@ -244,6 +284,51 @@ sealed class HostAudioHelper : IDisposable
         return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
     }
 
+    private static MMDevice SelectCaptureEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
+    {
+        var devices = enumerator
+            .EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
+            .ToArray();
+
+        if (!string.IsNullOrWhiteSpace(deviceName))
+        {
+            var exact = devices.FirstOrDefault(device =>
+                string.Equals(device.FriendlyName, deviceName, StringComparison.OrdinalIgnoreCase));
+            if (exact is not null)
+            {
+                return exact;
+            }
+
+            var contains = devices.FirstOrDefault(device =>
+                device.FriendlyName.Contains(deviceName, StringComparison.OrdinalIgnoreCase));
+            if (contains is not null)
+            {
+                return contains;
+            }
+
+            if (deviceName.Contains("DS5 Bridge", StringComparison.OrdinalIgnoreCase))
+            {
+                var alias = FindKnownBridgeEndpoint(devices);
+                if (alias is not null)
+                {
+                    Console.Error.WriteLine($"status: capture endpoint alias '{alias.FriendlyName}' matched for '{deviceName}'");
+                    return alias;
+                }
+            }
+
+            var available = string.Join(", ", devices.Select(device => $"'{device.FriendlyName}'"));
+            throw new InvalidOperationException($"Capture endpoint matching '{deviceName}' was not found. Available endpoints: {available}");
+        }
+
+        var ds5Bridge = FindKnownBridgeEndpoint(devices);
+        if (ds5Bridge is not null)
+        {
+            return ds5Bridge;
+        }
+
+        return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+    }
+
     private static MMDevice? FindKnownBridgeEndpoint(IEnumerable<MMDevice> devices)
     {
         var names = new[]
@@ -270,7 +355,11 @@ sealed class HostAudioHelper : IDisposable
         using var enumerator = new MMDeviceEnumerator();
         foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
         {
-            Console.Error.WriteLine($"device: {device.FriendlyName}");
+            Console.Error.WriteLine($"render-device: {device.FriendlyName}");
+        }
+        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        {
+            Console.Error.WriteLine($"capture-device: {device.FriendlyName}");
         }
     }
 
@@ -291,6 +380,37 @@ sealed class HostAudioHelper : IDisposable
         lock (sync)
         {
             ProcessPcm(eventArgs.Buffer, eventArgs.BytesRecorded, format);
+        }
+    }
+
+    private void OnMicDataAvailable(object? sender, WaveInEventArgs eventArgs)
+    {
+        var format = micCapture?.WaveFormat;
+        if (format is null || eventArgs.BytesRecorded <= 0)
+        {
+            return;
+        }
+
+        var channels = Math.Max(1, format.Channels);
+        var bytesPerSample = Math.Max(1, format.BitsPerSample / 8);
+        var frameBytes = Math.Max(1, channels * bytesPerSample);
+        var frameCount = eventArgs.BytesRecorded / frameBytes;
+        Interlocked.Increment(ref micCallbacks);
+        Interlocked.Add(ref micCapturedFrames, frameCount);
+
+        var peak = 0;
+        for (var frame = 0; frame < frameCount; frame++)
+        {
+            var offset = frame * frameBytes;
+            for (var channel = 0; channel < channels; channel++)
+            {
+                var sample = Math.Abs(ReadSample(eventArgs.Buffer, eventArgs.BytesRecorded, offset + channel * bytesPerSample, format));
+                peak = Math.Max(peak, (int)Math.Round(sample * 1000));
+            }
+        }
+        if (peak > micPeakPermille)
+        {
+            Interlocked.Exchange(ref micPeakPermille, peak);
         }
     }
 
@@ -615,9 +735,10 @@ sealed class HostAudioHelper : IDisposable
         while (!stopped.Wait(AudioConstants.DiagnosticsIntervalMilliseconds))
         {
             var peak = Interlocked.Exchange(ref peakSamplePermille, 0);
+            var micPeak = Interlocked.Exchange(ref micPeakPermille, 0);
             var writerState = writerTask.IsFaulted ? "faulted" : writerTask.IsCompleted ? "stopped" : "running";
             Console.Error.WriteLine(
-                $"stage=helper transport={(hidStream is null ? "stdout" : "hid")} writer={writerState} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} queuedReports={reportQueue.Count} droppedReports={Interlocked.Read(ref droppedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)} writeLateEvents={Interlocked.Read(ref writeLateEvents)} maxWriteLateUs={Interlocked.Read(ref maxWriteLateUs)} peakPermille={peak}");
+                $"stage=helper transport={(hidStream is null ? "stdout" : "hid")} writer={writerState} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} queuedReports={reportQueue.Count} droppedReports={Interlocked.Read(ref droppedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)} writeLateEvents={Interlocked.Read(ref writeLateEvents)} maxWriteLateUs={Interlocked.Read(ref maxWriteLateUs)} peakPermille={peak} micCallbacks={Interlocked.Read(ref micCallbacks)} micCapturedFrames={Interlocked.Read(ref micCapturedFrames)} micPeakPermille={micPeak}");
         }
     }
 
@@ -632,13 +753,15 @@ sealed class HostAudioHelper : IDisposable
     }
 }
 
-sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevices)
+sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevices, bool MicKeepaliveOnly, string? MicDeviceName)
 {
     public static HelperOptions Parse(string[] args)
     {
         string? deviceName = null;
         string? hidPath = null;
+        string? micDeviceName = null;
         var listDevices = false;
+        var micKeepaliveOnly = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -650,12 +773,18 @@ sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevice
                 case "--hid-path" when index + 1 < args.Length:
                     hidPath = args[++index];
                     break;
+                case "--mic-device-name" when index + 1 < args.Length:
+                    micDeviceName = args[++index];
+                    break;
                 case "--list-devices":
                     listDevices = true;
+                    break;
+                case "--mic-keepalive-only":
+                    micKeepaliveOnly = true;
                     break;
             }
         }
 
-        return new HelperOptions(deviceName, hidPath, listDevices);
+        return new HelperOptions(deviceName, hidPath, listDevices, micKeepaliveOnly, micDeviceName);
     }
 }
