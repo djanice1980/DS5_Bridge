@@ -16,6 +16,8 @@
   --feature-right-column: minmax(0, 1fr);
   --feature-card-min-height: 250px;
   --feature-card-height: 355px;
+  --feature-card-header-height: 66px;
+  --dual-selector-segment-width: 92px;
   --control-height: 36px;
   --action-height: 48px;
 }
@@ -868,7 +870,7 @@ button {
 }
 
 .feature-card {
-  --feature-status-grid-rows: 64px 86px var(--action-height) var(--action-height) minmax(40px, 1fr);
+  --feature-status-grid-rows: var(--feature-card-header-height) 76px var(--action-height) var(--action-height) minmax(40px, 1fr);
   min-width: 0;
   min-height: var(--feature-card-min-height);
   padding: var(--card-padding);
@@ -895,32 +897,86 @@ button {
 }
 
 .feature-card-title {
-  display: flex;
-  align-items: flex-start;
+  min-height: var(--feature-card-header-height);
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
+  margin: calc(var(--card-padding) * -1) calc(var(--card-padding) * -1) 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(142, 164, 194, 0.16);
+  background:
+    radial-gradient(circle at 8% 0%, rgba(40, 124, 255, 0.055), transparent 40%),
+    rgba(3, 9, 16, 0.5);
 }
 
-.haptics-flip-button,
-.audio-flip-button {
-  margin-left: auto;
+.haptics-mode-selector,
+.audio-mode-selector {
+  justify-self: end;
+  margin-left: 0;
   white-space: nowrap;
 }
 
-.haptics-flip-button {
-  min-width: 108px;
-}
-
-.audio-flip-button {
-  min-width: 104px;
-}
-
 .feature-icon {
-  width: 30px;
-  height: 30px;
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(142, 164, 194, 0.22);
+  border-radius: 8px;
   display: grid;
   place-items: center;
   color: #1683ff;
+  background: rgba(4, 10, 17, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+  transition:
+    color 180ms ease,
+    border-color 180ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease,
+    opacity 180ms ease;
+}
+
+button.feature-icon {
+  padding: 0;
+}
+
+.feature-card-title h3 {
+  font-size: 17px;
+}
+
+.feature-card-title .title-copy {
+  gap: 5px;
+}
+
+.feature-card-title .title-copy p {
+  font-size: 12px;
+}
+
+.audio-enable-button svg,
+.haptics-enable-button svg,
+.triggers-enable-button svg,
+.lighting-enable-button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.audio-enable-button.active,
+.haptics-enable-button.active,
+.triggers-enable-button.active,
+.lighting-enable-button.active {
+  color: #f7f9ff;
+  border-color: rgba(40, 124, 255, 0.78);
+  background: rgba(22, 103, 220, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 0 1px rgba(40, 124, 255, 0.16),
+    0 0 18px rgba(40, 124, 255, 0.12);
+}
+
+.audio-enable-button:disabled,
+.haptics-enable-button:disabled,
+.triggers-enable-button:disabled,
+.lighting-enable-button:disabled {
+  opacity: 0.62;
 }
 
 .feature-card > p,
@@ -1025,17 +1081,18 @@ button {
 }
 
 .feature-card-title .title-inline-switch {
-  margin-left: auto;
-  align-self: flex-start;
+  justify-self: end;
+  margin-left: 0;
+  align-self: center;
 }
 
-.feature-card-title .title-inline-switch + .audio-flip-button {
+.feature-card-title .title-inline-switch + .audio-mode-selector {
   margin-left: 0;
 }
 
 .audio-page .feature-card-title {
   display: grid;
-  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   position: relative;
 }
 
@@ -1051,19 +1108,66 @@ button {
   white-space: nowrap;
 }
 
-.audio-page .feature-card-title .title-inline-switch,
-.audio-page .feature-card-title .audio-flip-button {
-  position: absolute;
-  top: 0;
+.audio-page .feature-card-title .audio-mode-selector {
   margin-left: 0;
 }
 
-.audio-page .feature-card-title .title-inline-switch {
-  right: 116px;
+.audio-page .feature-card-title .audio-mode-selector {
+  position: static;
+  grid-column: 3;
+  right: auto;
 }
 
-.audio-page .feature-card-title .audio-flip-button {
-  right: 0;
+.dual-selector {
+  min-height: 32px;
+  border: 1px solid rgba(142, 164, 194, 0.26);
+  border-radius: var(--control-radius);
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: var(--dual-selector-segment-width);
+  align-items: stretch;
+  overflow: hidden;
+  background: rgba(4, 10, 17, 0.2);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+.dual-selector button {
+  min-width: 0;
+  min-height: 30px;
+  border: 0;
+  border-right: 1px solid rgba(142, 164, 194, 0.2);
+  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  color: #d9e3f2;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 700;
+  transition:
+    color 160ms ease,
+    background 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.dual-selector button:last-child {
+  border-right: 0;
+}
+
+.dual-selector button.active {
+  color: #f7f9ff;
+  background: rgba(22, 103, 220, 0.92);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 16px rgba(40, 124, 255, 0.1);
+}
+
+.dual-selector button svg {
+  width: 15px;
+  height: 15px;
+  color: currentColor;
 }
 
 .mic-option-grid {
@@ -1115,7 +1219,6 @@ button {
 
 .test-card .feature-card-title {
   align-self: start;
-  align-items: flex-start;
   margin-bottom: 0;
 }
 
@@ -1428,7 +1531,6 @@ button {
 
 .behavior-card .feature-card-title {
   align-self: start;
-  align-items: flex-start;
   margin-bottom: 0;
 }
 
@@ -1779,7 +1881,6 @@ button {
 }
 
 .system-card {
-  --system-header-height: 62px;
   --system-label-column: 118px;
   --system-row-height: 50px;
   min-width: 0;
@@ -1787,39 +1888,28 @@ button {
 }
 
 .system-card-heading {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  min-height: var(--system-header-height);
-  margin-bottom: 0;
-  padding-bottom: 10px;
+  margin-bottom: 16px;
 }
 
-.device-card .system-card-heading {
-  justify-content: space-between;
-}
-
-.system-card-title {
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 0;
+.system-card-heading + .system-fields,
+.system-card-heading + .device-diagnostics,
+.system-card-heading + .device-summary {
+  margin-top: 0;
 }
 
 .system-icon {
-  width: 30px;
-  height: 30px;
-  display: grid;
-  place-items: center;
-  color: #1683ff;
+  pointer-events: none;
+}
+
+.system-mode-selector {
+  justify-self: end;
+  grid-auto-columns: minmax(112px, auto);
 }
 
 .system-fields {
   display: grid;
   align-content: start;
   gap: 0;
-  border-top: 1px solid rgba(142, 164, 194, 0.14);
 }
 
 .system-fields .select-row {

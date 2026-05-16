@@ -2236,25 +2236,43 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon">
-                      {showClassicRumbleControl ? <Vibrate size={20} /> : <Sparkles size={20} />}
-                    </span>
-                    <div className="title-copy">
-                      <h3>{showClassicRumbleControl ? 'Rumble' : 'Intensity'}</h3>
-                      <p>
-                        {showClassicRumbleControl
-                          ? 'Scale game rumble motor strength.'
-                          : 'Scale haptic feedback strength.'}
-                      </p>
-                    </div>
                     <button
                       type="button"
-                      className="card-flip-button haptics-flip-button"
-                      onClick={() => setShowClassicRumbleControl((value) => !value)}
+                      className={`feature-icon haptics-enable-button ${activeHapticsFeatureEnabled ? 'active' : ''}`}
+                      aria-pressed={activeHapticsFeatureEnabled}
+                      aria-label={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
+                      title={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={showClassicRumbleControl ? toggleClassicRumbleEnabled : toggleHapticsEnabled}
                     >
-                      {showClassicRumbleControl ? <Sparkles size={17} /> : <Vibrate size={17} />}
-                      {showClassicRumbleControl ? 'Haptics' : 'Rumble'}
+                      {showClassicRumbleControl ? <Vibrate size={20} /> : <Sparkles size={20} />}
                     </button>
+                    <div className="title-copy">
+                      <h3>{showClassicRumbleControl ? 'Rumble' : 'Intensity'}</h3>
+                      <p>{showClassicRumbleControl ? 'Game Rumble Strength' : 'Haptic Feedback Strength'}</p>
+                    </div>
+                    <div className="dual-selector haptics-mode-selector" role="tablist" aria-label="Haptics control mode">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={!showClassicRumbleControl}
+                        className={!showClassicRumbleControl ? 'active' : ''}
+                        onClick={() => setShowClassicRumbleControl(false)}
+                      >
+                        <Sparkles size={17} />
+                        Haptics
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={showClassicRumbleControl}
+                        className={showClassicRumbleControl ? 'active' : ''}
+                        onClick={() => setShowClassicRumbleControl(true)}
+                      >
+                        <Vibrate size={17} />
+                        Rumble
+                      </button>
+                    </div>
                   </div>
                   <div className="framed-slider">
                     <label className="slider-row">
@@ -2434,9 +2452,29 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon">
+                    <button
+                      type="button"
+                      className={`feature-icon audio-enable-button ${
+                        showMicrophoneControl
+                          ? duplexMicEnabled
+                            ? 'active'
+                            : ''
+                          : snapshot.settings.speakerEnabled
+                            ? 'active'
+                            : ''
+                      }`}
+                      aria-pressed={showMicrophoneControl ? duplexMicEnabled : snapshot.settings.speakerEnabled}
+                      aria-label={showMicrophoneControl ? duplexMicLabel : 'Enable controller speaker'}
+                      title={showMicrophoneControl ? duplexMicLabel : 'Enable controller speaker'}
+                      disabled={
+                        showMicrophoneControl
+                          ? !connected || !hostAudioEnabled || pendingAction !== null
+                          : !connected || !speakerVolumeSupported || pendingAction !== null
+                      }
+                      onClick={showMicrophoneControl ? toggleDuplexMicEnabled : toggleSpeakerEnabled}
+                    >
                       {showMicrophoneControl ? <Mic size={20} /> : <Volume2 size={20} />}
-                    </span>
+                    </button>
                     <div className="title-copy">
                       <h3>{showMicrophoneControl ? 'Microphone' : 'Speaker'}</h3>
                       <p>
@@ -2445,46 +2483,28 @@ export function App() {
                           : 'Speaker output level.'}
                       </p>
                     </div>
-                    {showMicrophoneControl ? (
-                      <div className="inline-switch card-inline-switch title-inline-switch">
-                        <span>Mic</span>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={duplexMicEnabled}
-                          aria-label="Enable duplex microphone"
-                          title={duplexMicLabel}
-                          className={`switch ${duplexMicEnabled ? 'on' : ''}`}
-                          disabled={!connected || !hostAudioEnabled || pendingAction !== null}
-                          onClick={toggleDuplexMicEnabled}
-                        >
-                          <span />
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="inline-switch card-inline-switch title-inline-switch">
-                        <span>Speaker</span>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={snapshot.settings.speakerEnabled}
-                          aria-label="Enable controller speaker"
-                          className={`switch ${snapshot.settings.speakerEnabled ? 'on' : ''}`}
-                          disabled={!connected || !speakerVolumeSupported || pendingAction !== null}
-                          onClick={toggleSpeakerEnabled}
-                        >
-                          <span />
-                        </button>
-                      </div>
-                    )}
-                    <button
-                      type="button"
-                      className="card-flip-button audio-flip-button"
-                      onClick={() => setShowMicrophoneControl((value) => !value)}
-                    >
-                      {showMicrophoneControl ? <Volume2 size={17} /> : <Mic size={17} />}
-                      {showMicrophoneControl ? 'Speaker' : 'Mic'}
-                    </button>
+                    <div className="dual-selector audio-mode-selector" role="tablist" aria-label="Audio control mode">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={!showMicrophoneControl}
+                        className={!showMicrophoneControl ? 'active' : ''}
+                        onClick={() => setShowMicrophoneControl(false)}
+                      >
+                        <Volume2 size={17} />
+                        Speaker
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={showMicrophoneControl}
+                        className={showMicrophoneControl ? 'active' : ''}
+                        onClick={() => setShowMicrophoneControl(true)}
+                      >
+                        <Mic size={17} />
+                        Mic
+                      </button>
+                    </div>
                   </div>
                   <div className="framed-slider">
                     <label className="slider-row">
@@ -2682,7 +2702,17 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Zap size={20} /></span>
+                    <button
+                      type="button"
+                      className={`feature-icon triggers-enable-button ${snapshot.settings.adaptiveTriggersEnabled ? 'active' : ''}`}
+                      aria-pressed={snapshot.settings.adaptiveTriggersEnabled}
+                      aria-label="Enable adaptive triggers"
+                      title="Enable adaptive triggers"
+                      disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
+                      onClick={toggleAdaptiveTriggersEnabled}
+                    >
+                      <Zap size={20} />
+                    </button>
                     <div className="title-copy">
                       <h3>Intensity</h3>
                       <p>Set the overall strength of adaptive trigger effects.</p>
@@ -2835,7 +2865,17 @@ export function App() {
               <div className="feature-card-grid lighting-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Palette size={20} /></span>
+                    <button
+                      type="button"
+                      className={`feature-icon lighting-enable-button ${snapshot.settings.lightbarEnabled ? 'active' : ''}`}
+                      aria-pressed={snapshot.settings.lightbarEnabled}
+                      aria-label="Enable lighting"
+                      title="Enable lighting"
+                      disabled={!connected || !lightbarSupported || pendingAction !== null}
+                      onClick={toggleLightbarEnabled}
+                    >
+                      <Palette size={20} />
+                    </button>
                     <div className="title-copy">
                       <h3>Brightness</h3>
                       <p>Set the controller light bar brightness.</p>
@@ -3042,13 +3082,11 @@ export function App() {
 
               <div className="feature-card-grid">
                 <section className="system-card mute-card">
-                  <div className="system-card-heading">
-                    <div className="feature-card-title system-card-title">
-                      <span className="system-icon"><VolumeX size={20} /></span>
-                      <div className="title-copy">
-                        <h3>Mute Button</h3>
-                        <p>Set controller mute behavior.</p>
-                      </div>
+                  <div className="feature-card-title system-card-heading">
+                    <span className="feature-icon system-icon"><VolumeX size={20} /></span>
+                    <div className="title-copy">
+                      <h3>Mute Button</h3>
+                      <p>Set controller mute behavior.</p>
                     </div>
                   </div>
                   <div className="system-fields">
@@ -3115,28 +3153,40 @@ export function App() {
                 </section>
 
                 <section className={`system-card device-card ${showDiagnostics ? 'expanded' : ''}`}>
-                  <div className="system-card-heading">
-                    <div className="feature-card-title system-card-title">
-                      <span className="system-icon">
-                        {showDiagnostics ? <SlidersHorizontal size={20} /> : <Settings2 size={20} />}
-                      </span>
-                      <div className="title-copy">
-                        <h3>{showDiagnostics ? 'Diagnostics' : 'Device'}</h3>
+                  <div className="feature-card-title system-card-heading">
+                    <span className="feature-icon system-icon">
+                      {showDiagnostics ? <SlidersHorizontal size={20} /> : <Settings2 size={20} />}
+                    </span>
+                    <div className="title-copy">
+                      <h3>{showDiagnostics ? 'Diagnostics' : 'Device'}</h3>
                         <p>
                           {showDiagnostics
-                            ? 'Protocol and debug data.'
-                            : 'Firmware and polling.'}
+                            ? 'Debug Data'
+                            : 'Firmware'}
                         </p>
-                      </div>
                     </div>
-                    <button
-                      type="button"
-                      className="card-flip-button system-flip-button"
-                      onClick={() => setShowDiagnostics((value) => !value)}
-                    >
-                      {showDiagnostics ? <Settings2 size={17} /> : <SlidersHorizontal size={17} />}
-                      {showDiagnostics ? 'Device' : 'Diagnostics'}
-                    </button>
+                    <div className="dual-selector system-mode-selector" role="tablist" aria-label="System control mode">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={!showDiagnostics}
+                        className={!showDiagnostics ? 'active' : ''}
+                        onClick={() => setShowDiagnostics(false)}
+                      >
+                        <Settings2 size={17} />
+                        Device
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={showDiagnostics}
+                        className={showDiagnostics ? 'active' : ''}
+                        onClick={() => setShowDiagnostics(true)}
+                      >
+                        <SlidersHorizontal size={17} />
+                        Diagnostics
+                      </button>
+                    </div>
                   </div>
                   {showDiagnostics ? (
                     <div className="device-diagnostics">

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
 const normalizedStyles = styles.replace(/\s+/g, ' ').trim();
 
 function cssBlock(selector: string, requiredText?: string): string {
@@ -67,17 +68,29 @@ describe('companion layout CSS', () => {
   });
 
   it('keeps test card statuses aligned and gives lighting color metadata enough room', () => {
-    const sharedRows = '--feature-status-grid-rows: 64px 86px var(--action-height) var(--action-height) minmax(40px, 1fr);';
+    const sharedRows = '--feature-status-grid-rows: var(--feature-card-header-height) 76px var(--action-height) var(--action-height) minmax(40px, 1fr);';
     expect(cssBlock('.feature-card', sharedRows)).toContain(sharedRows);
+    expect(normalizedStyles).toContain('--feature-card-header-height: 66px;');
+    expect(cssBlock('.feature-card-title', 'min-height: var(--feature-card-header-height);')).toContain(
+      'min-height: var(--feature-card-header-height);'
+    );
     expect(cssBlock('.test-card', 'grid-template-rows: var(--feature-status-grid-rows);')).toContain(
       'grid-template-rows: var(--feature-status-grid-rows);'
     );
     expect(cssBlock('.behavior-card', 'grid-template-rows: var(--feature-status-grid-rows);')).toContain(
       'grid-template-rows: var(--feature-status-grid-rows);'
     );
+    expect(cssBlock('.behavior-card .feature-card-title', 'align-self: start;')).toContain('align-self: start;');
     expect(cssBlock('.test-card .feature-status', 'grid-row: 5;')).toContain('grid-row: 5;');
     expect(cssBlock('.behavior-card .lighting-status', 'grid-row: 5;')).toContain('grid-row: 5;');
     expect(cssBlock('.behavior-card .light-color-panel', 'grid-row: 3 / 5;')).toContain('grid-row: 3 / 5;');
     expect(cssBlock('.light-color-meta', 'grid-row: 3;')).toContain('grid-row: 3;');
+  });
+
+  it('keeps system card subtitles short enough for shared headers', () => {
+    expect(appSource).toContain("'Firmware'");
+    expect(appSource).toContain("'Debug Data'");
+    expect(appSource).not.toContain('Firmware and polling.');
+    expect(appSource).not.toContain('Protocol and debug data.');
   });
 });
