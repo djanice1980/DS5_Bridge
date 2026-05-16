@@ -813,15 +813,6 @@ button {
   min-width: 0;
 }
 
-.audio-heading-controls .status-badge {
-  max-width: 220px;
-  min-height: 34px;
-}
-
-.audio-heading-controls .inline-switch {
-  min-height: 34px;
-}
-
 .feature-card-grid {
   display: grid;
   grid-template-columns: var(--feature-left-column) var(--feature-right-column);
@@ -867,6 +858,14 @@ button {
 .audio-flip-button {
   margin-left: auto;
   white-space: nowrap;
+}
+
+.haptics-flip-button {
+  min-width: 108px;
+}
+
+.audio-flip-button {
+  min-width: 104px;
 }
 
 .feature-icon {
@@ -973,39 +972,18 @@ button {
   box-shadow: inset 0 -2px 0 rgba(40, 124, 255, 0.78);
 }
 
-.mic-control-status {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(88px, 130px) auto;
-  gap: 10px;
-  align-items: center;
-  margin: 0 0 12px;
+.card-inline-switch {
+  min-height: 34px;
+  justify-content: flex-end;
 }
 
-.mic-control-status .status-badge {
-  min-width: 0;
-  width: 100%;
+.feature-card-title .title-inline-switch {
+  margin-left: auto;
+  align-self: flex-start;
 }
 
-.mic-meter {
-  height: 10px;
-  border: 1px solid rgba(142, 164, 194, 0.24);
-  border-radius: 2px;
-  background: rgba(4, 10, 17, 0.34);
-  overflow: hidden;
-}
-
-.mic-meter span {
-  display: block;
-  width: var(--mic-peak, 0%);
-  height: 100%;
-  background: linear-gradient(90deg, #43d982, #f3c846 72%, #ff5a70);
-}
-
-.mic-drop-count {
-  color: #c5cedd;
-  font-size: 12px;
-  font-weight: 750;
-  white-space: nowrap;
+.feature-card-title .title-inline-switch + .audio-flip-button {
+  margin-left: 0;
 }
 
 .mic-option-grid {
@@ -1022,12 +1000,11 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 10px;
+  padding: 0 12px;
   color: #edf3ff;
   background: rgba(255, 255, 255, 0.045);
-  font-size: 12px;
-  font-weight: 750;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -1091,6 +1068,11 @@ button {
 .test-card .feature-status {
   grid-row: 5;
   align-self: start;
+}
+
+.audio-test-status {
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .primary-action,
@@ -1852,6 +1834,10 @@ button {
 .card-flip-button:hover {
   border-color: rgba(40, 124, 255, 0.52);
   background: rgba(40, 124, 255, 0.14);
+}
+
+.system-flip-button {
+  min-width: 128px;
 }
 
 .device-diagnostics {

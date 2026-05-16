@@ -42,7 +42,9 @@ const LIGHTBAR_BRIGHTNESS_STEP = 10;
 const TRIGGER_EFFECT_STEP = 10;
 const TEST_HAPTICS_LOCK_MS = 1100;
 const TEST_SPEAKER_LOCK_MS = 900;
+const TEST_MIC_LISTEN_MS = 5000;
 const TEST_SPEAKER_VOLUME_SETTLE_MS = 90;
+const HOST_AUDIO_INITIAL_START_GRACE_MS = 2500;
 const TEST_SPEAKER_ENDPOINT_ATTEMPTS = 12;
 const TEST_SPEAKER_ENDPOINT_RETRY_MS = 150;
 const TEST_SPEAKER_ENDPOINT_REFRESH_MS = 1500;
@@ -90,7 +92,9 @@ const TRIGGER_EFFECT_PRESETS: Array<[string, number]> = [
 const PERCENT_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 10);
 const HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
 const BRIDGE_AUDIO_OUTPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
+const BRIDGE_AUDIO_INPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
 const BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE = 'DualSense audio endpoint unavailable';
+const BRIDGE_MIC_ENDPOINT_UNAVAILABLE = 'DualSense microphone unavailable';
 const MUTE_KEY_OPTIONS: Array<[string, number]> = [
   ['F1', 0x3A], ['F2', 0x3B], ['F3', 0x3C], ['F4', 0x3D], ['F5', 0x3E], ['F6', 0x3F],
   ['F7', 0x40], ['F8', 0x41], ['F9', 0x42], ['F10', 0x43], ['F11', 0x44], ['F12', 0x45],
@@ -349,6 +353,16 @@ function bridgeAudioOutputScore(device: MediaDeviceInfo): number {
   return score;
 }
 
+function bridgeAudioInputScore(device: MediaDeviceInfo): number {
+  const label = device.label.toLowerCase();
+  let score = 1;
+  if (label.includes('dualsense') || label.includes('dual sense')) score += 4;
+  if (label.includes('wireless controller')) score += 3;
+  if (label.includes('microphone') || label.includes('mic')) score += 2;
+  if (label.includes('ds5') || label.includes('bridge')) score += 1;
+  return score;
+}
+
 async function findBridgeAudioOutputIdOnce(): Promise<string | null> {
   if (!navigator.mediaDevices?.enumerateDevices) {
     return null;
@@ -369,6 +383,47 @@ async function findBridgeAudioOutputIdOnce(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function findBridgeAudioInputIdOnce(): Promise<string | null> {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    return null;
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter((device) => (
+      device.kind === 'audioinput'
+      && BRIDGE_AUDIO_INPUT_RE.test(device.label)
+      && device.deviceId
+      && device.deviceId !== 'default'
+      && device.deviceId !== 'communications'
+    ));
+    inputs.sort((left, right) => bridgeAudioInputScore(right) - bridgeAudioInputScore(left));
+    const input = inputs[0];
+    return input?.deviceId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function findBridgeAudioInputId(): Promise<string | null> {
+  let inputId = await findBridgeAudioInputIdOnce();
+  if (inputId || !navigator.mediaDevices?.getUserMedia) {
+    return inputId;
+  }
+
+  let permissionStream: MediaStream | null = null;
+  try {
+    permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  } catch {
+    return null;
+  } finally {
+    permissionStream?.getTracks().forEach((track) => track.stop());
+  }
+
+  inputId = await findBridgeAudioInputIdOnce();
+  return inputId;
 }
 
 function delay(ms: number): Promise<void> {
@@ -531,6 +586,75 @@ async function playSpeakerToneFile(): Promise<void> {
   await playSpeakerAudioSource(getSpeakerPrerollSilenceUrl());
   await delay(25);
   await playSpeakerAudioSource(testSpeakerToneUrl);
+}
+
+let micListenAudio: HTMLAudioElement | null = null;
+let micListenStream: MediaStream | null = null;
+let micListenTimer: number | null = null;
+let micListenResolve: (() => void) | null = null;
+
+function stopMicLiveListen(): void {
+  if (micListenTimer !== null) {
+    window.clearTimeout(micListenTimer);
+  }
+  micListenTimer = null;
+  if (micListenAudio) {
+    try {
+      micListenAudio.pause();
+      micListenAudio.srcObject = null;
+    } catch {
+      // Ignore teardown races while the mic endpoint is closing.
+    }
+  }
+  micListenAudio = null;
+  micListenStream?.getTracks().forEach((track) => track.stop());
+  micListenStream = null;
+  const resolve = micListenResolve;
+  micListenResolve = null;
+  resolve?.();
+}
+
+async function openBridgeMicStream(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error(BRIDGE_MIC_ENDPOINT_UNAVAILABLE);
+  }
+
+  const inputId = await findBridgeAudioInputId();
+  if (!inputId) {
+    throw new Error(BRIDGE_MIC_ENDPOINT_UNAVAILABLE);
+  }
+
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      deviceId: { exact: inputId },
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    },
+    video: false
+  });
+}
+
+async function playMicLiveListen(durationMs: number): Promise<void> {
+  stopMicLiveListen();
+  const stream = await openBridgeMicStream();
+  const audio = new Audio();
+  audio.srcObject = stream;
+  audio.volume = 1;
+  micListenAudio = audio;
+  micListenStream = stream;
+
+  try {
+    await audio.play();
+  } catch (error) {
+    stopMicLiveListen();
+    throw error;
+  }
+
+  await new Promise<void>((resolve) => {
+    micListenResolve = resolve;
+    micListenTimer = window.setTimeout(stopMicLiveListen, durationMs);
+  });
 }
 
 function CustomSelect<T extends SelectValue>({
@@ -732,6 +856,8 @@ export function App() {
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
   const [speakerOutputAvailable, setSpeakerOutputAvailable] = useState<boolean | null>(null);
   const [speakerTestError, setSpeakerTestError] = useState<string | null>(null);
+  const [micTestLocked, setMicTestLocked] = useState(false);
+  const [micTestError, setMicTestError] = useState<string | null>(null);
   const [triggerTestLocked, setTriggerTestLocked] = useState(false);
   const [hapticsCommitPending, setHapticsCommitPending] = useState(false);
   const [classicRumbleCommitPending, setClassicRumbleCommitPending] = useState(false);
@@ -752,6 +878,7 @@ export function App() {
   const sleepConfirmTimerRef = useRef<number | null>(null);
   const sleepConfirmArmedRef = useRef(false);
   const sleepTogglePromiseRef = useRef<Promise<void> | null>(null);
+  const appOpenedAtRef = useRef(Date.now());
   const connected = snapshot?.state === 'connected';
 
   useEffect(() => {
@@ -945,17 +1072,29 @@ export function App() {
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
   const hostAudioEnabled = Boolean(snapshot?.settings.hostEncodedAudioEnabled);
   const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
+  const audioEnabled = speakerEnabled || duplexMicEnabled;
   const hostAudioActive = hostAudioStatus?.mode === 'host-encoded-active';
+  const initialHostAudioStartGrace = Date.now() - appOpenedAtRef.current < HOST_AUDIO_INITIAL_START_GRACE_MS;
+  const hostAudioStarting = hostAudioEnabled
+    && !hostAudioActive
+    && (
+      !hostAudioStatus
+      || hostAudioStatus.fallbackReason === 'none'
+      || hostAudioStatus.fallbackReason === 'host-disabled'
+      || (initialHostAudioStartGrace && hostAudioStatus.fallbackReason === 'heartbeat-timeout')
+    );
   const hostAudioLabel = !connected
     ? 'Unavailable'
     : hostAudioActive
       ? 'Host Encoded Active'
+      : hostAudioStarting
+        ? 'Starting Host Encoding'
       : hostAudioEnabled
         ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
         : 'Pico Local';
   const hostAudioTone = hostAudioActive
     ? 'good'
-    : connected && hostAudioEnabled
+    : connected && hostAudioEnabled && !hostAudioStarting
       ? 'warn'
       : 'idle';
   const duplexMicLabel = hostAudioStatus?.duplexActive
@@ -963,21 +1102,6 @@ export function App() {
     : duplexMicEnabled
       ? 'Disabled in Fallback'
       : 'Off';
-  const micStreaming = Boolean(hostAudioStatus?.micUsbStreaming);
-  const micPacketDrops = hostAudioStatus?.micPacketsDropped ?? 0;
-  const micPeakPercent = Math.max(0, Math.min(100, Math.round((hostAudioStatus?.micPeakPermille ?? 0) / 10)));
-  const micStatusLabel = !connected
-    ? 'Unavailable'
-    : micStreaming
-      ? 'USB Streaming'
-      : hostAudioActive
-        ? 'Ready'
-        : 'Host Encoded Required';
-  const micStatusTone = micStreaming
-    ? 'good'
-    : connected && hostAudioEnabled
-      ? 'warn'
-      : 'idle';
   const speakerOutputMissing = speakerOutputAvailable === false;
   const testHapticsUnavailable = !connected
     || !hapticsEnabled
@@ -1047,6 +1171,16 @@ export function App() {
     || gameStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy);
   const speakerTestReady = !testSpeakerUnavailable && !speakerOutputMissing;
+  const testMicUnavailable = !connected
+    || !hostAudioEnabled
+    || !hostAudioActive
+    || !duplexMicEnabled
+    || pendingAction !== null
+    || micVolumeCommitPending
+    || lightbarCommitPending
+    || micTestLocked
+    || gameStreamActive;
+  const micTestReady = !testMicUnavailable;
   const speakerStatusLabel = speakerTestLocked
     ? 'Playing'
     : connected && speakerTestError
@@ -1063,10 +1197,34 @@ export function App() {
   const speakerStatusTone = speakerTestLocked || speakerTestReady
     ? 'good'
     : connected && (speakerTestError || speakerOutputMissing)
-      ? 'bad'
+        ? 'bad'
       : connected && (gameStreamActive || pendingAction !== null)
         ? 'warn'
         : 'idle';
+  const micTestStatusLabel = micTestLocked
+    ? 'Listening'
+    : connected && micTestError
+      ? micTestError
+      : micTestReady
+        ? 'Ready'
+        : connected && !hostAudioEnabled
+          ? 'Host Encoding Off'
+          : connected && !hostAudioActive
+            ? 'Host Encoding Starting'
+            : connected && pendingAction !== null
+              ? 'Command Pending'
+              : 'Unavailable';
+  const micTestStatusTone = micTestLocked || micTestReady
+    ? 'good'
+    : connected && micTestError
+      ? 'bad'
+      : connected && (hostAudioEnabled || pendingAction !== null)
+        ? 'warn'
+        : 'idle';
+  const activeAudioTestUnavailable = showMicrophoneControl ? testMicUnavailable : testSpeakerUnavailable;
+  const activeAudioTestLocked = showMicrophoneControl ? micTestLocked : speakerTestLocked;
+  const activeAudioTestStatusLabel = showMicrophoneControl ? micTestStatusLabel : speakerStatusLabel;
+  const activeAudioTestStatusTone = showMicrophoneControl ? micTestStatusTone : speakerStatusTone;
   const heroBridgeLabel = 'DS5 Bridge';
   const heroReadinessLabel = connected && !snapshot.diagnostics.lastError ? 'Ready' : 'DS5 Bridge not detected';
   const testTriggersUnavailable = !connected
@@ -1116,6 +1274,16 @@ export function App() {
     const handle = window.setInterval(refresh, TEST_SPEAKER_ENDPOINT_REFRESH_MS);
     return () => window.clearInterval(handle);
   }, [connected, speakerOutputAvailable, speakerTestLocked]);
+
+  useEffect(() => () => {
+    stopMicLiveListen();
+  }, []);
+
+  useEffect(() => {
+    if ((!connected || !showMicrophoneControl) && micTestLocked) {
+      stopMicLiveListen();
+    }
+  }, [connected, showMicrophoneControl, micTestLocked]);
 
   const normalizedLightbarColor = normalizeHexColor(lightbarColor);
   const customSwatchColor = customLightbarColor ?? LIGHTBAR_DEFAULT_CUSTOM_COLOR;
@@ -1547,6 +1715,34 @@ export function App() {
     })();
   }
 
+  function runTestMic() {
+    setMicTestLocked(true);
+    setPendingAction('mic-test');
+    setMicTestError(null);
+    void (async () => {
+      try {
+        if (snapshot && micVolumeValue !== snapshot.settings.micVolumePercent) {
+          micVolumeEditingRef.current = true;
+          const next = await window.bridge.setMicVolume(micVolumeValue);
+          setSnapshot(next);
+          setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+          micVolumeEditingRef.current = false;
+        }
+        await playMicLiveListen(TEST_MIC_LISTEN_MS);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : BRIDGE_MIC_ENDPOINT_UNAVAILABLE;
+        setMicTestError(message);
+        const next = await window.bridge.getStatus();
+        setSnapshot(next);
+        setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+      } finally {
+        micVolumeEditingRef.current = false;
+        setPendingAction(null);
+        setMicTestLocked(false);
+      }
+    })();
+  }
+
   function runTestAdaptiveTriggers() {
     setTriggerTestLocked(true);
     void runAction('triggers', async () => {
@@ -1593,6 +1789,22 @@ export function App() {
     void runAction('host-audio-enabled', () => (
       window.bridge.setHostEncodedAudioEnabled(!snapshot.settings.hostEncodedAudioEnabled)
     ));
+  }
+
+  function toggleAudioEnabled() {
+    if (!snapshot) return;
+    const enabled = !(snapshot.settings.speakerEnabled || snapshot.settings.duplexMicEnabled);
+    void runAction('audio-enabled', async () => {
+      let next = snapshot;
+      if (next.settings.speakerEnabled !== enabled) {
+        next = await window.bridge.setSpeakerEnabled(enabled);
+      }
+      const micEnabled = enabled && next.settings.hostEncodedAudioEnabled;
+      if (next.settings.duplexMicEnabled !== micEnabled) {
+        next = await window.bridge.setDuplexMicEnabled(micEnabled);
+      }
+      return next;
+    });
   }
 
   function toggleDuplexMicEnabled() {
@@ -2186,27 +2398,9 @@ export function App() {
               <div className="feature-heading">
                 <div>
                   <h2>Audio</h2>
-                  <p>Adjust controller speaker volume and run a quick test.</p>
+                  <p>Adjust controller speaker and microphone levels.</p>
                 </div>
                 <div className="audio-heading-controls">
-                  <span className={`status-badge ${hostAudioTone}`} title={hostAudioLabel}>
-                    <span className={`dot ${hostAudioTone}`} />
-                    <strong>{hostAudioLabel}</strong>
-                  </span>
-                  <div className="inline-switch">
-                    <span>Speaker</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={snapshot.settings.speakerEnabled}
-                      aria-label="Enable controller speaker"
-                      className={`switch ${snapshot.settings.speakerEnabled ? 'on' : ''}`}
-                      disabled={!connected || !speakerVolumeSupported || pendingAction !== null}
-                      onClick={toggleSpeakerEnabled}
-                    >
-                      <span />
-                    </button>
-                  </div>
                   <div className="inline-switch">
                     <span>Host Encoded</span>
                     <button
@@ -2222,16 +2416,15 @@ export function App() {
                     </button>
                   </div>
                   <div className="inline-switch">
-                    <span>Duplex Mic</span>
+                    <span>Enabled</span>
                     <button
                       type="button"
                       role="switch"
-                      aria-checked={duplexMicEnabled}
-                      aria-label="Enable duplex microphone"
-                      title={duplexMicLabel}
-                      className={`switch ${duplexMicEnabled ? 'on' : ''}`}
-                      disabled={!connected || !hostAudioEnabled || pendingAction !== null}
-                      onClick={toggleDuplexMicEnabled}
+                      aria-checked={audioEnabled}
+                      aria-label="Enable audio"
+                      className={`switch ${audioEnabled ? 'on' : ''}`}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={toggleAudioEnabled}
                     >
                       <span />
                     </button>
@@ -2248,10 +2441,42 @@ export function App() {
                       <h3>{showMicrophoneControl ? 'Microphone' : 'Speaker'}</h3>
                       <p>
                         {showMicrophoneControl
-                          ? 'Controls the DualSense microphone input level.'
-                          : 'Controls the DualSense speaker output level.'}
+                          ? 'Microphone input level.'
+                          : 'Speaker output level.'}
                       </p>
                     </div>
+                    {showMicrophoneControl ? (
+                      <div className="inline-switch card-inline-switch title-inline-switch">
+                        <span>Mic</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={duplexMicEnabled}
+                          aria-label="Enable duplex microphone"
+                          title={duplexMicLabel}
+                          className={`switch ${duplexMicEnabled ? 'on' : ''}`}
+                          disabled={!connected || !hostAudioEnabled || pendingAction !== null}
+                          onClick={toggleDuplexMicEnabled}
+                        >
+                          <span />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="inline-switch card-inline-switch title-inline-switch">
+                        <span>Speaker</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={snapshot.settings.speakerEnabled}
+                          aria-label="Enable controller speaker"
+                          className={`switch ${snapshot.settings.speakerEnabled ? 'on' : ''}`}
+                          disabled={!connected || !speakerVolumeSupported || pendingAction !== null}
+                          onClick={toggleSpeakerEnabled}
+                        >
+                          <span />
+                        </button>
+                      </div>
+                    )}
                     <button
                       type="button"
                       className="card-flip-button audio-flip-button"
@@ -2272,7 +2497,7 @@ export function App() {
                             max="100"
                             step={MIC_VOLUME_STEP}
                             value={micVolumeValue}
-                            disabled={!connected || !hostAudioEnabled || micVolumeCommitPending}
+                            disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
                             style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
                             aria-label="Microphone level"
                             onPointerDown={() => {
@@ -2330,26 +2555,14 @@ export function App() {
                   </div>
                   {showMicrophoneControl ? (
                     <>
-                      <div className="mic-control-status">
-                        <span className={`status-badge ${micStatusTone}`} title={micStatusLabel}>
-                          <span className={`dot ${micStatusTone}`} />
-                          <strong>{micStatusLabel}</strong>
-                        </span>
-                        <span className="mic-meter" title={`Mic peak ${micPeakPercent}%`}>
-                          <span style={{ '--mic-peak': `${micPeakPercent}%` } as CSSProperties} />
-                        </span>
-                        <span className="mic-drop-count" title={`${micPacketDrops} mic packet drops`}>
-                          Drops {micPacketDrops}
-                        </span>
-                      </div>
-                      <p>Companion-owned mic controls staged for firmware wiring.</p>
+                      <p>Use presets for quick microphone levels.</p>
                       <div className="segmented-row">
                         {MIC_VOLUME_PRESETS.map(([label, value]) => (
                           <button
                             key={label}
                             type="button"
                             className={micVolumeValue === value ? 'active' : ''}
-                            disabled={!connected || !hostAudioEnabled || micVolumeCommitPending}
+                            disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
                             onClick={() => setMicPreset(Number(value))}
                           >
                             {label}
@@ -2361,7 +2574,7 @@ export function App() {
                           type="button"
                           className={snapshot.settings.micMuted ? 'active danger' : ''}
                           aria-pressed={snapshot.settings.micMuted}
-                          disabled={!connected || pendingAction !== null}
+                          disabled={!connected || !duplexMicEnabled || pendingAction !== null}
                           onClick={toggleMicMute}
                         >
                           <VolumeX size={15} />
@@ -2393,27 +2606,47 @@ export function App() {
                     <span className="feature-icon"><Activity size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
-                      <p>Play a short sample through the controller speaker.</p>
+                      <p>{showMicrophoneControl ? 'Listen to the controller microphone for five seconds.' : 'Play a short sample through the controller speaker.'}</p>
                     </div>
                   </div>
-                  <button className="primary-action" type="button" disabled={testSpeakerUnavailable} onClick={runTestSpeaker}>
-                    <Play size={15} />
-                    {connected && speakerTestLocked
-                      ? 'Playing Tone'
-                      : connected && gameStreamActive
-                        ? 'Game Active'
-                        : connected && speakerOutputMissing
-                          ? 'Retry Speaker'
-                        : 'Test Speaker'}
+                  <button
+                    className="primary-action"
+                    type="button"
+                    disabled={activeAudioTestUnavailable}
+                    onClick={showMicrophoneControl ? runTestMic : runTestSpeaker}
+                  >
+                    {showMicrophoneControl ? <Mic size={15} /> : <Play size={15} />}
+                    {showMicrophoneControl
+                      ? connected && micTestLocked
+                        ? 'Live Listening'
+                        : connected && micTestError
+                          ? 'Retry Mic'
+                          : 'Test Mic'
+                      : connected && speakerTestLocked
+                        ? 'Playing Tone'
+                        : connected && gameStreamActive
+                          ? 'Game Active'
+                          : connected && speakerOutputMissing
+                            ? 'Retry Speaker'
+                          : 'Test Speaker'}
                   </button>
-                  <button className="secondary-action" type="button" disabled={!speakerTestLocked} onClick={() => setSpeakerTestLocked(false)}>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    disabled={!activeAudioTestLocked}
+                    onClick={showMicrophoneControl ? stopMicLiveListen : () => setSpeakerTestLocked(false)}
+                  >
                     <span className="stop-glyph" aria-hidden="true" />
                     Stop Test
                   </button>
-                  <div className={`feature-status test-status ${speakerStatusTone}`}>
-                    <span className="status-badge" title={speakerStatusLabel}>
-                      <span className={`dot ${speakerStatusTone}`} />
-                      <strong>{speakerStatusLabel}</strong>
+                  <div className="feature-status test-status audio-test-status">
+                    <span className={`status-badge ${activeAudioTestStatusTone}`} title={activeAudioTestStatusLabel}>
+                      <span className={`dot ${activeAudioTestStatusTone}`} />
+                      <strong>{activeAudioTestStatusLabel}</strong>
+                    </span>
+                    <span className={`status-badge ${hostAudioTone}`} title={hostAudioLabel}>
+                      <span className={`dot ${hostAudioTone}`} />
+                      <strong>{hostAudioLabel}</strong>
                     </span>
                   </div>
                 </section>
@@ -2898,7 +3131,7 @@ export function App() {
                     </div>
                     <button
                       type="button"
-                      className="card-flip-button"
+                      className="card-flip-button system-flip-button"
                       onClick={() => setShowDiagnostics((value) => !value)}
                     >
                       {showDiagnostics ? <Settings2 size={17} /> : <SlidersHorizontal size={17} />}

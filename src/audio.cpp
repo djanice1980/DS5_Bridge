@@ -54,9 +54,10 @@
 #define OPUS_ENCODE_BUDGET_US 10000
 #define SPEAKER_USB_SILENCE_TAIL_US 500000
 #define SPEAKER_SILENCE_PREROLL_USB_PACKETS 24
+#define SPEAKER_TRANSITION_FADE_SAMPLES 1920.0f
 #define HOST_HEARTBEAT_TIMEOUT_US 750000
 #define HOST_STREAM_TIMEOUT_US 250000
-#define HOST_STREAM_START_GRACE_US 500000
+#define HOST_STREAM_START_GRACE_US 2000000
 #define HOST_PACKET_HEADER_SIZE 16
 #define HOST_PACKET_PAYLOAD_SIZE 47
 #define HOST_FRAME_REASSEMBLY_SIZE 448
@@ -184,6 +185,8 @@ static audio_debug_stats audio_stats{};
 static uint32_t last_usb_audio_read_us = 0;
 static bool audio_silence_tail_logged = false;
 static uint8_t speaker_silence_preroll_packets_remaining = 0;
+static float fallback_speaker_gain = 1.0f;
+static float fallback_speaker_target_gain = 1.0f;
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
 queue_t mic_fifo;
@@ -220,6 +223,7 @@ static volatile bool host_duplex_requested = false;
 static volatile uint32_t host_last_heartbeat_us = 0;
 static volatile uint32_t host_stream_started_us = 0;
 static volatile uint32_t host_last_frame_us = 0;
+static volatile uint32_t host_request_started_us = 0;
 static uint16_t host_stream_generation = 0;
 static AudioRuntimeMode audio_runtime_mode = AudioRuntimeFallbackPicoLocal;
 static AudioFallbackReason audio_fallback_reason = AudioFallbackHostDisabled;
@@ -258,7 +262,9 @@ static void process_mic_usb_output();
 static void clear_partial_audio_state();
 
 static bool host_mic_path_active() {
-    return audio_runtime_mode == AudioRuntimeHostEncodedActive && bt_is_controller_connected();
+    return host_duplex_requested
+        && audio_runtime_mode == AudioRuntimeHostEncodedActive
+        && bt_is_controller_connected();
 }
 
 static void clamp_state_speaker_volume() {
@@ -494,6 +500,25 @@ static void drain_audio_queues() {
     bt_drain_audio_stream();
 }
 
+static void set_fallback_speaker_target_gain(float gain) {
+    fallback_speaker_target_gain = clamp(gain, 0.0f, 1.0f);
+}
+
+static void restart_fallback_speaker_fade_in() {
+    fallback_speaker_gain = 0.0f;
+    set_fallback_speaker_target_gain(1.0f);
+}
+
+static float next_fallback_speaker_gain() {
+    const float step = 1.0f / SPEAKER_TRANSITION_FADE_SAMPLES;
+    if (fallback_speaker_gain < fallback_speaker_target_gain) {
+        fallback_speaker_gain = std::min(fallback_speaker_gain + step, fallback_speaker_target_gain);
+    } else if (fallback_speaker_gain > fallback_speaker_target_gain) {
+        fallback_speaker_gain = max(fallback_speaker_gain - step, fallback_speaker_target_gain);
+    }
+    return fallback_speaker_gain;
+}
+
 static void clear_host_reassembly() {
     host_reassembly_generation = 0;
     host_reassembly_sequence = 0;
@@ -521,6 +546,7 @@ static void enter_fallback(AudioFallbackReason reason) {
     if (!changed) {
         return;
     }
+    const bool was_host_encoded = audio_runtime_mode == AudioRuntimeHostEncodedActive;
     audio_debug_log(
         AudioDebugHostMode,
         static_cast<uint8_t>(AudioRuntimeFallbackPicoLocal),
@@ -533,6 +559,11 @@ static void enter_fallback(AudioFallbackReason reason) {
     audio_fallback_reason = reason;
     host_stream_active = false;
     host_last_frame_us = 0;
+    if (was_host_encoded) {
+        restart_fallback_speaker_fade_in();
+    } else {
+        set_fallback_speaker_target_gain(1.0f);
+    }
     clear_host_reassembly();
     if (!audio_initialized) {
         return;
@@ -560,6 +591,11 @@ static bool host_stream_healthy(uint32_t now) {
         && static_cast<uint32_t>(now - host_stream_started_us) < HOST_STREAM_START_GRACE_US;
 }
 
+static bool host_start_grace_active(uint32_t now) {
+    const uint32_t started = host_stream_active ? host_stream_started_us : host_request_started_us;
+    return started != 0 && static_cast<uint32_t>(now - started) < HOST_STREAM_START_GRACE_US;
+}
+
 static void audio_host_poll() {
     const uint32_t now = time_us_32();
     if (!host_audio_requested) {
@@ -570,6 +606,12 @@ static void audio_host_poll() {
     }
 
     if (!host_stream_healthy(now)) {
+        if (host_start_grace_active(now)) {
+            if (audio_fallback_reason == AudioFallbackHostDisabled) {
+                audio_fallback_reason = AudioFallbackNone;
+            }
+            return;
+        }
         enter_fallback(host_heartbeat_healthy(now) ? AudioFallbackStreamTimeout : AudioFallbackHeartbeatTimeout);
         return;
     }
@@ -846,9 +888,17 @@ bool audio_quiet_mode_enabled() {
 void audio_host_set_requested(bool enabled) {
     host_audio_requested = enabled;
     if (!enabled) {
+        host_request_started_us = 0;
+        set_fallback_speaker_target_gain(1.0f);
         enter_fallback(AudioFallbackHostDisabled);
     } else {
-        host_last_heartbeat_us = time_us_32();
+        const uint32_t now = time_us_32();
+        host_request_started_us = now;
+        host_last_heartbeat_us = now;
+        set_fallback_speaker_target_gain(0.0f);
+        if (audio_fallback_reason == AudioFallbackHostDisabled) {
+            audio_fallback_reason = AudioFallbackNone;
+        }
     }
 }
 
@@ -859,7 +909,9 @@ void audio_host_note_heartbeat() {
 void audio_host_start_stream() {
     host_audio_requested = true;
     host_stream_active = true;
+    set_fallback_speaker_target_gain(0.0f);
     host_stream_started_us = time_us_32();
+    host_request_started_us = host_stream_started_us;
     host_last_heartbeat_us = host_stream_started_us;
     host_last_frame_us = 0;
     host_stream_generation++;
@@ -877,13 +929,18 @@ void audio_host_start_stream() {
 
 void audio_host_stop_stream(AudioFallbackReason reason) {
     host_stream_active = false;
+    host_request_started_us = 0;
     host_last_frame_us = 0;
     clear_host_reassembly();
     enter_fallback(reason);
 }
 
 void audio_host_set_duplex_requested(bool enabled) {
+    const bool changed = host_duplex_requested != enabled;
     host_duplex_requested = enabled;
+    if (changed && !enabled) {
+        clear_mic_queues();
+    }
 }
 
 bool audio_duplex_active() {
@@ -1375,8 +1432,9 @@ static bool process_usb_audio_packet() {
 
     const float speaker_gain = usb_host_mute[0] ? 0.0f : clamp(volume[0], 0.0f, 1.0f) * usb_host_speaker_gain;
     for (int i = 0; i < nframes; i++) {
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * speaker_gain;
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * speaker_gain;
+        const float transition_gain = next_fallback_speaker_gain();
+        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * speaker_gain * transition_gain;
+        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * speaker_gain * transition_gain;
         if (audio_buf_pos == 512 * 2) {
             static audio_raw_element element{};
             memcpy(element.data,audio_buf,512 * 2 * 4);

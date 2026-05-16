@@ -78,6 +78,10 @@ function createWindow(): BrowserWindow {
     }
   });
 
+  window.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(webContents === window.webContents && permission === 'media');
+  });
+
   window.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();

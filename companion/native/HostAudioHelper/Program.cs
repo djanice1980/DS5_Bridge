@@ -30,6 +30,7 @@ static class AudioConstants
     public const int HidWriteTimeoutMilliseconds = 4;
     public const int DiagnosticsIntervalMilliseconds = 2000;
     public const int MicKeepaliveBufferMilliseconds = 10;
+    public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
 }
 
@@ -70,13 +71,15 @@ sealed class HostAudioHelper : IDisposable
     private long micCallbacks;
     private long micCapturedFrames;
     private int micPeakPermille;
-    private int speakerGainPermille;
+    private int targetSpeakerGainPermille;
+    private float currentSpeakerGainPermille;
     private bool disposed;
 
     public HostAudioHelper(HelperOptions options)
     {
         this.options = options;
-        speakerGainPermille = VolumePercentToPermille(options.SpeakerVolumePercent);
+        targetSpeakerGainPermille = VolumePercentToPermille(options.SpeakerVolumePercent);
+        currentSpeakerGainPermille = 0f;
         RaiseSchedulingPriority();
         encoder = new OpusEncoder(AudioConstants.TargetSampleRate, 2, OpusApplication.OPUS_APPLICATION_AUDIO)
         {
@@ -531,9 +534,17 @@ sealed class HostAudioHelper : IDisposable
     private void ResampleSpeakerBlock()
     {
         const double ratio = AudioConstants.PicoInputBlockFrames / (double)AudioConstants.OpusFrameSamples;
-        var speakerGain = Volatile.Read(ref speakerGainPermille) / 1000f;
+        var currentGainPermille = currentSpeakerGainPermille;
+        var targetGainPermille = Volatile.Read(ref targetSpeakerGainPermille);
         for (var frame = 0; frame < AudioConstants.OpusFrameSamples; frame++)
         {
+            var gainDelta = targetGainPermille - currentGainPermille;
+            currentGainPermille += Math.Clamp(
+                gainDelta,
+                -AudioConstants.SpeakerGainRampStepPermille,
+                AudioConstants.SpeakerGainRampStepPermille
+            );
+            var speakerGain = currentGainPermille / 1000f;
             var sourcePosition = (frame + 0.5) * ratio - 0.5;
             var sourceIndex = Math.Clamp((int)Math.Floor(sourcePosition), 0, AudioConstants.PicoInputBlockFrames - 1);
             var nextIndex = Math.Min(sourceIndex + 1, AudioConstants.PicoInputBlockFrames - 1);
@@ -543,6 +554,7 @@ sealed class HostAudioHelper : IDisposable
             speakerPcm[frame * 2] = FloatToInt16(left * speakerGain);
             speakerPcm[frame * 2 + 1] = FloatToInt16(right * speakerGain);
         }
+        currentSpeakerGainPermille = currentGainPermille;
     }
 
     private void ProcessControlLine(string line)
@@ -560,7 +572,7 @@ sealed class HostAudioHelper : IDisposable
             && int.TryParse(parts[1], out var speakerVolumePercent)
         )
         {
-            Volatile.Write(ref speakerGainPermille, VolumePercentToPermille(speakerVolumePercent));
+            Volatile.Write(ref targetSpeakerGainPermille, VolumePercentToPermille(speakerVolumePercent));
         }
     }
 
