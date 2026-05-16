@@ -969,9 +969,13 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         output_counters.critical_starving_audio_count++;
     }
 
+    // If a 0x36 audio packet is ready, keep it ahead of input-triggered
+    // output reports; letting those steal the next slot is audible on headset.
+    const bool non_audio_available = !critical_queue.empty() || state_pending;
     const bool audio_due = audio_available
         && (
-            audio_age_us >= OUTPUT_AUDIO_MAX_AGE_US
+            non_audio_available
+            || audio_age_us >= OUTPUT_AUDIO_MAX_AGE_US
             || audio_queue.size() > 1
             || consecutive_non_audio_sends >= OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS
         );
@@ -1251,6 +1255,10 @@ static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t
         DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
         | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
     )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
+    const uint8_t trigger_flags = flag0 & (
+        DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
+        | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT
+    );
 
     mark_payload_byte(recognized, payload_len, OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET);
     mark_payload_byte(recognized, payload_len, OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET);
@@ -1271,6 +1279,16 @@ static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t
     }
     if (flag1 & DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE) {
         mark_payload_byte(recognized, payload_len, OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET);
+    }
+    if (trigger_flags & DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT) {
+        for (uint8_t i = 0; i < DS_TRIGGER_EFFECT_SIZE; i++) {
+            mark_payload_byte(recognized, payload_len, DS_TRIGGER_EFFECT_RIGHT_OFFSET + i);
+        }
+    }
+    if (trigger_flags & DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT) {
+        for (uint8_t i = 0; i < DS_TRIGGER_EFFECT_SIZE; i++) {
+            mark_payload_byte(recognized, payload_len, DS_TRIGGER_EFFECT_LEFT_OFFSET + i);
+        }
     }
     if (led_flags & DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE) {
         mark_payload_byte(recognized, payload_len, OUTPUT_PAYLOAD_LED_BRIGHTNESS_OFFSET);
@@ -1410,6 +1428,8 @@ static uint8_t classify_output_report(uint8_t const *data, uint16_t len) {
     const uint8_t state_flag0 =
         DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
         | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+        | DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
+        | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT
         | DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE
         | DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE;
     const uint8_t state_flag1 =
@@ -1445,23 +1465,19 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
     const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
     const uint8_t flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
     const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
-    const bool has_trigger_effect = (flag0 & (
-        DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
-        | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT
-    )) != 0;
     const uint8_t state_mask0 =
         DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
         | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+        | DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
+        | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT
         | DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE
         | DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE;
     uint8_t state_mask1 =
         DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE
         | DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE
         | DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS
-        | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-    if (!has_trigger_effect) {
-        state_mask1 |= DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
-    }
+        | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
     const uint8_t state_mask2 = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
     const uint8_t state_flag0 = flag0 & state_mask0;
     const uint8_t state_flag1 = flag1 & state_mask1;
@@ -1493,6 +1509,18 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
         copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET);
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET);
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET);
+    }
+    if (state_flag0 & DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT) {
+        for (uint8_t i = 0; i < DS_TRIGGER_EFFECT_SIZE; i++) {
+            copy_payload_byte(state_payload, payload, payload_len, DS_TRIGGER_EFFECT_RIGHT_OFFSET + i);
+            clear_payload_byte(payload, payload_len, DS_TRIGGER_EFFECT_RIGHT_OFFSET + i);
+        }
+    }
+    if (state_flag0 & DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT) {
+        for (uint8_t i = 0; i < DS_TRIGGER_EFFECT_SIZE; i++) {
+            copy_payload_byte(state_payload, payload, payload_len, DS_TRIGGER_EFFECT_LEFT_OFFSET + i);
+            clear_payload_byte(payload, payload_len, DS_TRIGGER_EFFECT_LEFT_OFFSET + i);
+        }
     }
     if (state_flag0 & DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE) {
         copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_SPEAKER_VOLUME_OFFSET);
@@ -1541,6 +1569,10 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
         | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
     );
     const uint8_t rumble_flag2 = flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    const uint8_t trigger_flags = flag0 & (
+        DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
+        | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT
+    );
     const uint8_t led_flags = flag1 & (
         DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE
         | DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS
@@ -1573,6 +1605,19 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
         if (payload_len > OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
             dst[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = src[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
             dst[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = src[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
+        }
+    }
+    if (trigger_flags != 0) {
+        dst[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] |= trigger_flags;
+        if (trigger_flags & DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT) {
+            for (uint8_t i = 0; i < DS_TRIGGER_EFFECT_SIZE; i++) {
+                copy_payload_byte(dst, src, payload_len, DS_TRIGGER_EFFECT_RIGHT_OFFSET + i);
+            }
+        }
+        if (trigger_flags & DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT) {
+            for (uint8_t i = 0; i < DS_TRIGGER_EFFECT_SIZE; i++) {
+                copy_payload_byte(dst, src, payload_len, DS_TRIGGER_EFFECT_LEFT_OFFSET + i);
+            }
         }
     }
     if (flag0 & DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE) {
