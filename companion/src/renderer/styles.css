@@ -558,7 +558,7 @@ button {
 .sleep-keybind-tooltip {
   position: absolute;
   top: calc(100% + 10px);
-  right: 0;
+  left: 50%;
   width: 220px;
   max-width: min(220px, calc(100vw - 64px));
   padding: 8px 10px;
@@ -574,14 +574,14 @@ button {
   overflow-wrap: anywhere;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-4px);
+  transform: translate(-50%, -4px);
   transition: opacity 120ms ease, transform 120ms ease;
 }
 
 .sleep-control:hover .sleep-keybind-tooltip,
 .sleep-control:focus-within .sleep-keybind-tooltip {
   opacity: 1;
-  transform: translateY(0);
+  transform: translate(-50%, 0);
 }
 
 .sleep-control:has(.topbar-sleep-button.confirm) .sleep-keybind-tooltip {
@@ -677,12 +677,14 @@ button {
 
 .settings-menu-copy-tooltip {
   position: relative;
+  flex: 0 1 auto;
+  width: max-content;
 }
 
 .settings-shortcut-tooltip {
   position: absolute;
   top: calc(100% + 10px);
-  left: 0;
+  left: 50%;
   z-index: 5;
   width: 220px;
   max-width: min(220px, calc(100vw - 64px));
@@ -699,14 +701,14 @@ button {
   overflow-wrap: anywhere;
   opacity: 0;
   pointer-events: none;
-  transform: translateY(-4px);
+  transform: translate(-50%, -4px);
   transition: opacity 120ms ease, transform 120ms ease;
 }
 
 .settings-menu-copy-tooltip:hover .settings-shortcut-tooltip,
 .settings-menu-copy-tooltip:focus-within .settings-shortcut-tooltip {
   opacity: 1;
-  transform: translateY(0);
+  transform: translate(-50%, 0);
 }
 
 .shortcut-glyph-tooltip {
@@ -715,7 +717,7 @@ button {
   gap: 7px;
   width: max-content;
   min-width: 112px;
-  max-width: min(300px, calc(100vw - 64px));
+  max-width: min(380px, calc(100vw - 64px));
   padding: 8px 10px;
   white-space: nowrap;
   overflow-wrap: normal;

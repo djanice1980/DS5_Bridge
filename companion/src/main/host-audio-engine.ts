@@ -72,11 +72,17 @@ export class HostAudioEngine extends EventEmitter {
     if (!helper || helper.stdin.destroyed || !helper.stdin.writable) {
       return;
     }
-    helper.stdin.write(`${line}\n`, (error) => {
-      if (error) {
+    try {
+      helper.stdin.write(`${line}\n`, (error) => {
+        if (error && !isExpectedHelperPipeError(error)) {
+          this.emit('error', error);
+        }
+      });
+    } catch (error) {
+      if (!isExpectedHelperPipeError(error)) {
         this.emit('error', error);
       }
-    });
+    }
   }
 
   async stop(): Promise<void> {
@@ -126,6 +132,11 @@ export class HostAudioEngine extends EventEmitter {
     this.process = helper;
     this.activeHidPath = hidPath;
     this.activeSpeakerVolumePercent = speakerVolumePercent;
+    helper.stdin.on('error', (error) => {
+      if (!isExpectedHelperPipeError(error)) {
+        this.emit('error', error);
+      }
+    });
     helper.stdout.on('data', (chunk: Buffer) => this.processStdout(chunk));
     helper.on('error', (error) => this.emit('error', error));
     helper.on('exit', (code, signal) => {
@@ -189,6 +200,16 @@ export class HostAudioEngine extends EventEmitter {
 
 function normalizeSpeakerVolumePercent(percent: number): number {
   return Math.max(0, Math.min(100, Math.round(percent)));
+}
+
+function isExpectedHelperPipeError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === 'EPIPE'
+    || code === 'ERR_STREAM_DESTROYED'
+    || error.message.includes('write EPIPE');
 }
 
 export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise<void> {

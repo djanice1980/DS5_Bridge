@@ -2017,7 +2017,7 @@ export function App() {
                 <span>Sleep</span>
               </button>
               <div className="sleep-keybind-tooltip shortcut-glyph-tooltip" role="tooltip">
-                <span>Sleep controller immediately with</span>
+                <span>Put controller to sleep with</span>
                 <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
                   <span className="shortcut-glyph-key">
                     <img src={psHomeGlyphUrl} alt="PlayStation Home" />
@@ -2195,7 +2195,7 @@ export function App() {
                     <div className="settings-menu-copy settings-menu-copy-tooltip">
                       <strong>Volume Shortcut</strong>
                       <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
-                        <span>Volume up/down with</span>
+                        <span>Controller volume up/down with</span>
                         <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
                           <span className="shortcut-glyph-key">
                             <img src={psHomeGlyphUrl} alt="PlayStation Home" />

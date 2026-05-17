@@ -268,6 +268,16 @@ function formatMicDebugEvent(prefix: string, args: number[]): string {
   }
 }
 
+function isExpectedHidDisconnectError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return message.includes('could not read from hid device')
+    || message.includes('cannot read from hid device')
+    || message.includes('hid device disconnected');
+}
+
 function formatUsbDebugEvent(prefix: string, args: number[]): string {
   const [type, arg1, arg2, arg3, arg4] = args;
   switch (type) {
@@ -501,6 +511,17 @@ export class BridgeService extends EventEmitter {
         // Keep later shortcut events alive after a failed command.
       })
       .then(() => this.applySpeakerVolumeShortcut(delta));
+  };
+
+  private readonly handleCompanionDeviceError = (error: Error): void => {
+    if (!isExpectedHidDisconnectError(error)) {
+      this.publishError(error);
+      return;
+    }
+
+    this.closeDevice();
+    this.markBridgeUnavailableAfterDisconnect([]);
+    this.emitSnapshot();
   };
 
   start(): void {
@@ -1334,23 +1355,8 @@ export class BridgeService extends EventEmitter {
 
     if (companionDevices.length === 0) {
       this.closeDevice();
-      this.lastUptimeSeconds = null;
-      this.sessionKey = null;
-      this.sessionPath = null;
-      this.reapplyActive = false;
-      this.noteControllerUnavailableForToasts();
-      this.lowBatteryToastActive = false;
-      this.resetStartupReapplyState();
       const normalFirmwarePresent = devices.some(isDualSenseDevice);
-      this.snapshot = {
-        state: normalFirmwarePresent ? 'normal-firmware' : 'no-bridge',
-        message: normalFirmwarePresent
-          ? 'Companion firmware required'
-          : 'No bridge detected',
-        status: null,
-        settings: this.settingsStore.get(),
-        diagnostics: this.withAudioDebugDiagnostics(emptyDiagnostics(rawDevices))
-      };
+      this.markBridgeUnavailableAfterDisconnect(rawDevices, normalFirmwarePresent);
       this.emitSnapshot();
       return;
     }
@@ -1452,6 +1458,7 @@ export class BridgeService extends EventEmitter {
           this.closeDevice();
           this.device = new HID.HID(candidate.path);
           this.device.on('data', this.handleCompanionInputData);
+          this.device.on('error', this.handleCompanionDeviceError);
           this.devicePath = candidate.path;
           this.lastUptimeSeconds = null;
           this.sessionKey = null;
@@ -1681,6 +1688,7 @@ export class BridgeService extends EventEmitter {
     if (this.device) {
       try {
         this.device.removeAllListeners('data');
+        this.device.removeAllListeners('error');
         this.device.close();
       } catch {
         // Ignore close races while Windows removes the HID path.
@@ -1697,6 +1705,26 @@ export class BridgeService extends EventEmitter {
     this.hostAudioFrameDropCount = 0;
     void this.hostAudioEngine.stop();
     void this.micKeepaliveEngine.stop();
+  }
+
+  private markBridgeUnavailableAfterDisconnect(rawDevices: HidDeviceSummary[], normalFirmwarePresent = false): void {
+    this.lastUptimeSeconds = null;
+    this.sessionKey = null;
+    this.sessionPath = null;
+    this.reapplyActive = false;
+    this.hostAudioHeartbeatBusy = false;
+    this.noteControllerUnavailableForToasts();
+    this.lowBatteryToastActive = false;
+    this.resetStartupReapplyState();
+    this.snapshot = {
+      state: normalFirmwarePresent ? 'normal-firmware' : 'no-bridge',
+      message: normalFirmwarePresent
+        ? 'Companion firmware required'
+        : 'No bridge detected',
+      status: null,
+      settings: this.settingsStore.get(),
+      diagnostics: this.withAudioDebugDiagnostics(emptyDiagnostics(rawDevices))
+    };
   }
 
   private emitSnapshot(): void {

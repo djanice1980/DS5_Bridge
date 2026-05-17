@@ -400,6 +400,20 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().message).toBe('Companion firmware required');
   });
 
+  it('treats HID read errors as disconnects instead of fatal main-process errors', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    device.emit('error', new Error('could not read from HID device'));
+
+    expect(service.getSnapshot().state).toBe('no-bridge');
+    expect(service.getSnapshot().message).toBe('No bridge detected');
+  });
+
   it('keeps audio debug diagnostics disabled during normal polling', async () => {
     const fixture = createService();
     tempDirs.push(fixture.tempDir);
