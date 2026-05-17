@@ -31,6 +31,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   idleDisconnectTimeoutMinutes: 15,
   usbSuspendDisconnectEnabled: true,
   sleepKeybindEnabled: false,
+  speakerVolumeShortcutEnabled: false,
   pollingRateMode: '1000',
   notifyControllerConnection: false,
   notifyLowBattery: false,
@@ -140,6 +141,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     sleepKeybindEnabled: typeof value?.sleepKeybindEnabled === 'boolean'
       ? value.sleepKeybindEnabled
       : DEFAULT_SETTINGS.sleepKeybindEnabled,
+    speakerVolumeShortcutEnabled: typeof value?.speakerVolumeShortcutEnabled === 'boolean'
+      ? value.speakerVolumeShortcutEnabled
+      : DEFAULT_SETTINGS.speakerVolumeShortcutEnabled,
     pollingRateMode: normalizePollingRateMode(value?.pollingRateMode),
     notifyControllerConnection: typeof value?.notifyControllerConnection === 'boolean'
       ? value.notifyControllerConnection

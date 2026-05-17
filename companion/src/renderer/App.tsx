@@ -2178,6 +2178,26 @@ export function App() {
                       <span />
                     </button>
                   </div>
+                  <div className="settings-menu-row">
+                    <div className="settings-menu-copy settings-menu-copy-tooltip">
+                      <strong>Volume Shortcut</strong>
+                      <div className="settings-shortcut-tooltip" role="tooltip">
+                        Press PlayStation Home + D-pad Left or Right to adjust volume
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={snapshot.settings.speakerVolumeShortcutEnabled}
+                      className={`switch ${snapshot.settings.speakerVolumeShortcutEnabled ? 'on' : ''}`}
+                      disabled={!connected}
+                      onClick={() => void runAction('volume-shortcut', () => (
+                        window.bridge.setSpeakerVolumeShortcutEnabled(!snapshot.settings.speakerVolumeShortcutEnabled)
+                      ))}
+                    >
+                      <span />
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

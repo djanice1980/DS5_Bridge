@@ -675,6 +675,40 @@ button {
   gap: 3px;
 }
 
+.settings-menu-copy-tooltip {
+  position: relative;
+}
+
+.settings-shortcut-tooltip {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 5;
+  width: 220px;
+  max-width: min(220px, calc(100vw - 64px));
+  padding: 8px 10px;
+  border: 1px solid rgba(142, 164, 194, 0.28);
+  border-radius: var(--control-radius);
+  color: #dce7f7;
+  background: rgba(13, 18, 27, 0.97);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.settings-menu-copy-tooltip:hover .settings-shortcut-tooltip,
+.settings-menu-copy-tooltip:focus-within .settings-shortcut-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .settings-menu-row strong {
   color: #f7f9ff;
   font-size: 14px;

@@ -21,6 +21,14 @@ constexpr uint8_t kFirmwarePatch = 17;
 constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kHomeButtonBit = 0x01;
 constexpr uint8_t kMuteButtonBit = 0x04;
+constexpr uint8_t kDpadMask = 0x0F;
+constexpr uint8_t kDpadRight = 0x02;
+constexpr uint8_t kDpadLeft = 0x06;
+constexpr uint8_t kDpadNeutral = 0x08;
+constexpr uint8_t kShortcutEventVolumeDown = 0x01;
+constexpr uint8_t kShortcutEventVolumeUp = 0x02;
+constexpr uint8_t kShortcutEventSleep = 0x03;
+constexpr uint32_t kSpeakerVolumeShortcutRepeatUs = 180000;
 constexpr uint8_t kDefaultMuteKeyboardUsage = 0x68; // F13
 constexpr uint8_t kMuteKeyboardModifierMask = 0x0F;
 constexpr uint8_t kMuteKeyboardHoldFlag = 0x80;
@@ -73,6 +81,7 @@ enum CommandId : uint8_t {
     CommandSetMicVolume = 0x1A,
     CommandSetMicMute = 0x1B,
     CommandSetIdleDisconnectTimeout = 0x1C,
+    CommandSetSpeakerVolumeShortcut = 0x1D,
 };
 
 enum AckResult : uint8_t {
@@ -111,6 +120,10 @@ uint8_t mute_keyboard_modifiers = 0;
 bool mute_button_last_pressed = false;
 bool sleep_keybind_enabled = false;
 bool sleep_combo_last_pressed = false;
+bool speaker_volume_shortcut_enabled = false;
+uint8_t speaker_volume_combo_last_direction = kDpadNeutral;
+uint32_t speaker_volume_combo_last_step_us = 0;
+uint8_t speaker_volume_shortcut_pending_event = 0;
 bool mute_keyboard_pending = false;
 bool mute_keyboard_pressed = false;
 uint32_t mute_keyboard_release_at_us = 0;
@@ -216,6 +229,10 @@ void restore_defaults() {
     mute_button_last_pressed = false;
     sleep_keybind_enabled = false;
     sleep_combo_last_pressed = false;
+    speaker_volume_shortcut_enabled = false;
+    speaker_volume_combo_last_direction = kDpadNeutral;
+    speaker_volume_combo_last_step_us = 0;
+    speaker_volume_shortcut_pending_event = 0;
     mute_keyboard_pending = false;
     mute_keyboard_pressed = false;
     mute_led_flash_pending = false;
@@ -866,6 +883,19 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetSpeakerVolumeShortcut:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            speaker_volume_shortcut_enabled = value == 1;
+            speaker_volume_combo_last_direction = kDpadNeutral;
+            speaker_volume_combo_last_step_us = 0;
+            speaker_volume_shortcut_pending_event = 0;
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandSetPollingRateMode:
             if (value > 2 || !usb_set_hid_polling_rate_mode(static_cast<uint8_t>(value))) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -975,6 +1005,12 @@ void companion_init() {
 }
 
 void companion_loop() {
+    if (speaker_volume_shortcut_pending_event != 0 && tud_hid_n_ready(COMPANION_HID_INSTANCE)) {
+        const uint8_t event = speaker_volume_shortcut_pending_event;
+        if (tud_hid_n_report(COMPANION_HID_INSTANCE, COMPANION_REPORT_INPUT, &event, 1)) {
+            speaker_volume_shortcut_pending_event = 0;
+        }
+    }
     audio_test_haptics_loop();
     classic_rumble_test_loop();
     mute_keyboard_loop();
@@ -986,12 +1022,42 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
         return;
     }
 
-    const bool sleep_combo_pressed = (report[9] & kHomeButtonBit) != 0 && (report[7] & kTriangleButtonBit) != 0;
+    const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
+    const uint8_t dpad_direction = report[7] & kDpadMask;
+    const bool dpad_pressed = dpad_direction <= 0x07;
+    if (home_pressed && dpad_pressed) {
+        report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
+    }
+
+    const bool speaker_volume_combo_pressed = speaker_volume_shortcut_enabled
+        && home_pressed
+        && (dpad_direction == kDpadLeft || dpad_direction == kDpadRight);
+    if (speaker_volume_combo_pressed) {
+        report[7] = static_cast<uint8_t>((report[7] & ~kDpadMask) | kDpadNeutral);
+        const uint32_t now = time_us_32();
+        if (
+            speaker_volume_combo_last_direction != dpad_direction
+            || static_cast<uint32_t>(now - speaker_volume_combo_last_step_us) >= kSpeakerVolumeShortcutRepeatUs
+        ) {
+            speaker_volume_shortcut_pending_event = dpad_direction == kDpadRight
+                ? kShortcutEventVolumeUp
+                : kShortcutEventVolumeDown;
+            speaker_volume_combo_last_step_us = now;
+        }
+        speaker_volume_combo_last_direction = dpad_direction;
+    } else {
+        speaker_volume_combo_last_direction = kDpadNeutral;
+        if (!home_pressed) {
+            speaker_volume_combo_last_step_us = 0;
+        }
+    }
+
+    const bool sleep_combo_pressed = home_pressed && (report[7] & kTriangleButtonBit) != 0;
     if (sleep_keybind_enabled && sleep_combo_pressed) {
         report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
         report[7] &= static_cast<uint8_t>(~kTriangleButtonBit);
         if (!sleep_combo_last_pressed) {
-            bt_disconnect();
+            speaker_volume_shortcut_pending_event = kShortcutEventSleep;
         }
     }
     sleep_combo_last_pressed = sleep_combo_pressed;

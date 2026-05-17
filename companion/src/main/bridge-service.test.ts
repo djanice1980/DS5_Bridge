@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,6 +48,7 @@ import { SettingsStore } from './settings-store';
 type StatusOverrides = {
   controllerConnected?: boolean;
   batteryPercent?: number;
+  speakerVolumePercent?: number;
   idleDisconnectTimeoutMinutes?: number;
   settingsRevision?: number;
   uptimeSeconds?: number;
@@ -74,10 +76,11 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT,
   COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
   COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED,
+  COMMAND_ID.SET_SPEAKER_VOLUME_SHORTCUT_ENABLED,
   COMMAND_ID.SET_POLLING_RATE_MODE
 ];
 
-class MockHidDevice {
+class MockHidDevice extends EventEmitter {
   status = statusReport();
   audioDebugReports: number[][] = [];
   audioStatsReports: number[][] = [];
@@ -88,6 +91,10 @@ class MockHidDevice {
   ackResults: number[] = [];
   settingsRevision = 0;
   fixedAckRevision: number | null = null;
+
+  constructor() {
+    super();
+  }
 
   getFeatureReport(reportId: number, length: number): number[] {
     expect(length).toBe(REPORT_LENGTH);
@@ -203,6 +210,7 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   report[26] = 5;
   report[27] = 15;
   report[28] = overrides.firmwareFlags ?? 1;
+  writeU16(report, 29, overrides.speakerVolumePercent ?? 30);
   writeU16(report, 43, overrides.idleDisconnectTimeoutMinutes ?? 15);
   return report;
 }
@@ -643,6 +651,65 @@ describe('BridgeService', () => {
     expect(command?.[9]).toBe(1);
     expect(snapshot.settings.sleepKeybindEnabled).toBe(true);
     expect(snapshot.status?.sleepKeybindEnabled).toBe(true);
+  });
+
+  it('applies sleep shortcut input through the normal sleep command path', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, statusFlags: 0x80 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.setSleepKeybindEnabled(true);
+
+    device.emit('data', Buffer.from([REPORT_ID.INPUT, 3]));
+    await flushReapply();
+    await flushReapply();
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SLEEP_CONTROLLER);
+    expect(device.sentReports.at(-1)?.[9]).toBe(0);
+  });
+
+  it('sends and stores speaker volume shortcut settings', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setSpeakerVolumeShortcutEnabled(true);
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_SPEAKER_VOLUME_SHORTCUT_ENABLED);
+    expect(command?.[9]).toBe(1);
+    expect(snapshot.settings.speakerVolumeShortcutEnabled).toBe(true);
+  });
+
+  it('applies speaker volume shortcut input through the normal volume command path', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      settingsRevision: 4,
+      speakerVolumePercent: 30
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.setSpeakerVolumeShortcutEnabled(true);
+    expect(service.getSnapshot().settings.speakerEnabled).toBe(true);
+
+    device.emit('data', Buffer.from([REPORT_ID.INPUT, 2]));
+    await flushReapply();
+    await flushReapply();
+
+    expect(service.getSnapshot().settings.speakerVolumePercent).toBe(40);
+    expect(service.getSnapshot().status?.speakerVolumePercent).toBe(40);
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_SPEAKER_VOLUME);
+    expect(device.sentReports.at(-1)?.[9]).toBe(40);
   });
 
   it('sends and stores classic rumble gain', async () => {

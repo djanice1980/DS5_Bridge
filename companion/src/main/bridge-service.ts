@@ -449,6 +449,7 @@ export class BridgeService extends EventEmitter {
   private lastHostAudioActivePollAt = 0;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
+  private volumeShortcutQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly settingsStore: SettingsStore) {
     super();
@@ -478,6 +479,29 @@ export class BridgeService extends EventEmitter {
       this.emitSnapshot();
     });
   }
+
+  private readonly handleCompanionInputData = (data: Buffer | number[]): void => {
+    const report = Array.from(data);
+    const event = report[0] === REPORT_ID.INPUT ? report[1] : report[0];
+    if (event === 3) {
+      this.volumeShortcutQueue = this.volumeShortcutQueue
+        .catch(() => {
+          // Keep later shortcut events alive after a failed command.
+        })
+        .then(() => this.applySleepShortcut());
+      return;
+    }
+    if (event !== 1 && event !== 2) {
+      return;
+    }
+
+    const delta = event === 2 ? 10 : -10;
+    this.volumeShortcutQueue = this.volumeShortcutQueue
+      .catch(() => {
+        // Keep later shortcut events alive after a failed command.
+      })
+      .then(() => this.applySpeakerVolumeShortcut(delta));
+  };
 
   start(): void {
     this.poll().catch((error) => this.publishError(error));
@@ -705,6 +729,9 @@ export class BridgeService extends EventEmitter {
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       speakerVolumePercent: value
     }));
+    if (this.snapshot.status) {
+      this.snapshot.status.speakerVolumePercent = value;
+    }
     await this.updateHostAudioEngine();
     this.emitSnapshot();
     return this.getSnapshot();
@@ -886,6 +913,27 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  private async applySpeakerVolumeShortcut(deltaPercent: number): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.speakerVolumeShortcutEnabled || !settings.speakerEnabled) {
+      return;
+    }
+
+    const nextVolume = Math.max(0, Math.min(100, settings.speakerVolumePercent + deltaPercent));
+    if (nextVolume === settings.speakerVolumePercent) {
+      return;
+    }
+
+    await this.setSpeakerVolume(nextVolume);
+  }
+
+  private async applySleepShortcut(): Promise<void> {
+    if (!this.settingsStore.get().sleepKeybindEnabled) {
+      return;
+    }
+    await this.sleepController();
+  }
+
   async setIdleDisconnectTimeoutMinutes(minutes: number): Promise<BridgeSnapshot> {
     const value = normalizeIdleDisconnectTimeoutMinutes(minutes);
     await this.sendSettingCommand(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT, value, {
@@ -913,6 +961,13 @@ export class BridgeService extends EventEmitter {
       this.snapshot.status.sleepKeybindEnabled = enabled;
       this.emitSnapshot();
     }
+    return this.getSnapshot();
+  }
+
+  async setSpeakerVolumeShortcutEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_SPEAKER_VOLUME_SHORTCUT_ENABLED, enabled ? 1 : 0, {
+      speakerVolumeShortcutEnabled: enabled
+    });
     return this.getSnapshot();
   }
 
@@ -1263,7 +1318,8 @@ export class BridgeService extends EventEmitter {
     if (now < this.pollPausedUntil) {
       return;
     }
-    const hostAudioActive = this.settingsStore.get().hostEncodedAudioEnabled && this.hostAudioCommandActive;
+    const currentSettings = this.settingsStore.get();
+    const hostAudioActive = currentSettings.hostEncodedAudioEnabled && this.hostAudioCommandActive;
     if (
       hostAudioActive
       && now - this.lastHostAudioActivePollAt < HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS
@@ -1342,12 +1398,14 @@ export class BridgeService extends EventEmitter {
     }
     this.lastUptimeSeconds = status.uptimeSeconds;
 
+    const settings = this.settingsStore.get();
+
     this.snapshot = {
       state: 'connected',
       message: 'Companion firmware connected',
       status,
       settings: {
-        ...this.settingsStore.get(),
+        ...settings,
         idleDisconnectTimeoutMinutes: status.idleDisconnectTimeoutMinutes
       },
       diagnostics: this.withAudioDebugDiagnostics({
@@ -1393,6 +1451,7 @@ export class BridgeService extends EventEmitter {
         if (this.devicePath !== candidate.path) {
           this.closeDevice();
           this.device = new HID.HID(candidate.path);
+          this.device.on('data', this.handleCompanionInputData);
           this.devicePath = candidate.path;
           this.lastUptimeSeconds = null;
           this.sessionKey = null;
@@ -1548,6 +1607,11 @@ export class BridgeService extends EventEmitter {
       { expectSettingsRevisionChange }
     );
     await this.sendCommand(
+      COMMAND_ID.SET_SPEAKER_VOLUME_SHORTCUT_ENABLED,
+      settings.speakerVolumeShortcutEnabled ? 1 : 0,
+      { expectSettingsRevisionChange }
+    );
+    await this.sendCommand(
       COMMAND_ID.SET_POLLING_RATE_MODE,
       pollingRateModeValue(settings.pollingRateMode),
       { expectSettingsRevisionChange }
@@ -1616,6 +1680,7 @@ export class BridgeService extends EventEmitter {
   private closeDevice(): void {
     if (this.device) {
       try {
+        this.device.removeAllListeners('data');
         this.device.close();
       } catch {
         // Ignore close races while Windows removes the HID path.
