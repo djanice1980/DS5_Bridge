@@ -70,6 +70,7 @@
 #define HOST_STREAM_TIMEOUT_US 250000
 #define HOST_STREAM_START_GRACE_US 2000000
 #define HOST_STREAM_RECOVERY_HOLD_US 10000000
+#define HOST_STARTUP_DROP_FRAMES 8
 #define HOST_PACKET_HEADER_SIZE 16
 #define HOST_PACKET_PAYLOAD_SIZE 47
 #define HOST_FRAME_REASSEMBLY_SIZE 448
@@ -257,6 +258,7 @@ static uint16_t host_reassembly_received_bytes = 0;
 static uint8_t host_reassembly_buffer[HOST_FRAME_REASSEMBLY_SIZE];
 static uint32_t host_frames_received = 0;
 static uint32_t host_frames_dropped = 0;
+static uint8_t host_startup_drop_frames_remaining = 0;
 static uint32_t mic_packets_received = 0;
 static uint32_t mic_packets_dropped = 0;
 static uint32_t mic_decode_success = 0;
@@ -1260,6 +1262,7 @@ void audio_host_start_stream() {
     reset_controller_audio_report_counters();
     host_frames_received = 0;
     host_frames_dropped = 0;
+    host_startup_drop_frames_remaining = HOST_STARTUP_DROP_FRAMES;
     audio_debug_reset_stats();
     bt_reset_output_debug_stats();
     schedule_host_route_primer();
@@ -1332,6 +1335,12 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
     }
 
     (void)prime_host_audio_route_if_needed();
+    if (host_startup_drop_frames_remaining != 0) {
+        host_startup_drop_frames_remaining--;
+        host_frames_dropped++;
+        host_last_frame_us = time_us_32();
+        return true;
+    }
 
     return write_host_audio_packet(packet, true);
 }
