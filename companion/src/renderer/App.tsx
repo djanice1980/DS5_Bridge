@@ -149,6 +149,11 @@ const TRIGGER_TARGET_OPTIONS: Array<[string, TriggerTestTarget]> = [
   ['R2', 'r2'],
   ['Both Triggers', 'both']
 ];
+const IDLE_DISCONNECT_TIMEOUT_OPTIONS: Array<[string, number]> = [
+  ['5 min', 5],
+  ['15 min', 15],
+  ['30 min', 30]
+];
 const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: LucideIcon }> = [
   { id: 'haptics', label: 'Haptics', Icon: Sparkles },
   { id: 'audio', label: 'Audio', Icon: Volume2 },
@@ -166,6 +171,8 @@ type CustomSelectProps<T extends SelectValue> = {
   value: T;
   options: Array<[string, T]>;
   disabled?: boolean;
+  className?: string;
+  showSelectedCheck?: boolean;
   ariaLabel: string;
   onChange: (value: T) => void;
 };
@@ -698,6 +705,8 @@ function CustomSelect<T extends SelectValue>({
   value,
   options,
   disabled = false,
+  className = '',
+  showSelectedCheck = true,
   ariaLabel,
   onChange
 }: CustomSelectProps<T>) {
@@ -784,7 +793,7 @@ function CustomSelect<T extends SelectValue>({
   return (
     <div
       ref={rootRef}
-      className={`custom-select ${open ? 'open' : ''} ${disabled ? 'disabled' : ''}`}
+      className={`custom-select ${className} ${open ? 'open' : ''} ${disabled ? 'disabled' : ''}`}
       style={{ '--custom-select-menu-max-height': `${menuMaxHeight}px` } as CSSProperties}
     >
       <button
@@ -823,7 +832,7 @@ function CustomSelect<T extends SelectValue>({
                 onClick={() => choose(optionValue)}
               >
                 <span>{label}</span>
-                {selectedOption && <Check size={15} />}
+                {showSelectedCheck && selectedOption && <Check size={15} />}
               </button>
             );
           })}
@@ -2108,9 +2117,8 @@ export function App() {
                     <span>Bridge Settings</span>
                   </div>
                   <div className="settings-menu-row">
-                    <div>
+                    <div className="settings-menu-copy">
                       <strong>Pico LED</strong>
-                      <span>Board status LED while connected</span>
                     </div>
                     <button
                       type="button"
@@ -2124,27 +2132,38 @@ export function App() {
                     </button>
                   </div>
                   <div className="settings-menu-row">
-                    <div>
+                    <div className="settings-menu-copy">
                       <strong>Idle Disconnect</strong>
-                      <span>Disconnect controller after 30 minutes idle</span>
                     </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={snapshot.settings.idleDisconnectEnabled}
-                      className={`switch ${snapshot.settings.idleDisconnectEnabled ? 'on' : ''}`}
-                      disabled={!connected}
-                      onClick={() => void runAction('idle', () => (
-                        window.bridge.setIdleDisconnectEnabled(!snapshot.settings.idleDisconnectEnabled)
-                      ))}
-                    >
-                      <span />
-                    </button>
+                    <div className="settings-menu-controls">
+                      <CustomSelect
+                        value={snapshot.settings.idleDisconnectTimeoutMinutes}
+                        options={IDLE_DISCONNECT_TIMEOUT_OPTIONS}
+                        className="settings-timeout-select"
+                        showSelectedCheck={false}
+                        ariaLabel="Idle disconnect timeout"
+                        disabled={!connected || !snapshot.settings.idleDisconnectEnabled}
+                        onChange={(value) => {
+                          void runAction('idle-timeout', () => window.bridge.setIdleDisconnectTimeoutMinutes(value));
+                        }}
+                      />
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={snapshot.settings.idleDisconnectEnabled}
+                        className={`switch ${snapshot.settings.idleDisconnectEnabled ? 'on' : ''}`}
+                        disabled={!connected}
+                        onClick={() => void runAction('idle', () => (
+                          window.bridge.setIdleDisconnectEnabled(!snapshot.settings.idleDisconnectEnabled)
+                        ))}
+                      >
+                        <span />
+                      </button>
+                    </div>
                   </div>
                   <div className="settings-menu-row">
-                    <div>
+                    <div className="settings-menu-copy">
                       <strong>PC Sleep Disconnect</strong>
-                      <span>Disconnect controller when USB host suspends</span>
                     </div>
                     <button
                       type="button"
