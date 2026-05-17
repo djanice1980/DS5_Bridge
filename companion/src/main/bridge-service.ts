@@ -475,7 +475,7 @@ export class BridgeService extends EventEmitter {
     }, HOST_AUDIO_HEARTBEAT_MS);
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
@@ -484,8 +484,16 @@ export class BridgeService extends EventEmitter {
       clearInterval(this.hostAudioHeartbeatTimer);
       this.hostAudioHeartbeatTimer = null;
     }
-    void this.hostAudioEngine.stop();
-    void this.micKeepaliveEngine.stop();
+
+    if (this.device) {
+      try {
+        await this.stopHostAudioSession(false);
+      } catch (error) {
+        this.publishError(error);
+      }
+    }
+    await this.hostAudioEngine.stop();
+    await this.micKeepaliveEngine.stop();
     this.closeDevice();
   }
 

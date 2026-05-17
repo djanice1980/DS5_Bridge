@@ -16,6 +16,7 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let bridgeService: BridgeService | null = null;
 let isQuitting = false;
+let shutdownComplete = false;
 
 function windowsAppUserModelId(): string {
   return WINDOWS_APP_USER_MODEL_ID;
@@ -474,7 +475,20 @@ app.on('window-all-closed', () => {
   // Keep the companion alive as a tray app after the popover is closed.
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (shutdownComplete) {
+    return;
+  }
+  event.preventDefault();
   isQuitting = true;
-  bridgeService?.stop();
+  const service = bridgeService;
+  bridgeService = null;
+  void (async () => {
+    try {
+      await service?.stop();
+    } finally {
+      shutdownComplete = true;
+      app.quit();
+    }
+  })();
 });
