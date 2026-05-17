@@ -709,6 +709,57 @@ button {
   transform: translateY(0);
 }
 
+.shortcut-glyph-tooltip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: max-content;
+  min-width: 112px;
+  max-width: min(300px, calc(100vw - 64px));
+  padding: 8px 10px;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.shortcut-glyph-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.shortcut-glyph-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  border: 1px solid rgba(142, 164, 194, 0.34);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.shortcut-glyph-key img {
+  display: block;
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.shortcut-glyph-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shortcut-plus {
+  color: #dce7f7;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1;
+}
+
 .settings-menu-row strong {
   color: #f7f9ff;
   font-size: 14px;

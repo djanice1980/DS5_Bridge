@@ -22,8 +22,8 @@ constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kHomeButtonBit = 0x01;
 constexpr uint8_t kMuteButtonBit = 0x04;
 constexpr uint8_t kDpadMask = 0x0F;
-constexpr uint8_t kDpadRight = 0x02;
-constexpr uint8_t kDpadLeft = 0x06;
+constexpr uint8_t kDpadUp = 0x00;
+constexpr uint8_t kDpadDown = 0x04;
 constexpr uint8_t kDpadNeutral = 0x08;
 constexpr uint8_t kShortcutEventVolumeDown = 0x01;
 constexpr uint8_t kShortcutEventVolumeUp = 0x02;
@@ -1031,7 +1031,7 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
 
     const bool speaker_volume_combo_pressed = speaker_volume_shortcut_enabled
         && home_pressed
-        && (dpad_direction == kDpadLeft || dpad_direction == kDpadRight);
+        && (dpad_direction == kDpadUp || dpad_direction == kDpadDown);
     if (speaker_volume_combo_pressed) {
         report[7] = static_cast<uint8_t>((report[7] & ~kDpadMask) | kDpadNeutral);
         const uint32_t now = time_us_32();
@@ -1039,7 +1039,7 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
             speaker_volume_combo_last_direction != dpad_direction
             || static_cast<uint32_t>(now - speaker_volume_combo_last_step_us) >= kSpeakerVolumeShortcutRepeatUs
         ) {
-            speaker_volume_shortcut_pending_event = dpad_direction == kDpadRight
+            speaker_volume_shortcut_pending_event = dpad_direction == kDpadUp
                 ? kShortcutEventVolumeUp
                 : kShortcutEventVolumeDown;
             speaker_volume_combo_last_step_us = now;

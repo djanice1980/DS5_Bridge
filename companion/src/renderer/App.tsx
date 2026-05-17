@@ -25,6 +25,10 @@ import {
 } from 'lucide-react';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
+import dpadDownGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Down.svg';
+import dpadUpGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Up.svg';
+import psHomeGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Home.svg';
+import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Triangle.svg';
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
 import { ackResultName } from '../shared/protocol';
 import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
@@ -2012,8 +2016,17 @@ export function App() {
                 <Moon size={16} />
                 <span>Sleep</span>
               </button>
-              <div className="sleep-keybind-tooltip" role="tooltip">
-                Press PlayStation Home + Triangle to sleep
+              <div className="sleep-keybind-tooltip shortcut-glyph-tooltip" role="tooltip">
+                <span>Sleep controller immediately with</span>
+                <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
+                  <span className="shortcut-glyph-key">
+                    <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                  </span>
+                  <span className="shortcut-plus" aria-hidden="true">+</span>
+                  <span className="shortcut-glyph-key">
+                    <img src={triangleGlyphUrl} alt="Triangle" />
+                  </span>
+                </span>
               </div>
               {sleepConfirmVisible && (
                 <div className="sleep-confirm" role="status">
@@ -2181,8 +2194,22 @@ export function App() {
                   <div className="settings-menu-row">
                     <div className="settings-menu-copy settings-menu-copy-tooltip">
                       <strong>Volume Shortcut</strong>
-                      <div className="settings-shortcut-tooltip" role="tooltip">
-                        Press PlayStation Home + D-pad Left or Right to adjust volume
+                      <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
+                        <span>Volume up/down with</span>
+                        <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
+                          <span className="shortcut-glyph-key">
+                            <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                          </span>
+                          <span className="shortcut-plus" aria-hidden="true">+</span>
+                          <span className="shortcut-glyph-pair">
+                            <span className="shortcut-glyph-key">
+                              <img src={dpadUpGlyphUrl} alt="D-pad Up" />
+                            </span>
+                            <span className="shortcut-glyph-key">
+                              <img src={dpadDownGlyphUrl} alt="D-pad Down" />
+                            </span>
+                          </span>
+                        </span>
                       </div>
                     </div>
                     <button
