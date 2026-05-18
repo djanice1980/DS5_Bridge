@@ -1,43 +1,42 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
-  ArrowRight,
-  BatteryFull,
-  Bell,
-  Check,
-  ChevronDown,
-  Copy,
-  Headphones,
-  Keyboard,
-  Mic,
-  Minus,
-  Moon,
-  Palette,
-  Pencil,
-  Play,
-  RefreshCcw,
-  Save,
-  Settings as SettingsIcon,
-  Settings2,
-  SlidersHorizontal,
-  Square as SquareIcon,
-  Sparkles,
-  Trash2,
-  Vibrate,
-  Volume2,
-  VolumeX,
-  X,
-  Zap
-} from 'lucide-react';
-import {
   type TablerIcon,
-  IconBolt,
+  IconActivity as Activity,
+  IconAdjustmentsHorizontal as Settings2,
+  IconAdjustmentsHorizontal as SlidersHorizontal,
+  IconArrowRight as ArrowRight,
+  IconBattery4 as BatteryFull,
+  IconBell as Bell,
+  IconBolt as Zap,
   IconBulb,
+  IconCheck as Check,
+  IconChevronDown as ChevronDown,
+  IconCopy as Copy,
   IconCpu,
+  IconDeviceFloppy as Save,
+  IconDeviceGamepad2,
   IconDeviceGamepad3,
+  IconDeviceMobileVibration as Vibrate,
+  IconHeadphones as Headphones,
+  IconKeyboard as Keyboard,
   IconLayoutDashboard,
+  IconMicrophone as Mic,
+  IconMinus as Minus,
+  IconMoon as Moon,
+  IconPalette as Palette,
+  IconPencil as Pencil,
+  IconPlayerPlay as Play,
+  IconRefresh as RefreshCcw,
   IconRipple,
-  IconVolume
+  IconSettings as SettingsIcon,
+  IconSparkles as Sparkles,
+  IconSquare as SquareIcon,
+  IconTestPipe,
+  IconTrash as Trash2,
+  IconVolume,
+  IconVolume as Volume2,
+  IconVolumeOff as VolumeX,
+  IconX as X
 } from '@tabler/icons-react';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
@@ -272,8 +271,8 @@ const REMAP_CALLOUT_Y: Record<RemapButtonId, number> = {
 const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: TablerIcon }> = [
   { id: 'overview', label: 'Overview', Icon: IconLayoutDashboard },
   { id: 'audio', label: 'Audio', Icon: IconVolume },
-  { id: 'haptics', label: 'Haptics', Icon: IconRipple },
-  { id: 'triggers', label: 'Triggers', Icon: IconBolt },
+  { id: 'haptics', label: 'Haptics', Icon: Sparkles },
+  { id: 'triggers', label: 'Triggers', Icon: IconDeviceGamepad2 },
   { id: 'lighting', label: 'Lighting', Icon: IconBulb },
   { id: 'remapping', label: 'Button Remapping', Icon: IconDeviceGamepad3 },
   { id: 'system', label: 'System', Icon: IconCpu }
@@ -1388,7 +1387,7 @@ export function App() {
   const hostAudioLabel = !connected
     ? 'Unavailable'
     : hostAudioActive
-      ? 'Host Encoded Active'
+      ? 'Host Encoding Active'
       : hostAudioStarting
         ? 'Starting Host Encoding'
       : hostAudioEnabled
@@ -2959,7 +2958,6 @@ export function App() {
                         className={!showClassicRumbleControl ? 'active' : ''}
                         onClick={() => setShowClassicRumbleControl(false)}
                       >
-                        <Sparkles size={17} />
                         Haptics
                       </button>
                       <button
@@ -2969,7 +2967,6 @@ export function App() {
                         className={showClassicRumbleControl ? 'active' : ''}
                         onClick={() => setShowClassicRumbleControl(true)}
                       >
-                        <Vibrate size={17} />
                         Rumble
                       </button>
                     </div>
@@ -3068,7 +3065,7 @@ export function App() {
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Activity size={20} /></span>
+                    <span className="feature-icon"><IconTestPipe size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
                       <p>Run a short test to feel the current settings.</p>
@@ -3120,7 +3117,7 @@ export function App() {
                 </div>
                 <div className="audio-heading-controls">
                   <div className="inline-switch">
-                    <span>Host Encoded</span>
+                    <span>Host Encoding</span>
                     <button
                       type="button"
                       role="switch"
@@ -3191,7 +3188,6 @@ export function App() {
                         className={!showMicrophoneControl ? 'active' : ''}
                         onClick={() => setShowMicrophoneControl(false)}
                       >
-                        <OutputIcon size={17} />
                         {outputControlLabel}
                       </button>
                       <button
@@ -3201,7 +3197,6 @@ export function App() {
                         className={showMicrophoneControl ? 'active' : ''}
                         onClick={() => setShowMicrophoneControl(true)}
                       >
-                        <Mic size={17} />
                         Mic
                       </button>
                     </div>
@@ -3323,7 +3318,7 @@ export function App() {
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Activity size={20} /></span>
+                    <span className="feature-icon"><IconTestPipe size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
                       <p>{showMicrophoneControl ? 'Listen to the controller microphone for five seconds.' : `Play a short sample through the controller ${outputControlLower}.`}</p>
@@ -3411,7 +3406,7 @@ export function App() {
                       disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
                       onClick={toggleAdaptiveTriggersEnabled}
                     >
-                      <Zap size={20} />
+                      <IconDeviceGamepad2 size={20} />
                     </button>
                     <div className="title-copy">
                       <h3>Intensity</h3>
@@ -3475,7 +3470,7 @@ export function App() {
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Activity size={20} /></span>
+                    <span className="feature-icon"><IconTestPipe size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
                       <p>Choose a trigger effect and run a short test</p>
@@ -3574,7 +3569,7 @@ export function App() {
                       disabled={!connected || !lightbarSupported || pendingAction !== null}
                       onClick={toggleLightbarEnabled}
                     >
-                      <Palette size={20} />
+                      <IconBulb size={20} />
                     </button>
                     <div className="title-copy">
                       <h3>Brightness</h3>
@@ -3636,7 +3631,7 @@ export function App() {
                 </section>
                 <section className="feature-card behavior-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Zap size={20} /></span>
+                    <span className="feature-icon"><Palette size={20} /></span>
                     <div className="title-copy">
                       <h3>Behavior</h3>
                       <p>Set light bar behavior</p>
@@ -4052,7 +4047,6 @@ export function App() {
                         className={!showDiagnostics ? 'active' : ''}
                         onClick={() => setShowDiagnostics(false)}
                       >
-                        <Settings2 size={17} />
                         Device
                       </button>
                       <button
@@ -4062,7 +4056,6 @@ export function App() {
                         className={showDiagnostics ? 'active' : ''}
                         onClick={() => setShowDiagnostics(true)}
                       >
-                        <SlidersHorizontal size={17} />
                         Diagnostics
                       </button>
                     </div>

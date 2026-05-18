@@ -18,7 +18,7 @@
   --feature-card-min-height: 250px;
   --feature-card-height: 370px;
   --feature-card-header-height: 66px;
-  --dual-selector-segment-width: 92px;
+  --dual-selector-segment-width: 76px;
   --control-height: 36px;
   --action-height: 48px;
 }
@@ -1608,6 +1608,7 @@ button {
 
 .haptics-mode-selector,
 .audio-mode-selector {
+  align-self: start;
   justify-self: end;
   margin-left: 0;
   white-space: nowrap;
@@ -2112,7 +2113,7 @@ button.feature-icon {
 }
 
 .dual-selector {
-  min-height: 32px;
+  min-height: 28px;
   border: 1px solid rgba(142, 164, 194, 0.26);
   border-radius: var(--control-radius);
   display: inline-grid;
@@ -2126,15 +2127,15 @@ button.feature-icon {
 
 .dual-selector button {
   min-width: 0;
-  min-height: 30px;
+  min-height: 26px;
   border: 0;
   border-right: 1px solid rgba(142, 164, 194, 0.2);
   border-radius: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 0 10px;
+  gap: 0;
+  padding: 0 12px;
   color: #d9e3f2;
   background: transparent;
   font-size: 12px;
@@ -2895,8 +2896,13 @@ button.feature-icon {
 }
 
 .system-mode-selector {
+  align-self: start;
   justify-self: end;
-  grid-auto-columns: minmax(112px, auto);
+  grid-auto-columns: 92px;
+}
+
+.system-mode-selector button {
+  padding: 0 6px;
 }
 
 .system-fields {
@@ -3278,6 +3284,10 @@ input[type="range"]::-webkit-slider-thumb {
   margin-top: -7.5px;
   background: #f1f5ff;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.34);
+}
+
+input[type="range"]:disabled {
+  opacity: 1;
 }
 
 input[type="range"]:disabled::-webkit-slider-runnable-track {
