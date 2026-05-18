@@ -78,7 +78,8 @@ export const COMMAND_ID = {
   SET_MIC_VOLUME: 0x1A,
   SET_MIC_MUTE: 0x1B,
   SET_IDLE_DISCONNECT_TIMEOUT: 0x1C,
-  SET_SPEAKER_VOLUME_SHORTCUT_ENABLED: 0x1D
+  SET_SPEAKER_VOLUME_SHORTCUT_ENABLED: 0x1D,
+  SET_BUTTON_REMAP: 0x1E
 } as const;
 
 export const HOST_AUDIO_PACKET_TYPE = {
@@ -137,6 +138,39 @@ export const BRIDGE_PRESET_IDS = [
 ] as const;
 export type BridgePresetId = typeof BRIDGE_PRESET_IDS[number];
 
+export const REMAP_BUTTON_IDS = [
+  'l2',
+  'l1',
+  'create',
+  'dpad-up',
+  'dpad-left',
+  'dpad-down',
+  'dpad-right',
+  'l3',
+  'r2',
+  'r1',
+  'options',
+  'triangle',
+  'circle',
+  'cross',
+  'square',
+  'r3'
+] as const;
+export type RemapButtonId = typeof REMAP_BUTTON_IDS[number];
+export type ButtonRemapMap = Record<RemapButtonId, RemapButtonId>;
+export interface ButtonRemapProfile {
+  id: string;
+  name: string;
+  mappings: ButtonRemapMap;
+}
+
+export const DEFAULT_BUTTON_REMAP_PROFILE_ID = 'default';
+export const DEFAULT_BUTTON_REMAP_PROFILE: ButtonRemapProfile = {
+  id: DEFAULT_BUTTON_REMAP_PROFILE_ID,
+  name: 'Default',
+  mappings: Object.fromEntries(REMAP_BUTTON_IDS.map((id) => [id, id])) as ButtonRemapMap
+};
+
 export function normalizeBridgePresetId(
   value: unknown,
   fallback: BridgePresetId = 'balanced'
@@ -144,6 +178,18 @@ export function normalizeBridgePresetId(
   return typeof value === 'string' && (BRIDGE_PRESET_IDS as readonly string[]).includes(value)
     ? value as BridgePresetId
     : fallback;
+}
+
+export function isRemapButtonId(value: unknown): value is RemapButtonId {
+  return typeof value === 'string' && (REMAP_BUTTON_IDS as readonly string[]).includes(value);
+}
+
+export function remapButtonIdValue(buttonId: RemapButtonId): number {
+  return REMAP_BUTTON_IDS.indexOf(buttonId);
+}
+
+export function buildButtonRemapPayload(mapping: ButtonRemapMap): number[] {
+  return REMAP_BUTTON_IDS.map((buttonId) => remapButtonIdValue(mapping[buttonId]));
 }
 export const MUTE_KEYBOARD_HOLD_FLAG = 0x80;
 export const MUTE_KEYBOARD_MODIFIER_MASK = 0x0f;

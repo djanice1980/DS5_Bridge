@@ -2,6 +2,8 @@ import type {
   BridgeAckPayload,
   AudioDebugStatsPayload,
   BridgeStatusPayload,
+  ButtonRemapMap,
+  ButtonRemapProfile,
   HostAudioStatusPayload,
   BridgePresetId,
   MuteButtonMode,
@@ -43,6 +45,9 @@ export interface CompanionSettings {
   notifyLowBattery: boolean;
   hostEncodedAudioEnabled: boolean;
   duplexMicEnabled: boolean;
+  selectedButtonRemappingProfileId: string;
+  buttonRemappingProfiles: ButtonRemapProfile[];
+  buttonRemappingDraft: ButtonRemapMap;
 }
 
 export interface HidDeviceSummary {

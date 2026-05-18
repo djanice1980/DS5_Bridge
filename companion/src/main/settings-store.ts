@@ -1,7 +1,13 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { normalizeBridgePresetId } from '../shared/protocol';
-import type { BridgePresetId } from '../shared/protocol';
+import {
+  DEFAULT_BUTTON_REMAP_PROFILE,
+  DEFAULT_BUTTON_REMAP_PROFILE_ID,
+  REMAP_BUTTON_IDS,
+  isRemapButtonId,
+  normalizeBridgePresetId
+} from '../shared/protocol';
+import type { BridgePresetId, ButtonRemapMap, ButtonRemapProfile, RemapButtonId } from '../shared/protocol';
 import type { CompanionSettings } from '../shared/types';
 
 export const DEFAULT_SETTINGS: CompanionSettings = {
@@ -36,7 +42,10 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   notifyControllerConnection: false,
   notifyLowBattery: false,
   hostEncodedAudioEnabled: false,
-  duplexMicEnabled: false
+  duplexMicEnabled: false,
+  selectedButtonRemappingProfileId: DEFAULT_BUTTON_REMAP_PROFILE_ID,
+  buttonRemappingProfiles: [DEFAULT_BUTTON_REMAP_PROFILE],
+  buttonRemappingDraft: { ...DEFAULT_BUTTON_REMAP_PROFILE.mappings }
 };
 
 function normalizeColor(value: unknown): string {
@@ -61,12 +70,82 @@ function normalizePollingRateMode(value: unknown): CompanionSettings['pollingRat
   }
 }
 
+function cloneRemapMap(map: ButtonRemapMap): ButtonRemapMap {
+  return { ...map };
+}
+
+function normalizeRemapMap(value: unknown): ButtonRemapMap {
+  const source = value && typeof value === 'object' ? value as Partial<Record<RemapButtonId, unknown>> : {};
+  return Object.fromEntries(REMAP_BUTTON_IDS.map((id) => {
+    const target = source[id];
+    return [id, isRemapButtonId(target) ? target : id];
+  })) as ButtonRemapMap;
+}
+
+function normalizeRemapProfile(value: unknown): ButtonRemapProfile | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const candidate = value as Partial<ButtonRemapProfile>;
+  if (typeof candidate.id !== 'string' || candidate.id.trim().length === 0) {
+    return null;
+  }
+  const name = typeof candidate.name === 'string' && candidate.name.trim().length > 0
+    ? candidate.name.trim().slice(0, 48)
+    : 'Custom Profile';
+  return {
+    id: candidate.id.trim().slice(0, 64),
+    name,
+    mappings: normalizeRemapMap(candidate.mappings)
+  };
+}
+
+function normalizeRemapProfiles(value: unknown): ButtonRemapProfile[] {
+  const profiles = Array.isArray(value)
+    ? value.map(normalizeRemapProfile).filter((profile): profile is ButtonRemapProfile => profile !== null)
+    : [];
+  const uniqueProfiles = new Map<string, ButtonRemapProfile>();
+  uniqueProfiles.set(DEFAULT_BUTTON_REMAP_PROFILE_ID, {
+    ...DEFAULT_BUTTON_REMAP_PROFILE,
+    mappings: cloneRemapMap(DEFAULT_BUTTON_REMAP_PROFILE.mappings)
+  });
+  for (const profile of profiles) {
+    if (profile.id === DEFAULT_BUTTON_REMAP_PROFILE_ID) {
+      continue;
+    }
+    uniqueProfiles.set(profile.id, profile);
+  }
+  return Array.from(uniqueProfiles.values());
+}
+
+function normalizeSelectedRemapProfileId(value: unknown, profiles: ButtonRemapProfile[]): string {
+  return typeof value === 'string' && profiles.some((profile) => profile.id === value)
+    ? value
+    : DEFAULT_BUTTON_REMAP_PROFILE_ID;
+}
+
+function cloneSettings(settings: CompanionSettings): CompanionSettings {
+  return {
+    ...settings,
+    buttonRemappingProfiles: settings.buttonRemappingProfiles.map((profile) => ({
+      ...profile,
+      mappings: cloneRemapMap(profile.mappings)
+    })),
+    buttonRemappingDraft: cloneRemapMap(settings.buttonRemappingDraft)
+  };
+}
+
 type PersistedSettings = Partial<CompanionSettings> & {
   customProfile?: Partial<CompanionSettings>;
 };
 
 function normalizeSettings(value: Partial<CompanionSettings> | null | undefined): CompanionSettings {
   const selectedPresetId = normalizePresetId(value?.selectedPresetId);
+  const buttonRemappingProfiles = normalizeRemapProfiles(value?.buttonRemappingProfiles);
+  const selectedButtonRemappingProfileId = normalizeSelectedRemapProfileId(
+    value?.selectedButtonRemappingProfileId,
+    buttonRemappingProfiles
+  );
 
   return {
     selectedPresetId,
@@ -156,7 +235,10 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       : DEFAULT_SETTINGS.hostEncodedAudioEnabled,
     duplexMicEnabled: typeof value?.duplexMicEnabled === 'boolean'
       ? value.duplexMicEnabled
-      : DEFAULT_SETTINGS.duplexMicEnabled
+      : DEFAULT_SETTINGS.duplexMicEnabled,
+    selectedButtonRemappingProfileId,
+    buttonRemappingProfiles,
+    buttonRemappingDraft: normalizeRemapMap(value?.buttonRemappingDraft)
   };
 }
 
@@ -177,7 +259,7 @@ export class SettingsStore {
   }
 
   get(): CompanionSettings {
-    return { ...this.settings };
+    return cloneSettings(this.settings);
   }
 
   update(next: Partial<CompanionSettings>): CompanionSettings {
@@ -209,10 +291,98 @@ export class SettingsStore {
   }
 
   restoreDefaults(): CompanionSettings {
-    this.settings = { ...DEFAULT_SETTINGS };
+    this.settings = cloneSettings(DEFAULT_SETTINGS);
     this.customSettings = customSettingsFrom(DEFAULT_SETTINGS);
     this.write();
     return this.get();
+  }
+
+  setButtonRemap(buttonId: RemapButtonId, targetId: RemapButtonId): CompanionSettings {
+    if (!isRemapButtonId(buttonId) || !isRemapButtonId(targetId)) {
+      return this.get();
+    }
+    return this.update({
+      buttonRemappingDraft: {
+        ...this.settings.buttonRemappingDraft,
+        [buttonId]: targetId
+      }
+    });
+  }
+
+  selectButtonRemappingProfile(profileId: string): CompanionSettings {
+    const profile = this.settings.buttonRemappingProfiles.find((candidate) => candidate.id === profileId)
+      ?? this.settings.buttonRemappingProfiles[0]
+      ?? DEFAULT_BUTTON_REMAP_PROFILE;
+    return this.update({
+      selectedButtonRemappingProfileId: profile.id,
+      buttonRemappingDraft: profile.mappings
+    });
+  }
+
+  saveButtonRemappingProfile(name?: string): CompanionSettings {
+    const profileName = typeof name === 'string' && name.trim().length > 0
+      ? name.trim().slice(0, 48)
+      : this.nextButtonRemappingProfileName();
+    const profile: ButtonRemapProfile = {
+      id: `profile-${Date.now().toString(36)}`,
+      name: profileName,
+      mappings: cloneRemapMap(this.settings.buttonRemappingDraft)
+    };
+    return this.update({
+      selectedButtonRemappingProfileId: profile.id,
+      buttonRemappingProfiles: [...this.settings.buttonRemappingProfiles, profile],
+      buttonRemappingDraft: profile.mappings
+    });
+  }
+
+  updateButtonRemappingProfile(profileId: string): CompanionSettings {
+    if (profileId === DEFAULT_BUTTON_REMAP_PROFILE_ID) {
+      return this.get();
+    }
+    const profileExists = this.settings.buttonRemappingProfiles.some((profile) => profile.id === profileId);
+    if (!profileExists) {
+      return this.get();
+    }
+    const mappings = cloneRemapMap(this.settings.buttonRemappingDraft);
+    return this.update({
+      buttonRemappingProfiles: this.settings.buttonRemappingProfiles.map((profile) => (
+        profile.id === profileId ? { ...profile, mappings } : profile
+      )),
+      buttonRemappingDraft: mappings
+    });
+  }
+
+  renameButtonRemappingProfile(profileId: string, name: string): CompanionSettings {
+    const nextName = name.trim().slice(0, 48);
+    if (profileId === DEFAULT_BUTTON_REMAP_PROFILE_ID || nextName.length === 0) {
+      return this.get();
+    }
+    return this.update({
+      buttonRemappingProfiles: this.settings.buttonRemappingProfiles.map((profile) => (
+        profile.id === profileId ? { ...profile, name: nextName } : profile
+      ))
+    });
+  }
+
+  deleteButtonRemappingProfile(profileId: string): CompanionSettings {
+    if (profileId === DEFAULT_BUTTON_REMAP_PROFILE_ID) {
+      return this.get();
+    }
+    const profiles = this.settings.buttonRemappingProfiles.filter((profile) => profile.id !== profileId);
+    const fallback = profiles.find((profile) => profile.id === DEFAULT_BUTTON_REMAP_PROFILE_ID)
+      ?? DEFAULT_BUTTON_REMAP_PROFILE;
+    return this.update({
+      selectedButtonRemappingProfileId: fallback.id,
+      buttonRemappingProfiles: profiles,
+      buttonRemappingDraft: fallback.mappings
+    });
+  }
+
+  restoreButtonRemappingDefaults(): CompanionSettings {
+    return this.update({
+      selectedButtonRemappingProfileId: DEFAULT_BUTTON_REMAP_PROFILE_ID,
+      buttonRemappingDraft: DEFAULT_BUTTON_REMAP_PROFILE.mappings
+    });
   }
 
   private read(): { settings: CompanionSettings; customSettings: CompanionSettings } {
@@ -227,10 +397,19 @@ export class SettingsStore {
       };
     } catch {
       return {
-        settings: { ...DEFAULT_SETTINGS },
+        settings: cloneSettings(DEFAULT_SETTINGS),
         customSettings: customSettingsFrom(DEFAULT_SETTINGS)
       };
     }
+  }
+
+  private nextButtonRemappingProfileName(): string {
+    const names = new Set(this.settings.buttonRemappingProfiles.map((profile) => profile.name));
+    let index = 1;
+    while (names.has(`Custom Profile ${index}`)) {
+      index += 1;
+    }
+    return `Custom Profile ${index}`;
   }
 
   private write(): void {

@@ -16,13 +16,16 @@ import {
   Minus,
   Moon,
   Palette,
+  Pencil,
   Play,
   RefreshCcw,
+  Save,
   Settings as SettingsIcon,
   Settings2,
   SlidersHorizontal,
   Square as SquareIcon,
   Sparkles,
+  Trash2,
   Vibrate,
   Volume2,
   VolumeX,
@@ -50,33 +53,17 @@ import rightStickClickGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-
 import squareGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Square.svg';
 import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Triangle.svg';
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
-import { ackResultName } from '../shared/protocol';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
+import { DEFAULT_BUTTON_REMAP_PROFILE_ID, ackResultName } from '../shared/protocol';
+import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
 import type { BridgeSnapshot } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
-type RemapButtonId =
-  | 'l2'
-  | 'l1'
-  | 'create'
-  | 'dpad-up'
-  | 'dpad-left'
-  | 'dpad-down'
-  | 'dpad-right'
-  | 'l3'
-  | 'r2'
-  | 'r1'
-  | 'options'
-  | 'triangle'
-  | 'circle'
-  | 'cross'
-  | 'square'
-  | 'r3';
 type RemapButtonDefinition = {
   id: RemapButtonId;
   label: string;
   glyphUrl: string;
 };
+type RemapProfileDialogMode = 'save' | 'rename' | 'delete';
 type RemapCalloutLayout = {
   top: number;
   points: string;
@@ -1041,6 +1028,8 @@ export function App() {
   const [triggerEffectIntensityValue, setTriggerEffectIntensityValue] = useState(100);
   const [triggerTarget, setTriggerTarget] = useState<TriggerTestTarget>('both');
   const [remapDraft, setRemapDraft] = useState<Record<RemapButtonId, RemapButtonId>>(DEFAULT_REMAP_DRAFT);
+  const [remapProfileDialogMode, setRemapProfileDialogMode] = useState<RemapProfileDialogMode | null>(null);
+  const [remapProfileNameDraft, setRemapProfileNameDraft] = useState('');
   const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<RemapButtonId, RemapCalloutLayout> | null>(null);
   const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -1062,6 +1051,7 @@ export function App() {
   const [micVolumeCommitPending, setMicVolumeCommitPending] = useState(false);
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
   const [sleepConfirmVisible, setSleepConfirmVisible] = useState(false);
+  const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
   const hapticsEditingRef = useRef(false);
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
@@ -1076,10 +1066,27 @@ export function App() {
   const customColorPickerRef = useRef<HTMLDivElement>(null);
   const customSwatchPrimeTimerRef = useRef<number | null>(null);
   const sleepConfirmTimerRef = useRef<number | null>(null);
+  const overviewSleepConfirmTimerRef = useRef<number | null>(null);
   const sleepConfirmArmedRef = useRef(false);
+  const overviewSleepConfirmArmedRef = useRef(false);
   const sleepTogglePromiseRef = useRef<Promise<void> | null>(null);
   const appOpenedAtRef = useRef(Date.now());
   const connected = snapshot?.state === 'connected';
+  const remapModifiedCount = useMemo(() => (
+    REMAP_TARGET_OPTIONS.filter(([, buttonId]) => remapDraft[buttonId] !== buttonId).length
+  ), [remapDraft]);
+  const selectedRemapProfile = snapshot?.settings.buttonRemappingProfiles.find((profile) => (
+    profile.id === snapshot.settings.selectedButtonRemappingProfileId
+  ));
+  const selectedRemapProfileId = selectedRemapProfile?.id ?? DEFAULT_BUTTON_REMAP_PROFILE_ID;
+  const remapProfileOptions = useMemo<Array<[string, string]>>(() => (
+    snapshot?.settings.buttonRemappingProfiles.map((profile) => [profile.name, profile.id]) ?? [['Default', DEFAULT_BUTTON_REMAP_PROFILE_ID]]
+  ), [snapshot?.settings.buttonRemappingProfiles]);
+  const remapUnsavedCount = useMemo(() => {
+    const selectedMappings = selectedRemapProfile?.mappings ?? DEFAULT_REMAP_DRAFT;
+    return REMAP_TARGET_OPTIONS.filter(([, buttonId]) => remapDraft[buttonId] !== selectedMappings[buttonId]).length;
+  }, [remapDraft, selectedRemapProfile]);
+  const selectedRemapProfileIsDefault = selectedRemapProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID;
 
   useEffect(() => {
     let cancelled = false;
@@ -1104,6 +1111,7 @@ export function App() {
         setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
         setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+        setRemapDraft(next.settings.buttonRemappingDraft);
         const nextLightbarColor = lightbarColorFromSnapshot(next);
         setLightbarColor(nextLightbarColor);
         if (!isLightbarPresetColor(nextLightbarColor)) {
@@ -1117,6 +1125,7 @@ export function App() {
     });
     const unsubscribe = window.bridge.onSnapshot((next) => {
       setSnapshot(next);
+      setRemapDraft(next.settings.buttonRemappingDraft);
       if (!hapticsEditingRef.current) {
         setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
       }
@@ -1151,6 +1160,9 @@ export function App() {
       }
       if (sleepConfirmTimerRef.current !== null) {
         window.clearTimeout(sleepConfirmTimerRef.current);
+      }
+      if (overviewSleepConfirmTimerRef.current !== null) {
+        window.clearTimeout(overviewSleepConfirmTimerRef.current);
       }
     };
   }, []);
@@ -2086,6 +2098,82 @@ export function App() {
     void runAction('preset', () => window.bridge.applyPreset(presetId));
   }
 
+  function selectButtonRemappingProfile(profileId: string) {
+    void runAction('remap-profile', () => window.bridge.selectButtonRemappingProfile(profileId));
+  }
+
+  function setButtonRemap(buttonId: RemapButtonId, targetId: RemapButtonId) {
+    setRemapDraft((draft) => ({ ...draft, [buttonId]: targetId }));
+    void runAction(`remap-${buttonId}`, () => window.bridge.setButtonRemap(buttonId, targetId));
+  }
+
+  function restoreButtonRemappingDefaults() {
+    void runAction('remap-restore', () => window.bridge.restoreButtonRemappingDefaults());
+  }
+
+  function renameButtonRemappingProfile() {
+    if (!selectedRemapProfile || selectedRemapProfileIsDefault) {
+      return;
+    }
+    setRemapProfileNameDraft(selectedRemapProfile.name);
+    setRemapProfileDialogMode('rename');
+  }
+
+  function saveButtonRemappingProfile() {
+    setRemapProfileNameDraft(`Custom Profile ${snapshot?.settings.buttonRemappingProfiles.length ?? 1}`);
+    setRemapProfileDialogMode('save');
+  }
+
+  function updateButtonRemappingProfile() {
+    if (!selectedRemapProfile || selectedRemapProfileIsDefault || remapUnsavedCount === 0) {
+      return;
+    }
+    void runAction('remap-update-profile', () => window.bridge.updateButtonRemappingProfile(selectedRemapProfile.id));
+  }
+
+  function deleteButtonRemappingProfile() {
+    if (!selectedRemapProfile || selectedRemapProfileIsDefault) {
+      return;
+    }
+    setRemapProfileDialogMode('delete');
+  }
+
+  function closeRemapProfileDialog() {
+    setRemapProfileDialogMode(null);
+    setRemapProfileNameDraft('');
+  }
+
+  function submitRemapProfileDialog() {
+    if (!selectedRemapProfile && remapProfileDialogMode !== 'save') {
+      return;
+    }
+    if (remapProfileDialogMode === 'save') {
+      const nextName = remapProfileNameDraft.trim();
+      if (!nextName) {
+        return;
+      }
+      closeRemapProfileDialog();
+      void runAction('remap-save-profile', () => window.bridge.saveButtonRemappingProfile(nextName));
+      return;
+    }
+    if (remapProfileDialogMode === 'rename' && selectedRemapProfile && !selectedRemapProfileIsDefault) {
+      const nextName = remapProfileNameDraft.trim();
+      if (!nextName || nextName === selectedRemapProfile.name) {
+        closeRemapProfileDialog();
+        return;
+      }
+      closeRemapProfileDialog();
+      void runAction('remap-rename-profile', () => (
+        window.bridge.renameButtonRemappingProfile(selectedRemapProfile.id, nextName)
+      ));
+      return;
+    }
+    if (remapProfileDialogMode === 'delete' && selectedRemapProfile && !selectedRemapProfileIsDefault) {
+      closeRemapProfileDialog();
+      void runAction('remap-delete-profile', () => window.bridge.deleteButtonRemappingProfile(selectedRemapProfile.id));
+    }
+  }
+
   function toggleHapticsEnabled() {
     if (!snapshot) return;
     void runAction('haptics-enabled', () => window.bridge.setHapticsEnabled(!snapshot.settings.hapticsEnabled));
@@ -2200,6 +2288,40 @@ export function App() {
       setSleepConfirmVisible(false);
       sleepConfirmTimerRef.current = null;
     }, SLEEP_CONFIRM_MS);
+  }
+
+  function clearOverviewSleepConfirmation() {
+    overviewSleepConfirmArmedRef.current = false;
+    setOverviewSleepConfirmVisible(false);
+    if (overviewSleepConfirmTimerRef.current !== null) {
+      window.clearTimeout(overviewSleepConfirmTimerRef.current);
+      overviewSleepConfirmTimerRef.current = null;
+    }
+  }
+
+  function armOverviewSleepConfirmation() {
+    overviewSleepConfirmArmedRef.current = true;
+    setOverviewSleepConfirmVisible(true);
+    if (overviewSleepConfirmTimerRef.current !== null) {
+      window.clearTimeout(overviewSleepConfirmTimerRef.current);
+    }
+    overviewSleepConfirmTimerRef.current = window.setTimeout(() => {
+      overviewSleepConfirmArmedRef.current = false;
+      setOverviewSleepConfirmVisible(false);
+      overviewSleepConfirmTimerRef.current = null;
+    }, SLEEP_CONFIRM_MS);
+  }
+
+  function handleOverviewSleepController() {
+    if (!snapshot || !connected || !sleepControllerSupported || !controllerConnected || pendingAction !== null) {
+      return;
+    }
+    if (!overviewSleepConfirmArmedRef.current) {
+      armOverviewSleepConfirmation();
+      return;
+    }
+    clearOverviewSleepConfirmation();
+    void runAction('overview-sleep-controller', () => window.bridge.sleepController());
   }
 
   function handleSleepButtonClick(detail: number) {
@@ -2572,6 +2694,209 @@ export function App() {
                   </div>
                 </div>
               </button>
+            </div>
+
+            <div className="overview-control-grid">
+              <section className="overview-control-panel overview-quick-actions" aria-label="Quick actions">
+                <div className="overview-panel-heading">
+                  <span className="feature-icon overview-icon"><Zap size={18} /></span>
+                  <div>
+                    <h3>Quick Actions</h3>
+                    <p>Run common checks without leaving Overview.</p>
+                  </div>
+                </div>
+                <div className="overview-action-grid">
+                  <button
+                    type="button"
+                    disabled={activeFeedbackTestUnavailable}
+                    onClick={runFeedbackTest}
+                  >
+                    <Play size={15} />
+                    Test Haptics
+                  </button>
+                  <button
+                    type="button"
+                    disabled={testSpeakerUnavailable}
+                    onClick={runTestSpeaker}
+                  >
+                    <Volume2 size={15} />
+                    Test Speaker
+                  </button>
+                  <button
+                    type="button"
+                    disabled={testMicUnavailable}
+                    onClick={runTestMic}
+                  >
+                    <Mic size={15} />
+                    Listen Mic
+                  </button>
+                  <button
+                    type="button"
+                    className={overviewSleepConfirmVisible ? 'confirm' : undefined}
+                    disabled={!connected || !sleepControllerSupported || !controllerConnected || pendingAction !== null}
+                    onClick={handleOverviewSleepController}
+                  >
+                    <Moon size={15} />
+                    {overviewSleepConfirmVisible ? 'Confirm Sleep' : 'Sleep Controller'}
+                  </button>
+                </div>
+              </section>
+
+              <section className="overview-control-panel overview-sliders" aria-label="Quick controls">
+                <div className="overview-panel-heading">
+                  <span className="feature-icon overview-icon"><SlidersHorizontal size={18} /></span>
+                  <div>
+                    <h3>Quick Controls</h3>
+                    <p>Adjust active settings directly.</p>
+                  </div>
+                </div>
+                <div className="overview-slider-list">
+                  <label className="overview-slider-row">
+                    <span>Haptics</span>
+                    <div className="overview-range-control">
+                      <input
+                        type="range"
+                        min="0"
+                        max="200"
+                        step={HAPTICS_STEP}
+                        value={hapticsValue}
+                        disabled={!connected || !snapshot.settings.hapticsEnabled}
+                        style={{ '--range-fill': `${hapticsValue / 2}%` } as CSSProperties}
+                        onPointerDown={() => {
+                          hapticsEditingRef.current = true;
+                        }}
+                        onChange={(event) => setHapticsValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                        onPointerUp={() => void commitHapticsValue()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            hapticsEditingRef.current = true;
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            void commitHapticsValue();
+                          }
+                        }}
+                        onBlur={() => void commitHapticsValue()}
+                      />
+                      <div className="overview-range-ticks" aria-hidden="true">
+                        {HAPTICS_SLIDER_TICKS.map((value) => (
+                          <span key={value} className={sliderTickClass(value, 200)} />
+                        ))}
+                      </div>
+                    </div>
+                    <strong>{hapticsValue}%</strong>
+                  </label>
+                  <label className="overview-slider-row">
+                    <span>Speaker</span>
+                    <div className="overview-range-control">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step={SPEAKER_VOLUME_STEP}
+                        value={speakerVolumeValue}
+                        disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
+                        style={{ '--range-fill': `${speakerVolumeValue}%` } as CSSProperties}
+                        onPointerDown={() => {
+                          speakerVolumeEditingRef.current = true;
+                        }}
+                        onChange={(event) => setSpeakerVolumeValue(snapSpeakerVolume(Number(event.currentTarget.value)))}
+                        onPointerUp={() => void commitSpeakerVolume()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            speakerVolumeEditingRef.current = true;
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            void commitSpeakerVolume();
+                          }
+                        }}
+                        onBlur={() => void commitSpeakerVolume()}
+                      />
+                      <div className="overview-range-ticks" aria-hidden="true">
+                        {PERCENT_SLIDER_TICKS.map((value) => (
+                          <span key={value} className={sliderTickClass(value, 100)} />
+                        ))}
+                      </div>
+                    </div>
+                    <strong>{speakerVolumeValue}%</strong>
+                  </label>
+                  <label className="overview-slider-row">
+                    <span>Mic</span>
+                    <div className="overview-range-control">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step={MIC_VOLUME_STEP}
+                        value={micVolumeValue}
+                        disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
+                        style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
+                        onPointerDown={() => {
+                          micVolumeEditingRef.current = true;
+                        }}
+                        onChange={(event) => setMicVolumeValue(snapMicVolume(Number(event.currentTarget.value)))}
+                        onPointerUp={() => void commitMicVolume()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            micVolumeEditingRef.current = true;
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            void commitMicVolume();
+                          }
+                        }}
+                        onBlur={() => void commitMicVolume()}
+                      />
+                      <div className="overview-range-ticks" aria-hidden="true">
+                        {PERCENT_SLIDER_TICKS.map((value) => (
+                          <span key={value} className={sliderTickClass(value, 100)} />
+                        ))}
+                      </div>
+                    </div>
+                    <strong>{micVolumeValue}%</strong>
+                  </label>
+                  <label className="overview-slider-row">
+                    <span>Lightbar</span>
+                    <div className="overview-range-control">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step={LIGHTBAR_BRIGHTNESS_STEP}
+                        value={lightbarBrightnessValue}
+                        disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled || lightbarCommitPending}
+                        style={{ '--range-fill': `${lightbarBrightnessValue}%` } as CSSProperties}
+                        onPointerDown={() => {
+                          lightbarBrightnessEditingRef.current = true;
+                        }}
+                        onChange={(event) => setLightbarBrightnessValue(snapLightbarBrightness(Number(event.currentTarget.value)))}
+                        onPointerUp={() => void commitLightbar()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            lightbarBrightnessEditingRef.current = true;
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            void commitLightbar();
+                          }
+                        }}
+                        onBlur={() => void commitLightbar()}
+                      />
+                      <div className="overview-range-ticks" aria-hidden="true">
+                        {PERCENT_SLIDER_TICKS.map((value) => (
+                          <span key={value} className={sliderTickClass(value, 100)} />
+                        ))}
+                      </div>
+                    </div>
+                    <strong>{lightbarBrightnessValue}%</strong>
+                  </label>
+                </div>
+              </section>
             </div>
           </div>
 
@@ -3423,29 +3748,90 @@ export function App() {
             aria-labelledby="control-tab-remapping"
             hidden={activeControlTab !== 'remapping'}
           >
-              <div className="feature-heading">
+              <div className="feature-heading system-heading remapping-heading">
                 <div>
                   <h2>Button Remapping</h2>
                   <p>Choose replacement targets for controller button slots.</p>
                 </div>
+                <div className="profile-controls">
+                  <CustomSelect
+                    value={selectedRemapProfileId}
+                    disabled={pendingAction !== null}
+                    options={remapProfileOptions}
+                    ariaLabel="Button remapping profile"
+                    onChange={selectButtonRemappingProfile}
+                  />
+                  <button
+                    className="heading-action"
+                    type="button"
+                    disabled={pendingAction !== null}
+                    onClick={restoreButtonRemappingDefaults}
+                  >
+                    <RefreshCcw size={18} />
+                    Restore Defaults
+                  </button>
+                </div>
               </div>
               <section className="feature-card remapping-card">
+                <div className="remapping-profile-strip">
+                  <span className={`remapping-unsaved-count ${remapUnsavedCount > 0 ? 'active' : ''}`}>
+                    <span className="remapping-unsaved-dot" aria-hidden="true" />
+                    {remapUnsavedCount} unsaved {remapUnsavedCount === 1 ? 'change' : 'changes'}
+                  </span>
+                  <div className="remapping-profile-actions">
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null || selectedRemapProfileIsDefault}
+                      onClick={renameButtonRemappingProfile}
+                    >
+                      <Pencil size={15} />
+                      Rename Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null || selectedRemapProfileIsDefault || remapUnsavedCount === 0}
+                      onClick={updateButtonRemappingProfile}
+                    >
+                      <Save size={15} />
+                      Save Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null}
+                      onClick={saveButtonRemappingProfile}
+                    >
+                      <Save size={15} />
+                      Save New Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null || selectedRemapProfileIsDefault}
+                      onClick={deleteButtonRemappingProfile}
+                    >
+                      <Trash2 size={15} />
+                      Delete Profile
+                    </button>
+                  </div>
+                </div>
                 <div className="remapping-layout" ref={remappingLayoutRef}>
                   <svg className="remapping-callout-layer" aria-hidden="true">
                     {remapCalloutLayout && (
                       <g>
-                        {REMAP_TARGET_OPTIONS.map(([, buttonId]) => (
-                          <g key={buttonId} className={hoveredRemapButton === buttonId ? 'active' : undefined}>
-                            <polyline
-                              className="remapping-callout-underlay"
-                              points={remapCalloutLayout[buttonId].points}
-                            />
-                            <polyline
-                              className="remapping-callout-line"
-                              points={remapCalloutLayout[buttonId].points}
-                            />
-                          </g>
-                        ))}
+                        {REMAP_TARGET_OPTIONS.map(([, buttonId]) => {
+                          const remapped = remapDraft[buttonId] !== buttonId;
+                          return (
+                            <g key={buttonId} className={hoveredRemapButton === buttonId || remapped ? 'active' : undefined}>
+                              <polyline
+                                className="remapping-callout-underlay"
+                                points={remapCalloutLayout[buttonId].points}
+                              />
+                              <polyline
+                                className="remapping-callout-line"
+                                points={remapCalloutLayout[buttonId].points}
+                              />
+                            </g>
+                          );
+                        })}
                       </g>
                     )}
                   </svg>
@@ -3453,9 +3839,10 @@ export function App() {
                     {REMAP_LEFT_BUTTON_IDS.map((buttonId) => {
                       const button = REMAP_BUTTONS[buttonId];
                       const targetOptions = remapTargetOptionsFor(buttonId);
+                      const remapped = remapDraft[buttonId] !== buttonId;
                       return (
                         <div
-                          className="remapping-pill"
+                          className={`remapping-pill ${remapped ? 'changed' : ''}`}
                           key={buttonId}
                           onMouseEnter={() => setHoveredRemapButton(buttonId)}
                           onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
@@ -3481,7 +3868,7 @@ export function App() {
                             ariaLabel={`${button.label} remap target`}
                             renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
                             renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
-                            onChange={(value) => setRemapDraft((draft) => ({ ...draft, [buttonId]: value }))}
+                            onChange={(value) => setButtonRemap(buttonId, value)}
                           />
                         </div>
                       );
@@ -3494,9 +3881,10 @@ export function App() {
                     {REMAP_RIGHT_BUTTON_IDS.map((buttonId) => {
                       const button = REMAP_BUTTONS[buttonId];
                       const targetOptions = remapTargetOptionsFor(buttonId);
+                      const remapped = remapDraft[buttonId] !== buttonId;
                       return (
                         <div
-                          className="remapping-pill"
+                          className={`remapping-pill ${remapped ? 'changed' : ''}`}
                           key={buttonId}
                           onMouseEnter={() => setHoveredRemapButton(buttonId)}
                           onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
@@ -3522,7 +3910,7 @@ export function App() {
                             ariaLabel={`${button.label} remap target`}
                             renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
                             renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
-                            onChange={(value) => setRemapDraft((draft) => ({ ...draft, [buttonId]: value }))}
+                            onChange={(value) => setButtonRemap(buttonId, value)}
                           />
                         </div>
                       );
@@ -3751,6 +4139,74 @@ export function App() {
         </div>
       </section>
       </main>
+
+      {remapProfileDialogMode && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeRemapProfileDialog}
+        >
+          <form
+            className="settings-menu bridge-settings-modal remap-profile-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Button remapping profile"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitRemapProfileDialog();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                {remapProfileDialogMode === 'delete' ? <Trash2 size={16} /> : <Save size={16} />}
+                <span>
+                  {remapProfileDialogMode === 'save'
+                    ? 'Save New Profile'
+                    : remapProfileDialogMode === 'rename'
+                      ? 'Rename Profile'
+                      : 'Delete Profile'}
+                </span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close profile dialog"
+                onClick={closeRemapProfileDialog}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {remapProfileDialogMode === 'delete' ? (
+              <p className="remap-profile-dialog-copy">
+                Delete {selectedRemapProfile?.name ?? 'this profile'}?
+              </p>
+            ) : (
+              <label className="remap-profile-name-field">
+                <span>Profile Name</span>
+                <input
+                  autoFocus
+                  value={remapProfileNameDraft}
+                  maxLength={48}
+                  onChange={(event) => setRemapProfileNameDraft(event.target.value)}
+                />
+              </label>
+            )}
+            <div className="remap-profile-dialog-actions">
+              <button type="button" className="secondary-action" onClick={closeRemapProfileDialog}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className={`primary-action ${remapProfileDialogMode === 'delete' ? 'danger' : ''}`}
+                disabled={pendingAction !== null || (remapProfileDialogMode !== 'delete' && remapProfileNameDraft.trim().length === 0)}
+              >
+                {remapProfileDialogMode === 'delete' ? 'Delete' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {showBridgeSettings && (
         <div

@@ -78,6 +78,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
   COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED,
   COMMAND_ID.SET_SPEAKER_VOLUME_SHORTCUT_ENABLED,
+  COMMAND_ID.SET_BUTTON_REMAP,
   COMMAND_ID.SET_POLLING_RATE_MODE
 ];
 
@@ -968,6 +969,56 @@ describe('BridgeService', () => {
 
     const restartedService = new BridgeService(new SettingsStore(fixture.tempDir));
     expect(restartedService.getSnapshot().settings.selectedPresetId).toBe('balanced');
+  });
+
+  it('persists button remapping drafts and profiles without a connected device', async () => {
+    const fixture = createService();
+    tempDirs.push(fixture.tempDir);
+
+    const changedSnapshot = await fixture.service.setButtonRemap('cross', 'circle');
+    expect(changedSnapshot.settings.buttonRemappingDraft.cross).toBe('circle');
+    expect(changedSnapshot.settings.selectedButtonRemappingProfileId).toBe('default');
+
+    const savedSnapshot = await fixture.service.saveButtonRemappingProfile('Fighting Game');
+    const savedProfile = savedSnapshot.settings.buttonRemappingProfiles.find((profile) => profile.name === 'Fighting Game');
+    expect(savedProfile?.mappings.cross).toBe('circle');
+    expect(savedSnapshot.settings.selectedButtonRemappingProfileId).toBe(savedProfile?.id);
+
+    const updatedDraftSnapshot = await fixture.service.setButtonRemap('square', 'triangle');
+    const updatedProfileSnapshot = await fixture.service.updateButtonRemappingProfile(savedProfile?.id ?? '');
+    const updatedProfile = updatedProfileSnapshot.settings.buttonRemappingProfiles.find((profile) => (
+      profile.id === savedProfile?.id
+    ));
+    expect(updatedDraftSnapshot.settings.buttonRemappingDraft.square).toBe('triangle');
+    expect(updatedProfile?.mappings.square).toBe('triangle');
+    expect(updatedProfileSnapshot.settings.buttonRemappingProfiles).toHaveLength(2);
+
+    const restoredSnapshot = await fixture.service.restoreButtonRemappingDefaults();
+    expect(restoredSnapshot.settings.buttonRemappingDraft.cross).toBe('cross');
+    expect(restoredSnapshot.settings.selectedButtonRemappingProfileId).toBe('default');
+
+    const restartedService = new BridgeService(new SettingsStore(fixture.tempDir));
+    const restartedProfile = restartedService.getSnapshot().settings.buttonRemappingProfiles.find((profile) => (
+      profile.name === 'Fighting Game'
+    ));
+    expect(restartedProfile?.mappings.cross).toBe('circle');
+  });
+
+  it('sends button remapping settings to firmware', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: true, firmwareFlags: 0xff });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setButtonRemap('cross', 'circle');
+
+    const command = device.sentReports.find((report) => report[7] === COMMAND_ID.SET_BUTTON_REMAP);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_BUTTON_REMAP);
+    expect(command?.[9]).toBe(0);
+    expect(command?.[11 + 13]).toBe(12);
+    expect(snapshot.settings.buttonRemappingDraft.cross).toBe('circle');
   });
 
   it('sends adaptive trigger test commands without rejecting busy ACKs', async () => {

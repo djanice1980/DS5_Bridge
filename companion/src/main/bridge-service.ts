@@ -22,6 +22,7 @@ import {
   parseStatusReport,
   HOST_AUDIO_PACKET_TYPE,
   SHORTCUT_EVENT,
+  buildButtonRemapPayload,
   normalizeBridgePresetId,
   pollingRateModeValue
 } from '../shared/protocol';
@@ -29,6 +30,7 @@ import type {
   AudioDebugEventPayload,
   AudioDebugStatsPayload,
   BridgePresetId,
+  RemapButtonId,
   HostAudioStatusPayload,
   BridgeStatusPayload,
   MuteButtonMode,
@@ -1096,6 +1098,70 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setButtonRemap(buttonId: RemapButtonId, targetId: RemapButtonId): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.setButtonRemap(buttonId, targetId);
+    if (this.snapshot.state === 'connected') {
+      await this.applyButtonRemapping(this.snapshot.settings, true);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async selectButtonRemappingProfile(profileId: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.selectButtonRemappingProfile(profileId);
+    if (this.snapshot.state === 'connected') {
+      await this.applyButtonRemapping(this.snapshot.settings, true);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async saveButtonRemappingProfile(name?: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.saveButtonRemappingProfile(name);
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async updateButtonRemappingProfile(profileId: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.updateButtonRemappingProfile(profileId);
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async renameButtonRemappingProfile(profileId: string, name: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.renameButtonRemappingProfile(profileId, name);
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async deleteButtonRemappingProfile(profileId: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.deleteButtonRemappingProfile(profileId);
+    if (this.snapshot.state === 'connected') {
+      await this.applyButtonRemapping(this.snapshot.settings, true);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async restoreButtonRemappingDefaults(): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.restoreButtonRemappingDefaults();
+    if (this.snapshot.state === 'connected') {
+      await this.applyButtonRemapping(this.snapshot.settings, true);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  private async applyButtonRemapping(
+    settings: CompanionSettings,
+    expectSettingsRevisionChange: boolean
+  ): Promise<void> {
+    await this.sendCommand(COMMAND_ID.SET_BUTTON_REMAP, 0, {
+      expectSettingsRevisionChange,
+      extraPayload: buildButtonRemapPayload(settings.buttonRemappingDraft)
+    });
+  }
+
   private async sendSettingCommand(
     commandId: number,
     value: number,
@@ -1631,6 +1697,7 @@ export class BridgeService extends EventEmitter {
       settings.speakerVolumeShortcutEnabled ? 1 : 0,
       { expectSettingsRevisionChange }
     );
+    await this.applyButtonRemapping(settings, expectSettingsRevisionChange);
     await this.sendCommand(
       COMMAND_ID.SET_POLLING_RATE_MODE,
       pollingRateModeValue(settings.pollingRateMode),

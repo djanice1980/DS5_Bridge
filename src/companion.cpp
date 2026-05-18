@@ -20,11 +20,28 @@ constexpr uint8_t kFirmwareMajor = 0;
 constexpr uint8_t kFirmwareMinor = 5;
 constexpr uint8_t kFirmwarePatch = 17;
 constexpr uint8_t kTriangleButtonBit = 0x80;
+constexpr uint8_t kSquareButtonBit = 0x10;
+constexpr uint8_t kCrossButtonBit = 0x20;
+constexpr uint8_t kCircleButtonBit = 0x40;
+constexpr uint8_t kL1ButtonBit = 0x01;
+constexpr uint8_t kR1ButtonBit = 0x02;
+constexpr uint8_t kL2ButtonBit = 0x04;
+constexpr uint8_t kR2ButtonBit = 0x08;
+constexpr uint8_t kCreateButtonBit = 0x10;
+constexpr uint8_t kOptionsButtonBit = 0x20;
+constexpr uint8_t kL3ButtonBit = 0x40;
+constexpr uint8_t kR3ButtonBit = 0x80;
 constexpr uint8_t kHomeButtonBit = 0x01;
 constexpr uint8_t kMuteButtonBit = 0x04;
 constexpr uint8_t kDpadMask = 0x0F;
 constexpr uint8_t kDpadUp = 0x00;
+constexpr uint8_t kDpadUpRight = 0x01;
+constexpr uint8_t kDpadRight = 0x02;
+constexpr uint8_t kDpadDownRight = 0x03;
 constexpr uint8_t kDpadDown = 0x04;
+constexpr uint8_t kDpadDownLeft = 0x05;
+constexpr uint8_t kDpadLeft = 0x06;
+constexpr uint8_t kDpadUpLeft = 0x07;
 constexpr uint8_t kDpadNeutral = 0x08;
 constexpr uint32_t kShortcutRepeatUs = 180000;
 constexpr uint8_t kDefaultMuteKeyboardUsage = 0x68; // F13
@@ -80,6 +97,7 @@ enum CommandId : uint8_t {
     CommandSetMicMute = 0x1B,
     CommandSetIdleDisconnectTimeout = 0x1C,
     CommandSetSpeakerVolumeShortcut = 0x1D,
+    CommandSetButtonRemap = 0x1E,
 };
 
 enum AckResult : uint8_t {
@@ -119,6 +137,26 @@ enum ShortcutCombo : uint8_t {
 enum ShortcutTrigger : uint8_t {
     ShortcutTriggerPressed,
     ShortcutTriggerRepeat,
+};
+
+enum RemapButton : uint8_t {
+    RemapL2,
+    RemapL1,
+    RemapCreate,
+    RemapDpadUp,
+    RemapDpadLeft,
+    RemapDpadDown,
+    RemapDpadRight,
+    RemapL3,
+    RemapR2,
+    RemapR1,
+    RemapOptions,
+    RemapTriangle,
+    RemapCircle,
+    RemapCross,
+    RemapSquare,
+    RemapR3,
+    RemapButtonCount,
 };
 
 struct ShortcutBinding {
@@ -171,6 +209,7 @@ bool adaptive_trigger_test_active = false;
 uint32_t adaptive_trigger_test_until_us = 0;
 uint8_t companion_mic_volume_percent = 100;
 bool companion_mic_muted = false;
+uint8_t button_remap[RemapButtonCount]{};
 
 struct LastAck {
     uint8_t command_id = 0;
@@ -199,6 +238,12 @@ void write_u32(uint8_t *data, uint32_t value) {
 
 uint32_t uptime_seconds() {
     return to_ms_since_boot(get_absolute_time()) / 1000;
+}
+
+void reset_button_remap() {
+    for (uint8_t i = 0; i < RemapButtonCount; i++) {
+        button_remap[i] = i;
+    }
 }
 
 void write_magic_and_version(uint8_t *buffer) {
@@ -275,6 +320,7 @@ void restore_defaults() {
     companion_mic_muted = false;
     audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
     bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
+    reset_button_remap();
     bt_set_mute_led(false);
     lightbar_override_enabled = false;
     set_lightbar_color(0xff, 0xd7, 0x00, 100);
@@ -391,6 +437,18 @@ bool valid_trigger_test_mode(uint16_t mode) {
 
 bool valid_trigger_target(uint8_t target) {
     return target <= kTriggerTargetRight;
+}
+
+bool valid_button_remap_payload(uint8_t const *payload, uint16_t len) {
+    if (payload == nullptr || len < RemapButtonCount) {
+        return false;
+    }
+    for (uint8_t i = 0; i < RemapButtonCount; i++) {
+        if (payload[i] >= RemapButtonCount) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool schedule_adaptive_trigger_test(uint8_t mode, uint8_t target) {
@@ -929,6 +987,16 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetButtonRemap:
+            if (value != 0 || !valid_button_remap_payload(buffer + 10, bufsize - 10)) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            memcpy(button_remap, buffer + 10, RemapButtonCount);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandSetPollingRateMode:
             if (value > 2 || !usb_set_hid_polling_rate_mode(static_cast<uint8_t>(value))) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -1096,6 +1164,100 @@ void process_shortcut_bindings(uint8_t *report) {
     }
 }
 
+bool dpad_direction_has(uint8_t direction, RemapButton button) {
+    switch (button) {
+        case RemapDpadUp:
+            return direction == kDpadUp || direction == kDpadUpRight || direction == kDpadUpLeft;
+        case RemapDpadRight:
+            return direction == kDpadRight || direction == kDpadUpRight || direction == kDpadDownRight;
+        case RemapDpadDown:
+            return direction == kDpadDown || direction == kDpadDownRight || direction == kDpadDownLeft;
+        case RemapDpadLeft:
+            return direction == kDpadLeft || direction == kDpadUpLeft || direction == kDpadDownLeft;
+        default:
+            return false;
+    }
+}
+
+uint8_t dpad_direction_from_buttons(bool up, bool right, bool down, bool left) {
+    if (up && right && !down && !left) return kDpadUpRight;
+    if (right && down && !up && !left) return kDpadDownRight;
+    if (down && left && !up && !right) return kDpadDownLeft;
+    if (left && up && !right && !down) return kDpadUpLeft;
+    if (up && !down) return kDpadUp;
+    if (right && !left) return kDpadRight;
+    if (down && !up) return kDpadDown;
+    if (left && !right) return kDpadLeft;
+    return kDpadNeutral;
+}
+
+void apply_button_remap(uint8_t *report, uint16_t len) {
+    if (report == nullptr || len <= 8) {
+        return;
+    }
+
+    bool source_pressed[RemapButtonCount]{};
+    uint8_t source_analog[RemapButtonCount]{};
+    const uint8_t dpad_direction = report[7] & kDpadMask;
+
+    source_pressed[RemapL2] = (report[8] & kL2ButtonBit) != 0;
+    source_pressed[RemapL1] = (report[8] & kL1ButtonBit) != 0;
+    source_pressed[RemapCreate] = (report[8] & kCreateButtonBit) != 0;
+    source_pressed[RemapDpadUp] = dpad_direction_has(dpad_direction, RemapDpadUp);
+    source_pressed[RemapDpadLeft] = dpad_direction_has(dpad_direction, RemapDpadLeft);
+    source_pressed[RemapDpadDown] = dpad_direction_has(dpad_direction, RemapDpadDown);
+    source_pressed[RemapDpadRight] = dpad_direction_has(dpad_direction, RemapDpadRight);
+    source_pressed[RemapL3] = (report[8] & kL3ButtonBit) != 0;
+    source_pressed[RemapR2] = (report[8] & kR2ButtonBit) != 0;
+    source_pressed[RemapR1] = (report[8] & kR1ButtonBit) != 0;
+    source_pressed[RemapOptions] = (report[8] & kOptionsButtonBit) != 0;
+    source_pressed[RemapTriangle] = (report[7] & kTriangleButtonBit) != 0;
+    source_pressed[RemapCircle] = (report[7] & kCircleButtonBit) != 0;
+    source_pressed[RemapCross] = (report[7] & kCrossButtonBit) != 0;
+    source_pressed[RemapSquare] = (report[7] & kSquareButtonBit) != 0;
+    source_pressed[RemapR3] = (report[8] & kR3ButtonBit) != 0;
+
+    for (uint8_t i = 0; i < RemapButtonCount; i++) {
+        source_analog[i] = source_pressed[i] ? 0xFF : 0;
+    }
+    source_analog[RemapL2] = report[4];
+    source_analog[RemapR2] = report[5];
+
+    bool target_pressed[RemapButtonCount]{};
+    uint8_t target_analog[RemapButtonCount]{};
+    for (uint8_t source = 0; source < RemapButtonCount; source++) {
+        const uint8_t target = button_remap[source];
+        if (source_pressed[source]) {
+            target_pressed[target] = true;
+        }
+        target_analog[target] = std::max(target_analog[target], source_analog[source]);
+    }
+
+    report[4] = target_analog[RemapL2];
+    report[5] = target_analog[RemapR2];
+    report[7] &= static_cast<uint8_t>(~(kDpadMask | kSquareButtonBit | kCrossButtonBit | kCircleButtonBit | kTriangleButtonBit));
+    report[7] |= dpad_direction_from_buttons(
+        target_pressed[RemapDpadUp],
+        target_pressed[RemapDpadRight],
+        target_pressed[RemapDpadDown],
+        target_pressed[RemapDpadLeft]
+    );
+    if (target_pressed[RemapSquare]) report[7] |= kSquareButtonBit;
+    if (target_pressed[RemapCross]) report[7] |= kCrossButtonBit;
+    if (target_pressed[RemapCircle]) report[7] |= kCircleButtonBit;
+    if (target_pressed[RemapTriangle]) report[7] |= kTriangleButtonBit;
+
+    report[8] = 0;
+    if (target_pressed[RemapL1]) report[8] |= kL1ButtonBit;
+    if (target_pressed[RemapR1]) report[8] |= kR1ButtonBit;
+    if (target_pressed[RemapL2]) report[8] |= kL2ButtonBit;
+    if (target_pressed[RemapR2]) report[8] |= kR2ButtonBit;
+    if (target_pressed[RemapCreate]) report[8] |= kCreateButtonBit;
+    if (target_pressed[RemapOptions]) report[8] |= kOptionsButtonBit;
+    if (target_pressed[RemapL3]) report[8] |= kL3ButtonBit;
+    if (target_pressed[RemapR3]) report[8] |= kR3ButtonBit;
+}
+
 } // namespace
 
 void companion_init() {
@@ -1146,6 +1308,7 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     }
 
     mute_button_last_pressed = pressed;
+    apply_button_remap(report, len);
 }
 
 void companion_update_controller_report(uint8_t const *report, uint16_t len) {

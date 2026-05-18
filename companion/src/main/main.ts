@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { BridgeService } from './bridge-service';
 import { SettingsStore } from './settings-store';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
+import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
 
 const APP_NAME = 'DS5 Bridge';
@@ -453,6 +453,25 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:resetAdaptiveTriggers', () => service.resetAdaptiveTriggers());
   ipcMain.handle('bridge:restoreDefaults', () => service.restoreDefaults());
+  ipcMain.handle('bridge:setButtonRemap', (_event, buttonId: RemapButtonId, targetId: RemapButtonId) => (
+    service.setButtonRemap(buttonId, targetId)
+  ));
+  ipcMain.handle('bridge:selectButtonRemappingProfile', (_event, profileId: string) => (
+    service.selectButtonRemappingProfile(profileId)
+  ));
+  ipcMain.handle('bridge:saveButtonRemappingProfile', (_event, name?: string) => (
+    service.saveButtonRemappingProfile(name)
+  ));
+  ipcMain.handle('bridge:updateButtonRemappingProfile', (_event, profileId: string) => (
+    service.updateButtonRemappingProfile(profileId)
+  ));
+  ipcMain.handle('bridge:renameButtonRemappingProfile', (_event, profileId: string, name: string) => (
+    service.renameButtonRemappingProfile(profileId, name)
+  ));
+  ipcMain.handle('bridge:deleteButtonRemappingProfile', (_event, profileId: string) => (
+    service.deleteButtonRemappingProfile(profileId)
+  ));
+  ipcMain.handle('bridge:restoreButtonRemappingDefaults', () => service.restoreButtonRemappingDefaults());
   ipcMain.handle('bridge:getDiagnostics', () => service.getSnapshot().diagnostics);
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:toggleMaximize', () => {

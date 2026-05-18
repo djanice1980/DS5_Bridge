@@ -3,6 +3,7 @@ import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
   COMMAND_ID,
+  DEFAULT_BUTTON_REMAP_PROFILE,
   HOST_AUDIO_COMPACT_FRAME_LENGTH,
   HOST_AUDIO_FAST_FRAME_CHUNK_COUNT,
   HOST_AUDIO_FAST_PAYLOAD_LENGTH,
@@ -12,6 +13,7 @@ import {
   HOST_AUDIO_REPORT_FRAME_LENGTH,
   MAGIC,
   REPORT_ID,
+  buildButtonRemapPayload,
   buildCommandReport,
   buildHostAudioFastFrameReports,
   buildHostAudioFrameChunkReports,
@@ -204,6 +206,17 @@ describe('companion protocol', () => {
     expect(report[7]).toBe(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT);
     expect(report[8]).toBe(6);
     expect(report[9]).toBe(15);
+  });
+
+  it('builds a button remap command payload', () => {
+    const payload = buildButtonRemapPayload({
+      ...DEFAULT_BUTTON_REMAP_PROFILE.mappings,
+      cross: 'circle'
+    });
+    const report = buildCommandReport(COMMAND_ID.SET_BUTTON_REMAP, 7, 0, payload);
+    expect(payload).toHaveLength(16);
+    expect(report[7]).toBe(COMMAND_ID.SET_BUTTON_REMAP);
+    expect(report[11 + 13]).toBe(12);
   });
 
   it('builds sleep controller command reports', () => {

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from './shared/protocol';
+import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from './shared/protocol';
 import type { BridgeDiagnostics, BridgeSnapshot } from './shared/types';
 
 const api = {
@@ -84,6 +84,27 @@ const api = {
   ),
   resetAdaptiveTriggers: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:resetAdaptiveTriggers'),
   restoreDefaults: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:restoreDefaults'),
+  setButtonRemap: (buttonId: RemapButtonId, targetId: RemapButtonId): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setButtonRemap', buttonId, targetId)
+  ),
+  selectButtonRemappingProfile: (profileId: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:selectButtonRemappingProfile', profileId)
+  ),
+  saveButtonRemappingProfile: (name?: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:saveButtonRemappingProfile', name)
+  ),
+  updateButtonRemappingProfile: (profileId: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:updateButtonRemappingProfile', profileId)
+  ),
+  renameButtonRemappingProfile: (profileId: string, name: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:renameButtonRemappingProfile', profileId, name)
+  ),
+  deleteButtonRemappingProfile: (profileId: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:deleteButtonRemappingProfile', profileId)
+  ),
+  restoreButtonRemappingDefaults: (): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:restoreButtonRemappingDefaults')
+  ),
   getDiagnostics: (): Promise<BridgeDiagnostics> => ipcRenderer.invoke('bridge:getDiagnostics'),
   minimizeWindow: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
   toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke('window:toggleMaximize'),
