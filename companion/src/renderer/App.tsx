@@ -1,6 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  type LucideIcon,
   Activity,
   ArrowRight,
   BatteryFull,
@@ -8,9 +7,7 @@ import {
   Check,
   ChevronDown,
   Copy,
-  Gamepad2,
   Headphones,
-  House,
   Keyboard,
   Mic,
   Minus,
@@ -32,6 +29,16 @@ import {
   X,
   Zap
 } from 'lucide-react';
+import {
+  type TablerIcon,
+  IconBolt,
+  IconBulb,
+  IconCpu,
+  IconDeviceGamepad3,
+  IconLayoutDashboard,
+  IconRipple,
+  IconVolume
+} from '@tabler/icons-react';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
 import remappingLayoutImage from '../../../assets/controllers/dualsense-remapping-layout.svg';
@@ -262,14 +269,14 @@ const REMAP_CALLOUT_Y: Record<RemapButtonId, number> = {
   square: 366.39,
   r3: 426.93
 };
-const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: LucideIcon }> = [
-  { id: 'overview', label: 'Overview', Icon: House },
-  { id: 'audio', label: 'Audio', Icon: Volume2 },
-  { id: 'haptics', label: 'Haptics', Icon: Sparkles },
-  { id: 'triggers', label: 'Triggers', Icon: Zap },
-  { id: 'lighting', label: 'Lighting', Icon: Palette },
-  { id: 'remapping', label: 'Button Remapping', Icon: Gamepad2 },
-  { id: 'system', label: 'System', Icon: Settings2 }
+const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: TablerIcon }> = [
+  { id: 'overview', label: 'Overview', Icon: IconLayoutDashboard },
+  { id: 'audio', label: 'Audio', Icon: IconVolume },
+  { id: 'haptics', label: 'Haptics', Icon: IconRipple },
+  { id: 'triggers', label: 'Triggers', Icon: IconBolt },
+  { id: 'lighting', label: 'Lighting', Icon: IconBulb },
+  { id: 'remapping', label: 'Button Remapping', Icon: IconDeviceGamepad3 },
+  { id: 'system', label: 'System', Icon: IconCpu }
 ];
 
 type SelectValue = string | number;
@@ -2580,7 +2587,7 @@ export function App() {
                   className={activeControlTab === id ? 'active' : ''}
                   onClick={() => selectControlTab(id)}
                 >
-                  <Icon size={16} />
+                  <Icon size={18} stroke={2} />
                   {label}
                 </button>
               ))}
