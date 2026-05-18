@@ -2,10 +2,12 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import {
   type LucideIcon,
   Activity,
+  BatteryFull,
   Bell,
   Check,
   ChevronDown,
   Headphones,
+  House,
   Keyboard,
   Mic,
   Minus,
@@ -14,6 +16,7 @@ import {
   Palette,
   Play,
   RefreshCcw,
+  Settings as SettingsIcon,
   Settings2,
   SlidersHorizontal,
   Sparkles,
@@ -34,7 +37,7 @@ import { ackResultName } from '../shared/protocol';
 import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
 import type { BridgeSnapshot } from '../shared/types';
 
-type ControlTab = 'haptics' | 'audio' | 'triggers' | 'lighting' | 'system';
+type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'system';
 type LightbarPaletteCell = {
   color: string;
   name: string;
@@ -159,8 +162,9 @@ const IDLE_DISCONNECT_TIMEOUT_OPTIONS: Array<[string, number]> = [
   ['30 min', 30]
 ];
 const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: LucideIcon }> = [
-  { id: 'haptics', label: 'Haptics', Icon: Sparkles },
+  { id: 'overview', label: 'Overview', Icon: House },
   { id: 'audio', label: 'Audio', Icon: Volume2 },
+  { id: 'haptics', label: 'Haptics', Icon: Sparkles },
   { id: 'triggers', label: 'Triggers', Icon: Zap },
   { id: 'lighting', label: 'Lighting', Icon: Palette },
   { id: 'system', label: 'System', Icon: Settings2 }
@@ -879,7 +883,7 @@ function UptimeValue({
 export function App() {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [activeControlTab, setActiveControlTab] = useState<ControlTab>('haptics');
+  const [activeControlTab, setActiveControlTab] = useState<ControlTab>('overview');
   const [hapticsValue, setHapticsValue] = useState(100);
   const [classicRumbleValue, setClassicRumbleValue] = useState(100);
   const [speakerVolumeValue, setSpeakerVolumeValue] = useState(100);
@@ -921,7 +925,6 @@ export function App() {
   const micVolumeEditingRef = useRef(false);
   const lightbarBrightnessEditingRef = useRef(false);
   const triggerEffectEditingRef = useRef(false);
-  const bridgeSettingsRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
   const customColorPickerRef = useRef<HTMLDivElement>(null);
   const customSwatchPrimeTimerRef = useRef<number | null>(null);
@@ -997,9 +1000,6 @@ export function App() {
     }
 
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (showBridgeSettings && !bridgeSettingsRef.current?.contains(event.target as Node)) {
-        setShowBridgeSettings(false);
-      }
       if (showNotificationsMenu && !notificationsRef.current?.contains(event.target as Node)) {
         setShowNotificationsMenu(false);
       }
@@ -1255,8 +1255,48 @@ export function App() {
   const activeAudioTestLocked = showMicrophoneControl ? micTestLocked : speakerTestLocked;
   const activeAudioTestStatusLabel = showMicrophoneControl ? micTestStatusLabel : speakerStatusLabel;
   const activeAudioTestStatusTone = showMicrophoneControl ? micTestStatusTone : speakerStatusTone;
-  const heroBridgeLabel = 'DS5 Bridge';
-  const heroReadinessLabel = connected && !snapshot.diagnostics.lastError ? 'Ready' : 'DS5 Bridge not detected';
+  const sidebarDeviceTitle = connected && controllerConnected
+    ? controllerName(snapshot.status?.controllerType)
+    : 'Controller';
+  const sidebarDeviceStatus = connected && controllerConnected
+    ? 'Connected'
+    : 'Bridge not detected';
+  const sidebarBatteryLabel = connected && controllerConnected
+    ? `Battery ${batteryPercentLabel}`
+    : 'Battery unavailable';
+  const selectedPresetLabel = BRIDGE_PRESET_OPTIONS.find(([, id]) => id === snapshot?.settings.selectedPresetId)?.[0] ?? 'Custom';
+  const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
+    .replace(' / Real-time', '')
+    ?? '--';
+  const overviewHealthLabel = healthLabel(snapshot);
+  const overviewHealthTone = snapshot?.diagnostics.lastError
+    ? 'bad'
+    : connected && controllerConnected
+      ? 'good'
+      : connected
+        ? 'warn'
+        : 'idle';
+  const overviewConnectionStatus = connected && controllerConnected
+    ? 'Stable'
+    : connected
+      ? 'Waiting'
+      : 'Offline';
+  const overviewBatteryState = connected && controllerConnected
+    ? batteryCharging
+      ? 'Charging'
+      : batteryPercent >= 95
+        ? 'Full'
+        : batteryPercent <= 20
+          ? 'Low'
+          : 'Good'
+    : 'Unavailable';
+  const overviewBatteryCharging = connected && controllerConnected
+    ? batteryCharging ? 'Yes' : 'No'
+    : '--';
+  const overviewAudioOutputLabel = headsetOutputDetected ? 'Headset' : 'Speaker';
+  const overviewAudioOutputValue = `${speakerVolumeValue}%`;
+  const overviewMicValue = `${micVolumeValue}%`;
+  const overviewFirmwareLabel = snapshot?.status?.firmwareVersion ?? '--';
   const testTriggersUnavailable = !connected
     || !adaptiveTriggersSupported
     || !adaptiveTriggersEnabled
@@ -2111,181 +2151,174 @@ export function App() {
 
       <main className="app-content">
         <section className={`hero-card status-${statusTone}`}>
-          <div className="hero-actions">
-            <div className="header-settings" ref={bridgeSettingsRef}>
-              <button
-                className={`icon-button ${showBridgeSettings ? 'active' : ''}`}
-                type="button"
-                title="Bridge settings"
-                aria-haspopup="menu"
-                aria-expanded={showBridgeSettings}
-                onClick={() => setShowBridgeSettings((value) => !value)}
-              >
-                <MoreHorizontal size={22} />
-              </button>
-              {showBridgeSettings && (
-                <div className="settings-menu" role="menu" aria-label="Bridge settings">
-                  <div className="settings-menu-heading">
-                    <Settings2 size={16} />
-                    <span>Bridge Settings</span>
-                  </div>
-                  <div className="settings-menu-row">
-                    <div className="settings-menu-copy">
-                      <strong>Pico LED</strong>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={snapshot.settings.ledEnabled}
-                      className={`switch ${snapshot.settings.ledEnabled ? 'on' : ''}`}
-                      disabled={!connected}
-                      onClick={() => void runAction('led', () => window.bridge.setLedEnabled(!snapshot.settings.ledEnabled))}
-                    >
-                      <span />
-                    </button>
-                  </div>
-                  <div className="settings-menu-row">
-                    <div className="settings-menu-copy">
-                      <strong>Idle Disconnect</strong>
-                    </div>
-                    <div className="settings-menu-controls">
-                      <CustomSelect
-                        value={snapshot.settings.idleDisconnectTimeoutMinutes}
-                        options={IDLE_DISCONNECT_TIMEOUT_OPTIONS}
-                        className="settings-timeout-select"
-                        showSelectedCheck={false}
-                        ariaLabel="Idle disconnect timeout"
-                        disabled={!connected || !snapshot.settings.idleDisconnectEnabled}
-                        onChange={(value) => {
-                          void runAction('idle-timeout', () => window.bridge.setIdleDisconnectTimeoutMinutes(value));
-                        }}
-                      />
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={snapshot.settings.idleDisconnectEnabled}
-                        className={`switch ${snapshot.settings.idleDisconnectEnabled ? 'on' : ''}`}
-                        disabled={!connected}
-                        onClick={() => void runAction('idle', () => (
-                          window.bridge.setIdleDisconnectEnabled(!snapshot.settings.idleDisconnectEnabled)
-                        ))}
-                      >
-                        <span />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="settings-menu-row">
-                    <div className="settings-menu-copy">
-                      <strong>PC Sleep Disconnect</strong>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={snapshot.settings.usbSuspendDisconnectEnabled}
-                      className={`switch ${snapshot.settings.usbSuspendDisconnectEnabled ? 'on' : ''}`}
-                      disabled={!connected || !usbSuspendDisconnectSupported}
-                      onClick={() => void runAction('usb-suspend', () => (
-                        window.bridge.setUsbSuspendDisconnectEnabled(!snapshot.settings.usbSuspendDisconnectEnabled)
-                      ))}
-                    >
-                      <span />
-                    </button>
-                  </div>
-                  <div className="settings-menu-row">
-                    <div className="settings-menu-copy settings-menu-copy-tooltip">
-                      <strong>Volume Shortcut</strong>
-                      <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
-                        <span>Controller volume up/down with</span>
-                        <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
-                          <span className="shortcut-glyph-key">
-                            <img src={psHomeGlyphUrl} alt="PlayStation Home" />
-                          </span>
-                          <span className="shortcut-plus" aria-hidden="true">+</span>
-                          <span className="shortcut-glyph-pair">
-                            <span className="shortcut-glyph-key">
-                              <img src={dpadUpGlyphUrl} alt="D-pad Up" />
-                            </span>
-                            <span className="shortcut-glyph-key">
-                              <img src={dpadDownGlyphUrl} alt="D-pad Down" />
-                            </span>
-                          </span>
-                        </span>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={snapshot.settings.speakerVolumeShortcutEnabled}
-                      className={`switch ${snapshot.settings.speakerVolumeShortcutEnabled ? 'on' : ''}`}
-                      disabled={!connected}
-                      onClick={() => void runAction('volume-shortcut', () => (
-                        window.bridge.setSpeakerVolumeShortcutEnabled(!snapshot.settings.speakerVolumeShortcutEnabled)
-                      ))}
-                    >
-                      <span />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          <div className="sidebar-section-label">Device</div>
           <div className="hero-main">
             <img className="controller-art" src={controllerImage} alt="" />
             <div className="status-copy">
               <div className="connection-row">
-                <strong>{connected ? (controllerConnected ? controllerName(snapshot.status?.controllerType) : 'No Controller') : 'Controller'}</strong>
+                <strong>{sidebarDeviceTitle}</strong>
               </div>
-              <div className="bridge-state">
-                <span>{heroBridgeLabel}</span>
+              <div className="bridge-state compact-device-status">
+                <span className={`dot ${connected && controllerConnected ? 'good' : connected ? 'warn' : ''}`} />
+                <span>{sidebarDeviceStatus}</span>
               </div>
-              <div className="battery-row">
-                <span
-                  className={`battery-icon ${batteryLevelTone} ${batteryCharging ? 'charging' : ''}`}
-                  aria-hidden="true"
-                >
-                  {[0, 1, 2].map((segment) => (
-                    <span
-                      key={segment}
-                      className={[
-                        segment < batterySegmentCount ? 'active' : '',
-                        segment === batteryChargingSegment ? 'charging-segment' : '',
-                        segment === 0 && batteryCritical ? 'critical-segment' : ''
-                      ].filter(Boolean).join(' ')}
-                    />
-                  ))}
-                </span>
-                <strong>{connected ? batteryPercentLabel : '--'}</strong>
-                <span>{heroReadinessLabel}</span>
-              </div>
-              <div
-                className={`battery-track ${batteryLevelTone} ${batteryCharging ? 'charging' : ''}`}
-                style={{ '--battery-scale': connected ? batteryPercent / 100 : 0 } as CSSProperties}
-              >
-                <div />
+              <div className="battery-row compact-battery-row">
+                {connected && controllerConnected && (
+                  <span
+                    className={`battery-icon ${batteryLevelTone} ${batteryCharging ? 'charging' : ''}`}
+                    aria-hidden="true"
+                  >
+                    {[0, 1, 2].map((segment) => (
+                      <span
+                        key={segment}
+                        className={[
+                          segment < batterySegmentCount ? 'active' : '',
+                          segment === batteryChargingSegment ? 'charging-segment' : '',
+                          segment === 0 && batteryCritical ? 'critical-segment' : ''
+                        ].filter(Boolean).join(' ')}
+                      />
+                    ))}
+                  </span>
+                )}
+                <span>{sidebarBatteryLabel}</span>
               </div>
             </div>
           </div>
-          <div className="control-tabs" role="tablist" aria-label="Controls">
-            {CONTROL_TABS.map(({ id, label, Icon }) => (
+          <div className="sidebar-section-label">Controls</div>
+          <div className="sidebar-controls">
+            <div className="control-tabs" role="tablist" aria-label="Controls">
+              {CONTROL_TABS.map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  id={`control-tab-${id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeControlTab === id}
+                  aria-controls={`control-panel-${id}`}
+                  className={activeControlTab === id ? 'active' : ''}
+                  onClick={() => selectControlTab(id)}
+                >
+                  <Icon size={16} />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="sidebar-actions">
+            <button className="sidebar-action-button" type="button">
+              <MoreHorizontal size={18} />
+              <span>More</span>
+            </button>
+            <div className="header-settings">
               <button
-                key={id}
-                id={`control-tab-${id}`}
+                className={`sidebar-action-button ${showBridgeSettings ? 'active' : ''}`}
                 type="button"
-                role="tab"
-                aria-selected={activeControlTab === id}
-                aria-controls={`control-panel-${id}`}
-                className={activeControlTab === id ? 'active' : ''}
-                onClick={() => selectControlTab(id)}
+                aria-haspopup="dialog"
+                aria-expanded={showBridgeSettings}
+                onClick={() => setShowBridgeSettings((value) => !value)}
               >
-                <Icon size={16} />
-                {label}
+                <SettingsIcon size={18} />
+                <span>Settings</span>
               </button>
-            ))}
+            </div>
           </div>
         </section>
 
       <section className="control-panel flat-control-panel">
         <div className="control-pages">
+          <div
+            className="control-page overview-page"
+            role="tabpanel"
+            id="control-panel-overview"
+            aria-labelledby="control-tab-overview"
+            hidden={activeControlTab !== 'overview'}
+          >
+            <div className="feature-heading overview-heading">
+              <div>
+                <h2>Overview</h2>
+                <p>At-a-glance status of your controller and active settings.</p>
+              </div>
+              <span className={`overview-health health-label ${overviewHealthTone}`}>
+                <span className={`dot ${overviewHealthTone}`} />
+                {overviewHealthLabel}
+              </span>
+            </div>
+
+            <div className="overview-card-grid">
+              <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
+                <div className="overview-card-title">
+                  <span className="feature-icon overview-icon"><Activity size={19} /></span>
+                  <h3>Connection</h3>
+                </div>
+                <div className="overview-fields">
+                  <div>
+                    <span>USB</span>
+                    <strong className={overviewConnectionStatus === 'Stable' ? 'success-value' : ''}>
+                      {overviewConnectionStatus}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Polling Rate</span>
+                    <strong>{connected && pollingRateControlSupported ? pollingRateLabel : '--'}</strong>
+                  </div>
+                </div>
+              </button>
+
+              <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
+                <div className="overview-card-title">
+                  <span className="feature-icon overview-icon battery-overview-icon"><BatteryFull size={19} /></span>
+                  <h3>Battery</h3>
+                </div>
+                <div className="overview-fields">
+                  <div>
+                    <span>{connected && controllerConnected ? batteryPercentLabel : '--'}</span>
+                    <strong className={overviewBatteryState === 'Full' || overviewBatteryState === 'Good' ? 'success-value' : ''}>
+                      {overviewBatteryState}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Charging</span>
+                    <strong>{overviewBatteryCharging}</strong>
+                  </div>
+                </div>
+              </button>
+
+              <button className="overview-card" type="button" onClick={() => selectControlTab('audio')}>
+                <div className="overview-card-title">
+                  <span className="feature-icon overview-icon"><Volume2 size={19} /></span>
+                  <h3>Audio</h3>
+                </div>
+                <div className="overview-fields">
+                  <div>
+                    <span>{overviewAudioOutputLabel}</span>
+                    <strong>{overviewAudioOutputValue}</strong>
+                  </div>
+                  <div>
+                    <span>Microphone</span>
+                    <strong>{overviewMicValue}</strong>
+                  </div>
+                </div>
+              </button>
+
+              <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
+                <div className="overview-card-title">
+                  <span className="feature-icon overview-icon"><Settings2 size={19} /></span>
+                  <h3>Device Status</h3>
+                </div>
+                <div className="overview-fields">
+                  <div>
+                    <span>Profile</span>
+                    <strong>{selectedPresetLabel}</strong>
+                  </div>
+                  <div>
+                    <span>Firmware</span>
+                    <strong>{overviewFirmwareLabel}</strong>
+                  </div>
+                </div>
+              </button>
+            </div>
+          </div>
+
           <div
             className="control-page haptics-page"
             role="tabpanel"
@@ -3346,6 +3379,133 @@ export function App() {
         </div>
       </section>
       </main>
+
+      {showBridgeSettings && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={() => setShowBridgeSettings(false)}
+        >
+          <div
+            className="settings-menu bridge-settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Bridge settings"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                <SettingsIcon size={16} />
+                <span>Bridge Settings</span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close bridge settings"
+                onClick={() => setShowBridgeSettings(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="settings-menu-row">
+              <div className="settings-menu-copy">
+                <strong>Pico LED</strong>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={snapshot.settings.ledEnabled}
+                className={`switch ${snapshot.settings.ledEnabled ? 'on' : ''}`}
+                disabled={!connected}
+                onClick={() => void runAction('led', () => window.bridge.setLedEnabled(!snapshot.settings.ledEnabled))}
+              >
+                <span />
+              </button>
+            </div>
+            <div className="settings-menu-row">
+              <div className="settings-menu-copy">
+                <strong>Idle Disconnect</strong>
+              </div>
+              <div className="settings-menu-controls">
+                <CustomSelect
+                  value={snapshot.settings.idleDisconnectTimeoutMinutes}
+                  options={IDLE_DISCONNECT_TIMEOUT_OPTIONS}
+                  className="settings-timeout-select"
+                  showSelectedCheck={false}
+                  ariaLabel="Idle disconnect timeout"
+                  disabled={!connected || !snapshot.settings.idleDisconnectEnabled}
+                  onChange={(value) => {
+                    void runAction('idle-timeout', () => window.bridge.setIdleDisconnectTimeoutMinutes(value));
+                  }}
+                />
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={snapshot.settings.idleDisconnectEnabled}
+                  className={`switch ${snapshot.settings.idleDisconnectEnabled ? 'on' : ''}`}
+                  disabled={!connected}
+                  onClick={() => void runAction('idle', () => (
+                    window.bridge.setIdleDisconnectEnabled(!snapshot.settings.idleDisconnectEnabled)
+                  ))}
+                >
+                  <span />
+                </button>
+              </div>
+            </div>
+            <div className="settings-menu-row">
+              <div className="settings-menu-copy">
+                <strong>PC Sleep Disconnect</strong>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={snapshot.settings.usbSuspendDisconnectEnabled}
+                className={`switch ${snapshot.settings.usbSuspendDisconnectEnabled ? 'on' : ''}`}
+                disabled={!connected || !usbSuspendDisconnectSupported}
+                onClick={() => void runAction('usb-suspend', () => (
+                  window.bridge.setUsbSuspendDisconnectEnabled(!snapshot.settings.usbSuspendDisconnectEnabled)
+                ))}
+              >
+                <span />
+              </button>
+            </div>
+            <div className="settings-menu-row">
+              <div className="settings-menu-copy settings-menu-copy-tooltip">
+                <strong>Volume Shortcut</strong>
+                <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
+                  <span>Controller volume up/down with</span>
+                  <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
+                    <span className="shortcut-glyph-key">
+                      <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                    </span>
+                    <span className="shortcut-plus" aria-hidden="true">+</span>
+                    <span className="shortcut-glyph-pair">
+                      <span className="shortcut-glyph-key">
+                        <img src={dpadUpGlyphUrl} alt="D-pad Up" />
+                      </span>
+                      <span className="shortcut-glyph-key">
+                        <img src={dpadDownGlyphUrl} alt="D-pad Down" />
+                      </span>
+                    </span>
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={snapshot.settings.speakerVolumeShortcutEnabled}
+                className={`switch ${snapshot.settings.speakerVolumeShortcutEnabled ? 'on' : ''}`}
+                disabled={!connected}
+                onClick={() => void runAction('volume-shortcut', () => (
+                  window.bridge.setSpeakerVolumeShortcutEnabled(!snapshot.settings.speakerVolumeShortcutEnabled)
+                ))}
+              >
+                <span />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

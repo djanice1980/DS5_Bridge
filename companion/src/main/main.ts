@@ -59,10 +59,10 @@ async function createTrayIcon(): Promise<Electron.NativeImage> {
 
 function createWindow(): BrowserWindow {
   const window = new BrowserWindow({
-    width: 900,
-    height: 680,
-    minWidth: 900,
-    minHeight: 680,
+    width: 1120,
+    height: 630,
+    minWidth: 1120,
+    minHeight: 630,
     show: false,
     title: 'DS5 Bridge',
     frame: false,
