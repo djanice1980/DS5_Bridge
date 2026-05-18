@@ -86,7 +86,14 @@ const api = {
   restoreDefaults: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:restoreDefaults'),
   getDiagnostics: (): Promise<BridgeDiagnostics> => ipcRenderer.invoke('bridge:getDiagnostics'),
   minimizeWindow: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
+  toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke('window:toggleMaximize'),
+  isWindowMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
   hideWindow: (): Promise<void> => ipcRenderer.invoke('window:hide'),
+  onWindowMaximizedChange: (callback: (maximized: boolean) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, maximized: boolean) => callback(maximized);
+    ipcRenderer.on('window:maximizedChanged', listener);
+    return () => ipcRenderer.removeListener('window:maximizedChanged', listener);
+  },
   onSnapshot: (callback: (snapshot: BridgeSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, snapshot: BridgeSnapshot) => callback(snapshot);
     ipcRenderer.on('bridge:snapshot', listener);

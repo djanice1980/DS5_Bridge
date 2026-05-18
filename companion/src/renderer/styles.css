@@ -4,19 +4,19 @@
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   line-height: 1.35;
   font-weight: 400;
-  --window-bar-height: 52px;
+  --window-bar-height: 32px;
   --app-content-width: none;
   --app-content-gutter: 0px;
   --sidebar-width: 276px;
   --layout-gap: 0px;
-  --card-gap: 16px;
+  --card-gap: 12px;
   --card-radius: 4px;
   --control-radius: 3px;
-  --card-padding: 18px;
+  --card-padding: 16px;
   --feature-left-column: minmax(0, 1fr);
   --feature-right-column: minmax(0, 1fr);
   --feature-card-min-height: 250px;
-  --feature-card-height: 390px;
+  --feature-card-height: 370px;
   --feature-card-header-height: 66px;
   --dual-selector-segment-width: 92px;
   --control-height: 36px;
@@ -72,7 +72,7 @@ button {
   align-items: center;
   justify-content: space-between;
   height: var(--window-bar-height);
-  padding: 0 18px 0 16px;
+  padding: 0 0 0 16px;
   color: #eef4ff;
   border-bottom: 1px solid rgba(144, 166, 197, 0.12);
   background:
@@ -92,7 +92,7 @@ button {
 }
 
 .bridge-mark {
-  width: 22px;
+  width: 18px;
   height: auto;
   object-fit: contain;
   flex: 0 0 auto;
@@ -100,12 +100,12 @@ button {
 
 .bridge-wordmark-ds {
   margin-left: 2px;
-  font-size: 19px;
+  font-size: 17px;
   font-weight: 600;
 }
 
 .bridge-wordmark-name {
-  font-size: 19px;
+  font-size: 17px;
   font-weight: 350;
 }
 
@@ -121,11 +121,11 @@ button {
 }
 
 .topbar-right {
-  gap: 12px;
+  gap: 10px;
 }
 
 .bridge-tools {
-  gap: 9px;
+  gap: 8px;
 }
 
 .bridge-tool-divider {
@@ -137,14 +137,14 @@ button {
 
 .window-actions {
   position: relative;
-  padding-left: 13px;
-  gap: 8px;
+  padding-left: 0;
+  gap: 0;
 }
 
 .window-actions::before {
   content: "";
   position: absolute;
-  left: 0;
+  left: -10px;
   top: 50%;
   width: 1px;
   height: 16px;
@@ -154,10 +154,10 @@ button {
 }
 
 .window-actions button {
-  width: 40px;
-  height: 36px;
+  width: 46px;
+  height: var(--window-bar-height);
   border: 0;
-  border-radius: var(--control-radius);
+  border-radius: 0;
   display: grid;
   place-items: center;
   color: #c6cfdd;
@@ -171,8 +171,8 @@ button {
 
 .topbar-tool {
   position: relative;
-  width: 40px;
-  height: 36px;
+  width: 36px;
+  height: 30px;
   border: 1px solid rgba(142, 164, 194, 0.26);
   border-radius: var(--control-radius);
   display: grid;
@@ -228,7 +228,7 @@ button {
 }
 
 .app-content {
-  width: 100vw;
+  width: 100%;
   height: 100%;
   min-height: 0;
   margin: 0;
@@ -576,7 +576,7 @@ button {
 }
 
 .topbar-sleep-button {
-  height: 36px;
+  height: 30px;
   padding: 0 2px;
   border: 0;
   display: inline-flex;
@@ -1111,7 +1111,7 @@ button {
 .control-panel.flat-control-panel {
   height: 100%;
   align-self: stretch;
-  padding: 36px 30px;
+  padding: 26px 22px;
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -1177,6 +1177,7 @@ button {
 }
 
 .overview-card-grid {
+  width: min(100%, 800px);
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--card-gap);
@@ -1184,6 +1185,7 @@ button {
 
 .overview-card {
   min-width: 0;
+  aspect-ratio: 191 / 142;
   min-height: 142px;
   padding: 18px 16px;
   border: 1px solid rgba(142, 164, 194, 0.2);
@@ -3166,27 +3168,5 @@ input[type="color"]::-webkit-color-swatch {
 
 .quiet-state.active {
   color: #ff8a8a;
-}
-
-@media (max-width: 1180px) {
-  :root {
-    --sidebar-width: 252px;
-    --feature-card-height: 370px;
-    --card-padding: 16px;
-  }
-
-  .hero-card {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-
-  .control-panel,
-  .control-panel.flat-control-panel {
-    padding: 26px 22px;
-  }
-
-  .feature-card-grid {
-    gap: 12px;
-  }
 }
 

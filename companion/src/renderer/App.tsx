@@ -7,6 +7,7 @@ import {
   Bell,
   Check,
   ChevronDown,
+  Copy,
   Gamepad2,
   Headphones,
   House,
@@ -20,6 +21,7 @@ import {
   Settings as SettingsIcon,
   Settings2,
   SlidersHorizontal,
+  Square as SquareIcon,
   Sparkles,
   Vibrate,
   Volume2,
@@ -1046,6 +1048,7 @@ export function App() {
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
+  const [windowMaximized, setWindowMaximized] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
   const [speakerOutputAvailable, setSpeakerOutputAvailable] = useState<boolean | null>(null);
@@ -1077,6 +1080,20 @@ export function App() {
   const sleepTogglePromiseRef = useRef<Promise<void> | null>(null);
   const appOpenedAtRef = useRef(Date.now());
   const connected = snapshot?.state === 'connected';
+
+  useEffect(() => {
+    let cancelled = false;
+    window.bridge.isWindowMaximized().then((maximized) => {
+      if (!cancelled) {
+        setWindowMaximized(maximized);
+      }
+    });
+    const unsubscribe = window.bridge.onWindowMaximizedChange(setWindowMaximized);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1189,36 +1206,46 @@ export function App() {
       const leftRect = leftSideElement.getBoundingClientRect();
       const rightRect = rightSideElement.getBoundingClientRect();
       const layoutRect = layoutElement.getBoundingClientRect();
+      const layoutScaleX = layoutRect.width / layoutElement.offsetWidth || 1;
+      const layoutScaleY = layoutRect.height / layoutElement.offsetHeight || 1;
+      const toLocalX = (clientX: number) => (clientX - layoutRect.left) / layoutScaleX;
+      const toLocalY = (clientY: number) => (clientY - layoutRect.top) / layoutScaleY;
+      const artLeft = toLocalX(artRect.left);
+      const artTop = toLocalY(artRect.top);
+      const artWidth = artRect.width / layoutScaleX;
+      const artHeight = artRect.height / layoutScaleY;
+      const leftTop = toLocalY(leftRect.top);
+      const leftCenterX = toLocalX(leftRect.left + leftRect.width / 2);
+      const rightTop = toLocalY(rightRect.top);
+      const rightCenterX = toLocalX(rightRect.left + rightRect.width / 2);
       const viewBoxAspect = REMAP_SVG_VIEWBOX_WIDTH / REMAP_SVG_VIEWBOX_HEIGHT;
-      const renderedSvgHeight = Math.min(artRect.height, artRect.width / viewBoxAspect);
+      const renderedSvgHeight = Math.min(artHeight, artWidth / viewBoxAspect);
       const renderedSvgWidth = renderedSvgHeight * viewBoxAspect;
-      const renderedSvgTop = artRect.top + (artRect.height - renderedSvgHeight) / 2;
-      const renderedSvgLeft = artRect.left + (artRect.width - renderedSvgWidth) / 2;
+      const renderedSvgTop = artTop + (artHeight - renderedSvgHeight) / 2;
+      const renderedSvgLeft = artLeft + (artWidth - renderedSvgWidth) / 2;
       const nextLayout = {} as Record<RemapButtonId, RemapCalloutLayout>;
       const mapSvgPoint = ([x, y]: [number, number]) => (
-        `${renderedSvgLeft + (x / REMAP_SVG_VIEWBOX_WIDTH) * renderedSvgWidth - layoutRect.left},${renderedSvgTop + (y / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - layoutRect.top}`
+        `${renderedSvgLeft + (x / REMAP_SVG_VIEWBOX_WIDTH) * renderedSvgWidth},${renderedSvgTop + (y / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight}`
       );
 
       for (const buttonId of REMAP_LEFT_BUTTON_IDS) {
-        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - leftRect.top;
-        const pillCenterX = leftRect.left + leftRect.width / 2;
-        const pillRightX = pillCenterX + REMAP_PILL_WIDTH / 2;
+        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - leftTop;
+        const pillRightX = leftCenterX + REMAP_PILL_WIDTH / 2;
         nextLayout[buttonId] = {
           top,
           points: [
-            `${pillRightX - layoutRect.left},${leftRect.top + top - layoutRect.top}`,
+            `${pillRightX},${leftTop + top}`,
             ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
           ].join(' ')
         };
       }
       for (const buttonId of REMAP_RIGHT_BUTTON_IDS) {
-        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - rightRect.top;
-        const pillCenterX = rightRect.left + rightRect.width / 2;
-        const pillLeftX = pillCenterX - REMAP_PILL_WIDTH / 2;
+        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - rightTop;
+        const pillLeftX = rightCenterX - REMAP_PILL_WIDTH / 2;
         nextLayout[buttonId] = {
           top,
           points: [
-            `${pillLeftX - layoutRect.left},${rightRect.top + top - layoutRect.top}`,
+            `${pillLeftX},${rightTop + top}`,
             ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
           ].join(' ')
         };
@@ -2368,6 +2395,13 @@ export function App() {
             <button type="button" title="Minimize" onClick={() => void window.bridge.minimizeWindow()}>
               <Minus size={16} />
             </button>
+            <button
+              type="button"
+              title={windowMaximized ? 'Restore down' : 'Maximize'}
+              onClick={() => void window.bridge.toggleMaximizeWindow()}
+            >
+              {windowMaximized ? <Copy size={13} /> : <SquareIcon size={13} />}
+            </button>
             <button type="button" title="Hide to tray" onClick={() => void window.bridge.hideWindow()}>
               <X size={16} />
             </button>
@@ -2813,8 +2847,8 @@ export function App() {
                       <h3>{showMicrophoneControl ? 'Microphone' : outputControlLabel}</h3>
                       <p>
                         {showMicrophoneControl
-                          ? 'Microphone input level.'
-                          : `${outputControlLabel} output level.`}
+                          ? 'Microphone level'
+                          : `${outputControlLabel} level`}
                       </p>
                     </div>
                     <div className="dual-selector audio-mode-selector" role="tablist" aria-label="Audio control mode">
@@ -3017,7 +3051,7 @@ export function App() {
               <div className="feature-heading">
                 <div>
                   <h2>Adaptive Triggers</h2>
-                  <p>Set trigger effect intensity and test mode.</p>
+                  <p>Set trigger effect intensity and test mode</p>
                 </div>
                 <div className="inline-switch">
                   <span>Enabled</span>
@@ -3049,7 +3083,7 @@ export function App() {
                     </button>
                     <div className="title-copy">
                       <h3>Intensity</h3>
-                      <p>Set the overall strength of adaptive trigger effects.</p>
+                      <p>Set the overall strength of adaptive trigger effects</p>
                     </div>
                   </div>
                   <div className="framed-slider">
@@ -3092,7 +3126,7 @@ export function App() {
                       <strong>{triggerEffectIntensityValue}%</strong>
                     </label>
                   </div>
-                  <p>Use presets for quick trigger levels.</p>
+                  <p>Use presets for quick trigger levels</p>
                   <div className="segmented-row">
                     {TRIGGER_EFFECT_PRESETS.map(([label, value]) => (
                       <button
@@ -3112,7 +3146,7 @@ export function App() {
                     <span className="feature-icon"><Activity size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
-                      <p>Choose a trigger effect and run a short test.</p>
+                      <p>Choose a trigger effect and run a short test</p>
                     </div>
                   </div>
                   <div className="test-options">
@@ -3180,7 +3214,7 @@ export function App() {
               <div className="feature-heading">
                 <div>
                   <h2>Lighting</h2>
-                  <p>Customize the controller light bar and override behavior.</p>
+                  <p>Customize the controller light bar and override behavior</p>
                 </div>
                 <div className="inline-switch">
                   <span>Enabled</span>
@@ -3212,7 +3246,7 @@ export function App() {
                     </button>
                     <div className="title-copy">
                       <h3>Brightness</h3>
-                      <p>Set the controller light bar brightness.</p>
+                      <p>Set the controller light bar brightness</p>
                     </div>
                   </div>
                   <div className="framed-slider">
@@ -3253,7 +3287,7 @@ export function App() {
                       <strong>{lightbarBrightnessValue}%</strong>
                     </label>
                   </div>
-                  <p>Use presets for quick light bar levels.</p>
+                  <p>Use presets for quick light bar levels</p>
                   <div className="segmented-row">
                     {LIGHTBAR_PRESETS.map(([label, value]) => (
                       <button
@@ -3273,13 +3307,13 @@ export function App() {
                     <span className="feature-icon"><Zap size={20} /></span>
                     <div className="title-copy">
                       <h3>Behavior</h3>
-                      <p>Set light bar behavior.</p>
+                      <p>Set light bar behavior</p>
                     </div>
                   </div>
                   <div className="behavior-toggle-row">
                     <div>
                       <strong>Light Bar Override</strong>
-                      <p>Use app-controlled lighting instead of the default controller behavior.</p>
+                      <p>Use app-controlled lighting instead of the default controller behavior</p>
                     </div>
                     <button
                       type="button"

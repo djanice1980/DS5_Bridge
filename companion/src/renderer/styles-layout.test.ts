@@ -37,10 +37,15 @@ function cssBlock(selector: string, requiredText?: string): string {
 
 describe('companion layout CSS', () => {
   it('keeps feature cards content-sized instead of viewport-stretched', () => {
-    expect(cssBlock('.app-content', 'grid-template-rows: auto auto;')).toContain(
-      'grid-template-rows: auto auto;'
+    expect(normalizedStyles).not.toContain('--app-base-width');
+    expect(normalizedStyles).not.toContain('transform: scale(var(--app-scale))');
+    expect(cssBlock('.shell', 'width: 100vw;')).toContain('width: 100vw;');
+    expect(cssBlock('.shell', 'height: 100vh;')).toContain('height: 100vh;');
+    expect(cssBlock('.app-content', 'width: 100%;')).toContain('width: 100%;');
+    expect(cssBlock('.app-content', 'grid-template-rows: minmax(0, 1fr);')).toContain(
+      'grid-template-rows: minmax(0, 1fr);'
     );
-    expect(cssBlock('.control-panel.flat-control-panel', 'height: auto;')).toContain('height: auto;');
+    expect(cssBlock('.control-panel.flat-control-panel', 'height: 100%;')).toContain('height: 100%;');
     expect(cssBlock('.control-pages', 'min-height: 0;')).toContain('min-height: 0;');
     expect(cssBlock('.control-page', 'grid-template-rows: auto minmax(var(--feature-card-height), auto);')).toContain(
       'grid-template-rows: auto minmax(var(--feature-card-height), auto);'

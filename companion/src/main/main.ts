@@ -99,6 +99,11 @@ function createWindow(): BrowserWindow {
   return window;
 }
 
+function sendWindowMaximizedState(): void {
+  if (!mainWindow || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send('window:maximizedChanged', mainWindow.isMaximized());
+}
+
 function showWindowCentered(): void {
   if (!mainWindow) {
     return;
@@ -450,6 +455,15 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:restoreDefaults', () => service.restoreDefaults());
   ipcMain.handle('bridge:getDiagnostics', () => service.getSnapshot().diagnostics);
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
+  ipcMain.handle('window:toggleMaximize', () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  });
+  ipcMain.handle('window:isMaximized', () => Boolean(mainWindow?.isMaximized()));
   ipcMain.handle('window:hide', () => mainWindow?.hide());
 }
 
@@ -461,6 +475,8 @@ app.whenReady().then(async () => {
   registerIpc(bridgeService);
 
   mainWindow = createWindow();
+  mainWindow.on('maximize', sendWindowMaximizedState);
+  mainWindow.on('unmaximize', sendWindowMaximizedState);
   mainWindow.once('ready-to-show', showWindowCentered);
 
   tray = new Tray(await createTrayIcon());
