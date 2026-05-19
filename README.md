@@ -175,6 +175,10 @@ This project is derived from [awalol/DS5Dongle](https://github.com/awalol/DS5Don
 which is credited in [NOTICE](NOTICE). Third-party submodules and package
 dependencies retain their own license terms.
 
+DualSense controller overlay artwork is adapted from
+[AL2009man/Gamepad-Asset-Pack](https://github.com/AL2009man/Gamepad-Asset-Pack)
+and credited in [NOTICE](NOTICE).
+
 ## References
 
 - [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle), the foundation for

@@ -1257,10 +1257,12 @@ button {
 .control-pages {
   display: grid;
   min-height: 0;
+  justify-items: start;
 }
 
 .control-page {
   grid-area: 1 / 1;
+  width: min(100%, 800px);
   display: grid;
   grid-template-rows: auto minmax(var(--feature-card-height), auto);
   align-content: start;
@@ -1287,6 +1289,7 @@ button {
 }
 
 .remapping-page {
+  width: 100%;
   min-height: calc(100vh - var(--window-bar-height) - 72px);
   grid-template-rows: auto minmax(0, 1fr);
 }
