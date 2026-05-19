@@ -113,6 +113,7 @@ const api = {
   toggleMaximizeWindow: (): Promise<void> => ipcRenderer.invoke('window:toggleMaximize'),
   isWindowMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
   hideWindow: (): Promise<void> => ipcRenderer.invoke('window:hide'),
+  openExternal: (url: string): Promise<void> => ipcRenderer.invoke('window:openExternal', url),
   onWindowMaximizedChange: (callback: (maximized: boolean) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, maximized: boolean) => callback(maximized);
     ipcRenderer.on('window:maximizedChanged', listener);

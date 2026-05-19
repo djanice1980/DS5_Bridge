@@ -5,6 +5,7 @@ import {
   IconAdjustmentsHorizontal as Settings2,
   IconAdjustmentsHorizontal as SlidersHorizontal,
   IconArrowRight as ArrowRight,
+  IconBatteryEco,
   IconBell as Bell,
   IconBinary,
   IconBolt as Zap,
@@ -38,6 +39,7 @@ import {
   IconVolumeOff as VolumeX,
   IconX as X
 } from '@tabler/icons-react';
+import kofiBadgeUrl from '../../../assets/brand/support_me_on_kofi_badge_dark.png';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
 import remappingLayoutImage from '../../../assets/controllers/dualsense-remapping-layout.svg';
@@ -232,7 +234,6 @@ const REMAP_STICK_CLICK_TARGET_OPTIONS: Array<[string, RemapButtonId]> = REMAP_S
 ]);
 const REMAP_SVG_VIEWBOX_WIDTH = 597.47;
 const REMAP_SVG_VIEWBOX_HEIGHT = 429.39;
-const REMAP_PILL_WIDTH = 128;
 const REMAP_CALLOUT_POINTS: Record<RemapButtonId, Array<[number, number]>> = {
   l2: [[2.4, 3.17], [117.91, 3.17], [171.1, 93.49]],
   l1: [[2.4, 63.71], [129.99, 63.71], [161.13, 118.36]],
@@ -1261,9 +1262,7 @@ export function App() {
       const artWidth = artRect.width / layoutScaleX;
       const artHeight = artRect.height / layoutScaleY;
       const leftTop = toLocalY(leftRect.top);
-      const leftCenterX = toLocalX(leftRect.left + leftRect.width / 2);
       const rightTop = toLocalY(rightRect.top);
-      const rightCenterX = toLocalX(rightRect.left + rightRect.width / 2);
       const viewBoxAspect = REMAP_SVG_VIEWBOX_WIDTH / REMAP_SVG_VIEWBOX_HEIGHT;
       const renderedSvgHeight = Math.min(artHeight, artWidth / viewBoxAspect);
       const renderedSvgWidth = renderedSvgHeight * viewBoxAspect;
@@ -1273,10 +1272,18 @@ export function App() {
       const mapSvgPoint = ([x, y]: [number, number]) => (
         `${renderedSvgLeft + (x / REMAP_SVG_VIEWBOX_WIDTH) * renderedSvgWidth},${renderedSvgTop + (y / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight}`
       );
+      const remapPillEdgeX = (side: HTMLElement, buttonId: RemapButtonId, edge: 'left' | 'right') => {
+        const pill = side.querySelector<HTMLElement>(`[data-remap-button-id="${buttonId}"]`);
+        if (!pill) {
+          return edge === 'right' ? toLocalX(side.getBoundingClientRect().right) : toLocalX(side.getBoundingClientRect().left);
+        }
+        const pillRect = pill.getBoundingClientRect();
+        return toLocalX(edge === 'right' ? pillRect.right : pillRect.left);
+      };
 
       for (const buttonId of REMAP_LEFT_BUTTON_IDS) {
         const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - leftTop;
-        const pillRightX = leftCenterX + REMAP_PILL_WIDTH / 2;
+        const pillRightX = remapPillEdgeX(leftSideElement, buttonId, 'right');
         nextLayout[buttonId] = {
           top,
           points: [
@@ -1287,7 +1294,7 @@ export function App() {
       }
       for (const buttonId of REMAP_RIGHT_BUTTON_IDS) {
         const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - rightTop;
-        const pillLeftX = rightCenterX - REMAP_PILL_WIDTH / 2;
+        const pillLeftX = remapPillEdgeX(rightSideElement, buttonId, 'left');
         nextLayout[buttonId] = {
           top,
           points: [
@@ -1600,6 +1607,19 @@ export function App() {
   const overviewAudioOutputLabel = headsetOutputDetected ? 'Headphones' : 'Speaker';
   const overviewSpeakerVolumeValue = `${speakerVolumeValue}%`;
   const overviewFirmwareLabel = snapshot?.status?.firmwareVersion ?? '--';
+  const overviewShortcutItems = [
+    snapshot?.settings.sleepKeybindEnabled ? 'Sleep Shortcut' : null,
+    snapshot?.settings.speakerVolumeShortcutEnabled ? 'Volume Shortcut' : null
+  ].filter((item): item is string => Boolean(item));
+  const overviewNotificationItems = [
+    controllerToastEnabled ? 'Controller Status' : null,
+    lowBatteryToastEnabled ? 'Low Battery' : null
+  ].filter((item): item is string => Boolean(item));
+  const overviewPowerSavingLabel = snapshot?.settings.controllerPowerSavingEnabled
+    ? controllerPowerSavingActive
+      ? 'Active'
+      : 'Enabled'
+    : 'Off';
   const testTriggersUnavailable = !connected
     || !adaptiveTriggersSupported
     || !adaptiveTriggersEnabled
@@ -2684,6 +2704,16 @@ export function App() {
             </div>
           </div>
           <div className="sidebar-actions">
+            <div className="sidebar-support">
+              <button
+                className="sidebar-kofi-link"
+                type="button"
+                aria-label="Support SundayMoments on Ko-fi"
+                onClick={() => void window.bridge.openExternal('https://ko-fi.com/sundaymoments')}
+              >
+                <img className="sidebar-kofi-badge" src={kofiBadgeUrl} alt="" />
+              </button>
+            </div>
             <div className="header-settings">
               <button
                 className={`sidebar-action-button ${showBridgeSettings ? 'active' : ''}`}
@@ -2995,6 +3025,50 @@ export function App() {
                 </div>
               </section>
             </div>
+
+            <section className="overview-status-panel" aria-label="Active settings summary">
+              <div className="overview-status-group">
+                <div className="overview-status-heading">
+                  <IconDeviceGamepad2 size={15} />
+                  <span>Shortcuts</span>
+                </div>
+                <div className="overview-chip-row">
+                  {overviewShortcutItems.length > 0 ? (
+                    overviewShortcutItems.map((item) => (
+                      <span className="overview-chip active" key={item}>{item}</span>
+                    ))
+                  ) : (
+                    <span className="overview-chip muted">None enabled</span>
+                  )}
+                </div>
+              </div>
+              <div className="overview-status-group">
+                <div className="overview-status-heading">
+                  <IconBatteryEco size={15} />
+                  <span>Power Saving</span>
+                </div>
+                <div className="overview-chip-row">
+                  <span className={`overview-chip ${snapshot.settings.controllerPowerSavingEnabled ? 'active success' : 'muted'}`}>
+                    {overviewPowerSavingLabel}
+                  </span>
+                </div>
+              </div>
+              <div className="overview-status-group">
+                <div className="overview-status-heading">
+                  <Bell size={15} />
+                  <span>Notifications</span>
+                </div>
+                <div className="overview-chip-row">
+                  {overviewNotificationItems.length > 0 ? (
+                    overviewNotificationItems.map((item) => (
+                      <span className="overview-chip active" key={item}>{item}</span>
+                    ))
+                  ) : (
+                    <span className="overview-chip muted">Off</span>
+                  )}
+                </div>
+              </div>
+            </section>
           </div>
 
           <div
@@ -3936,6 +4010,7 @@ export function App() {
                       return (
                         <div
                           className={`remapping-pill ${remapped ? 'changed' : ''}`}
+                          data-remap-button-id={buttonId}
                           key={buttonId}
                           onMouseEnter={() => setHoveredRemapButton(buttonId)}
                           onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
@@ -3978,6 +4053,7 @@ export function App() {
                       return (
                         <div
                           className={`remapping-pill ${remapped ? 'changed' : ''}`}
+                          data-remap-button-id={buttonId}
                           key={buttonId}
                           onMouseEnter={() => setHoveredRemapButton(buttonId)}
                           onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}

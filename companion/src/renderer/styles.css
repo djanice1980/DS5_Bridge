@@ -1135,9 +1135,50 @@ button {
   position: relative;
   z-index: 5;
   display: grid;
-  gap: 4px;
+  gap: 6px;
   margin-top: auto;
-  padding-top: 10px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.sidebar-support {
+  height: 52px;
+  min-width: 0;
+  display: grid;
+  align-items: center;
+  justify-items: start;
+  padding-left: 12px;
+  overflow: hidden;
+}
+
+.sidebar-kofi-link {
+  width: min(100%, 247px);
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  display: block;
+  background: transparent;
+}
+
+.sidebar-kofi-link:hover {
+  filter: brightness(1.08);
+}
+
+.sidebar-kofi-link:focus-visible {
+  outline: 2px solid rgba(77, 147, 255, 0.75);
+  outline-offset: 3px;
+}
+
+.sidebar-kofi-badge {
+  display: block;
+  width: 100%;
+  max-height: 55px;
+  object-fit: contain;
+  object-position: left center;
+}
+
+.header-settings {
+  padding-top: 6px;
   border-top: 1px solid rgba(142, 164, 194, 0.1);
 }
 
@@ -1476,6 +1517,79 @@ button {
   background: rgba(241, 245, 255, 0.42);
 }
 
+.overview-status-panel {
+  width: min(100%, 800px);
+  min-height: 88px;
+  border: 1px solid rgba(142, 164, 194, 0.2);
+  border-radius: var(--card-radius);
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  background: rgba(8, 17, 28, 0.46);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 12px 30px rgba(0, 0, 0, 0.12);
+}
+
+.overview-status-group {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.overview-status-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #dce7f7;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.overview-status-heading svg {
+  color: #258cff;
+}
+
+.overview-chip-row {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.overview-chip {
+  min-height: 28px;
+  border: 1px solid rgba(142, 164, 194, 0.22);
+  border-radius: var(--control-radius);
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  color: #dce7f7;
+  background: rgba(255, 255, 255, 0.025);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.overview-chip.active {
+  border-color: rgba(40, 124, 255, 0.3);
+  color: #eaf3ff;
+  background: rgba(40, 124, 255, 0.08);
+}
+
+.overview-chip.success {
+  border-color: rgba(95, 232, 117, 0.28);
+  color: #eaffee;
+  background: rgba(95, 232, 117, 0.08);
+}
+
+.overview-chip.muted {
+  color: #8fa1b8;
+  background: rgba(255, 255, 255, 0.02);
+}
+
 .lighting-page .toggle-row {
   grid-template-columns: 1fr 62px;
   max-width: 700px;
@@ -1782,7 +1896,7 @@ button.feature-icon {
 .remapping-layout {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(128px, 0.36fr) minmax(420px, 2.06fr) minmax(128px, 0.36fr);
+  grid-template-columns: minmax(128px, 0.25fr) minmax(420px, 2.3fr) minmax(128px, 0.25fr);
   align-items: center;
   gap: 12px;
   width: 100%;
@@ -1801,7 +1915,7 @@ button.feature-icon {
 
 .remapping-callout-layer polyline {
   fill: none;
-  stroke-linecap: square;
+  stroke-linecap: butt;
   stroke-linejoin: miter;
   vector-effect: non-scaling-stroke;
   transition: stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease, opacity 140ms ease;
@@ -1960,7 +2074,7 @@ button.feature-icon {
   height: var(--remapping-art-height);
   display: grid;
   place-items: center;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .remapping-controller-stage::before {
