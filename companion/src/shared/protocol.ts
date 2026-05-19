@@ -345,7 +345,10 @@ function assertReport(report: ArrayLike<number>, reportId: number): void {
 
 function assertVersion(report: ArrayLike<number>): void {
   if (report[5] !== PROTOCOL_MAJOR || report[6] !== PROTOCOL_MINOR) {
-    throw new ProtocolError(`Unsupported companion protocol ${report[5]}.${report[6]}.`, 'bad-version');
+    throw new ProtocolError(
+      `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}, received ${report[5]}.${report[6]}.`,
+      'bad-version'
+    );
   }
 }
 

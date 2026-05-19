@@ -8,7 +8,7 @@ import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateM
 import type { BridgeToast } from './bridge-service';
 
 const APP_NAME = 'DS5 Bridge';
-const WINDOWS_APP_USER_MODEL_ID = 'io.github.ds5bridge.companion';
+const WINDOWS_APP_USER_MODEL_ID = 'io.github.sundaymoments.ds5bridge';
 const WINDOWS_TOAST_ACTIVATOR_CLSID = '{A8B3700D-4BB5-4E22-BF57-0C43B7C2FDF6}';
 const APP_MARK_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');
 const APP_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
@@ -17,6 +17,7 @@ let tray: Tray | null = null;
 let bridgeService: BridgeService | null = null;
 let isQuitting = false;
 let shutdownComplete = false;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function windowsAppUserModelId(): string {
   return WINDOWS_APP_USER_MODEL_ID;
@@ -24,6 +25,10 @@ function windowsAppUserModelId(): string {
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(windowsAppUserModelId());
+}
+
+if (!hasSingleInstanceLock) {
+  app.quit();
 }
 
 function appResourcePath(relativePath: string): string {
@@ -496,6 +501,10 @@ function registerIpc(service: BridgeService): void {
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) {
+    return;
+  }
+
   app.setName(APP_NAME);
   ensureWindowsNotificationShortcut();
   Menu.setApplicationMenu(null);
@@ -523,6 +532,10 @@ app.whenReady().then(async () => {
     showBridgeNotification(toast);
   });
   bridgeService.start();
+});
+
+app.on('second-instance', () => {
+  showWindowCentered();
 });
 
 app.on('window-all-closed', () => {

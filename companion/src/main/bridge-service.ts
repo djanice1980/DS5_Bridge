@@ -65,6 +65,7 @@ const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = false;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;
+const FIRMWARE_UPDATE_REQUIRED_MESSAGE = 'Firmware 1.0.0 update required';
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
 const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
@@ -148,6 +149,14 @@ function isDualSenseDevice(device: HidDeviceSummary): boolean {
   return device.vendorId === SONY_VENDOR_ID
     && DUALSENSE_PRODUCT_IDS.has(device.productId ?? 0)
     && /DualSense/i.test(device.product ?? '');
+}
+
+function isSupportedFirmwareVersion(version: string): boolean {
+  const [major = 0, minor = 0, patch = 0] = version.split('.').map((part) => Number.parseInt(part, 10));
+  if (![major, minor, patch].every(Number.isFinite)) {
+    return false;
+  }
+  return major >= 1;
 }
 
 function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
@@ -1523,7 +1532,7 @@ export class BridgeService extends EventEmitter {
       this.noteControllerUnavailableForToasts();
       this.snapshot = {
         state: 'incompatible',
-        message: 'Firmware incompatible',
+        message: FIRMWARE_UPDATE_REQUIRED_MESSAGE,
         status: null,
         settings: this.settingsStore.get(),
         diagnostics: this.withAudioDebugDiagnostics({
@@ -1531,6 +1540,28 @@ export class BridgeService extends EventEmitter {
           hidPath: this.devicePath,
           lastError: 'No companion device returned a supported DS5B status report',
           lastPollAt: Date.now()
+        })
+      };
+      this.emitSnapshot();
+      return;
+    }
+
+    if (!isSupportedFirmwareVersion(status.firmwareVersion)) {
+      this.noteControllerUnavailableForToasts();
+      this.snapshot = {
+        state: 'incompatible',
+        message: FIRMWARE_UPDATE_REQUIRED_MESSAGE,
+        status,
+        settings: this.settingsStore.get(),
+        diagnostics: this.withAudioDebugDiagnostics({
+          hidPath: this.devicePath,
+          protocolVersion: status.protocolVersion,
+          uptimeSeconds: status.uptimeSeconds,
+          settingsRevision: status.settingsRevision,
+          lastAck: this.snapshot.diagnostics.lastAck,
+          lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to 1.0.0 or newer.`,
+          lastPollAt: Date.now(),
+          rawDevices
         })
       };
       this.emitSnapshot();
@@ -1833,7 +1864,7 @@ export class BridgeService extends EventEmitter {
     this.snapshot = {
       ...this.snapshot,
       state: isIncompatible ? 'incompatible' : this.snapshot.state === 'no-bridge' ? 'no-bridge' : 'error',
-      message: isIncompatible ? 'Firmware incompatible' : message,
+      message: isIncompatible ? FIRMWARE_UPDATE_REQUIRED_MESSAGE : message,
       diagnostics: {
         ...this.snapshot.diagnostics,
         lastError: message,

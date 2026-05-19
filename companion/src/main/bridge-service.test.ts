@@ -55,6 +55,9 @@ type StatusOverrides = {
   uptimeSeconds?: number;
   protocolMajor?: number;
   magic?: string;
+  firmwareMajor?: number;
+  firmwareMinor?: number;
+  firmwarePatch?: number;
   firmwareFlags?: number;
   statusFlags?: number;
 };
@@ -208,9 +211,9 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   report[19] = ACK_RESULT.OK;
   report[20] = overrides.statusFlags ?? 0xb0;
   writeU32(report, 21, overrides.uptimeSeconds ?? 10);
-  report[25] = 0;
-  report[26] = 5;
-  report[27] = 15;
+  report[25] = overrides.firmwareMajor ?? 1;
+  report[26] = overrides.firmwareMinor ?? 0;
+  report[27] = overrides.firmwarePatch ?? 0;
   report[28] = overrides.firmwareFlags ?? 1;
   writeU16(report, 29, overrides.speakerVolumePercent ?? 30);
   writeU16(report, 43, overrides.idleDisconnectTimeoutMinutes ?? 15);
@@ -473,7 +476,25 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware incompatible');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.0.0 update required');
+    expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
+  });
+
+  it('requires users to update pre-1.0 bridge firmware', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ firmwareMajor: 0, firmwareMinor: 5, firmwarePatch: 15 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.state).toBe('incompatible');
+    expect(snapshot.message).toBe('Firmware 1.0.0 update required');
+    expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.0.0 or newer');
+    expect(device.sentReports).toEqual([]);
   });
 
   it('reapplies saved settings once per companion session and again after uptime drops', async () => {
