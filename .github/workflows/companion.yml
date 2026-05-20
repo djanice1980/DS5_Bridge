@@ -1,0 +1,51 @@
+name: Companion checks
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  companion:
+    name: Typecheck, test, and build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: companion/package-lock.json
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Install companion dependencies
+        working-directory: companion
+        run: npm ci
+
+      - name: Build host audio helper
+        working-directory: companion
+        run: npm run build:host-audio
+
+      - name: Typecheck companion
+        working-directory: companion
+        run: npm run typecheck
+
+      - name: Test companion
+        working-directory: companion
+        run: npm test
+
+      - name: Build companion
+        working-directory: companion
+        run: npm run build

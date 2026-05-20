@@ -672,6 +672,52 @@ describe('BridgeService', () => {
     expect(snapshot.settings.triggerEffectIntensityPercent).toBe(45);
   });
 
+  it('applies and removes power-saving caps as headphones connect and disconnect', async () => {
+    const service = serviceFixture({
+      hostEncodedAudioEnabled: false,
+      controllerPowerSavingEnabled: true,
+      hapticsGainPercent: 100,
+      classicRumbleGainPercent: 120,
+      triggerEffectIntensityPercent: 80,
+      lightbarBrightnessPercent: 90
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    device.hostAudioStatusReports = [hostAudioStatusReport({ headsetPlugged: false })];
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    expect(device.sentReports).toEqual([]);
+
+    device.hostAudioStatusReports = [hostAudioStatusReport({ headsetPlugged: true })];
+    await poll(service);
+    expect(device.sentReports.map((report) => [report[7], report[9]])).toEqual([
+      [COMMAND_ID.SET_HAPTICS_GAIN, 60],
+      [COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, 60],
+      [COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, 60],
+      [COMMAND_ID.SET_LIGHTBAR_COLOR, 60],
+      [COMMAND_ID.SET_LIGHTBAR_OVERRIDE, 0]
+    ]);
+    expect(service.getSnapshot().settings).toMatchObject({
+      hapticsGainPercent: 100,
+      classicRumbleGainPercent: 120,
+      triggerEffectIntensityPercent: 80,
+      lightbarBrightnessPercent: 90
+    });
+
+    device.sentReports = [];
+    device.hostAudioStatusReports = [hostAudioStatusReport({ headsetPlugged: false })];
+    await poll(service);
+    expect(device.sentReports.map((report) => [report[7], report[9]])).toEqual([
+      [COMMAND_ID.SET_HAPTICS_GAIN, 100],
+      [COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, 120],
+      [COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, 80],
+      [COMMAND_ID.SET_LIGHTBAR_COLOR, 90],
+      [COMMAND_ID.SET_LIGHTBAR_OVERRIDE, 0]
+    ]);
+  });
+
   it('sends speaker volume as firmware gain', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();

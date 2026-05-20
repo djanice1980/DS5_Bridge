@@ -3,6 +3,7 @@ param(
   [string] $Configuration = 'Release',
   [switch] $SkipBuild,
   [switch] $NoZip,
+  [switch] $ValidateOnly,
   [string] $Label = ''
 )
 
@@ -72,6 +73,12 @@ function Write-SourceNotice([string] $Path) {
   ) | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Assert-SemanticVersion([string] $Name, [string] $Version) {
+  if ($Version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "$Name version must use MAJOR.MINOR.PATCH format. Found: $Version"
+  }
+}
+
 $repoRoot = Resolve-RepoRoot
 $companionRoot = Join-Path $repoRoot 'companion'
 $firmwareBuildDir = Join-Path $repoRoot 'build\companion'
@@ -87,6 +94,29 @@ $releaseDir = Join-Path $OutputRoot "DS5 Bridge Release Candidate$labelSuffix $s
 
 if (-not (Test-Path -LiteralPath $OutputRoot)) {
   New-Item -ItemType Directory -Path $OutputRoot | Out-Null
+}
+
+Assert-SemanticVersion 'Companion' $companionVersion
+Assert-SemanticVersion 'Firmware' $firmwareVersion
+
+if ($ValidateOnly) {
+  $requiredFiles = @(
+    (Join-Path $repoRoot 'LICENSE'),
+    (Join-Path $repoRoot 'NOTICE'),
+    (Join-Path $companionRoot 'package.json'),
+    (Join-Path $repoRoot 'src\companion.cpp')
+  )
+  foreach ($requiredFile in $requiredFiles) {
+    if (-not (Test-Path -LiteralPath $requiredFile)) {
+      throw "Missing required release input: $requiredFile"
+    }
+  }
+
+  Write-Host 'Release candidate toolchain validation passed.'
+  Write-Host "Companion version: $companionVersion"
+  Write-Host "Firmware version: $firmwareVersion"
+  Write-Host "Output root: $OutputRoot"
+  return
 }
 
 $buildStartedAt = Get-Date
