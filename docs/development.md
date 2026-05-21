@@ -131,10 +131,9 @@ Useful options:
 
 ## Host Helper Runtime
 
-The host audio helper is currently published with `--self-contained false`, so
-developer machines and end-user machines need a compatible .NET runtime
-available. If the project should ship without relying on a system .NET runtime,
-switch the helper publish step to a self-contained Windows build.
+The host audio helper is published as a self-contained Windows x64 build so end
+users do not need to install a separate .NET runtime. Developer machines still
+need the .NET SDK to build or publish the helper locally.
 
 ## Project Layout
 
