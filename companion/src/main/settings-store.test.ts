@@ -46,11 +46,17 @@ describe('SettingsStore', () => {
       name: 'Default',
       settings: {
         speakerVolumePercent: 100,
+        micVolumePercent: 100,
+        micMuted: false,
         hostEncodedAudioEnabled: true,
+        duplexMicEnabled: true,
         lightbarColor: '#0000ff'
       }
     });
     expect(settings.hostEncodedAudioEnabled).toBe(true);
+    expect(settings.duplexMicEnabled).toBe(true);
+    expect(settings.micVolumePercent).toBe(100);
+    expect(settings.micMuted).toBe(false);
     expect(settings.lightbarColor).toBe('#0000ff');
   });
 

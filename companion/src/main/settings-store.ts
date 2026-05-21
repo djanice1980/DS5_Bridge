@@ -42,7 +42,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerVolumeShortcutEnabled: false,
   pollingRateMode: '1000',
   hostEncodedAudioEnabled: true,
-  duplexMicEnabled: false,
+  duplexMicEnabled: true,
   controllerPowerSavingEnabled: false
 };
 
