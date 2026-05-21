@@ -73,6 +73,16 @@ function Write-SourceNotice([string] $Path) {
   ) | Set-Content -LiteralPath $Path -Encoding UTF8
 }
 
+function Get-SourceMetadata {
+  $commit = Get-GitValue 'rev-parse HEAD'
+  $dirty = -not [string]::IsNullOrWhiteSpace((Get-GitValue 'status --porcelain' ''))
+  return [ordered]@{
+    sourceUrl = 'https://github.com/SundayMoments/DS5_Bridge'
+    sourceCommit = $commit
+    dirty = $dirty
+  }
+}
+
 function Assert-SemanticVersion([string] $Name, [string] $Version) {
   if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     throw "$Name version must use MAJOR.MINOR.PATCH format. Found: $Version"
@@ -196,12 +206,14 @@ Invoke-Step 'Collect artifacts' {
     createdAt = (Get-Date).ToString('o')
     firmwareVersion = $firmwareVersion
     companionVersion = $companionVersion
-    source = $repoRoot
     artifacts = @(
       $firmwareName,
       $installerName,
       $portableName
     )
+  }
+  foreach ($entry in (Get-SourceMetadata).GetEnumerator()) {
+    $manifest[$entry.Key] = $entry.Value
   }
   if (-not $NoZip) {
     $manifest.artifacts += "$portableName.zip"
