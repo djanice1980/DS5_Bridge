@@ -58,6 +58,14 @@ void bt_set_classic_rumble_gain(uint8_t gain_percent);
 uint8_t bt_classic_rumble_gain();
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left);
 void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uint8_t target = 0);
+void bt_replay_adaptive_trigger_effect(
+    uint8_t const *right_trigger,
+    bool right_valid,
+    uint8_t const *left_trigger,
+    bool left_valid,
+    uint8_t motor_power,
+    bool motor_power_valid
+);
 void bt_reset_adaptive_triggers();
 void bt_schedule_lightbar_restore(uint32_t delay_ms);
 void bt_lightbar_loop();

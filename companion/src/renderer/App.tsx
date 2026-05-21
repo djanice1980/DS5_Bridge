@@ -1705,6 +1705,7 @@ export function App() {
   const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled;
   const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
+  const adaptiveTriggerOutputActive = Boolean(snapshot?.status?.adaptiveTriggerOutputRecent);
   const audioStreamActive = Boolean(snapshot?.status?.audioRecent && pendingAction !== 'speaker' && !speakerTestLocked);
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
   const headsetOutputDetected = Boolean(hostAudioStatus?.headsetPlugged);
@@ -1953,21 +1954,21 @@ export function App() {
     || !adaptiveTriggersEnabled
     || pendingAction !== null
     || triggerTestLocked
-    || gameStreamActive
+    || adaptiveTriggerOutputActive
     || Boolean(snapshot?.status?.testAdaptiveTriggersBusy);
   const triggerTestReady = !testTriggersUnavailable;
   const triggerStatusLabel = triggerTestLocked || snapshot?.status?.testAdaptiveTriggersBusy
     ? 'Testing'
     : triggerTestReady
       ? 'Ready'
-      : connected && gameStreamActive
-        ? 'Game Active'
+      : connected && adaptiveTriggerOutputActive
+        ? 'Game Triggers Active'
         : connected && pendingAction !== null
           ? 'Command Pending'
           : 'Unavailable';
   const triggerStatusTone = triggerTestLocked || snapshot?.status?.testAdaptiveTriggersBusy || triggerTestReady
     ? 'good'
-    : connected && (gameStreamActive || pendingAction !== null)
+    : connected && (adaptiveTriggerOutputActive || pendingAction !== null)
       ? 'warn'
       : 'idle';
   const lightbarStateActive = connected && lightbarSupported && lightbarEnabled;
@@ -4043,7 +4044,13 @@ export function App() {
                     <div className="select-row wide-select trigger-test-mode-control">
                       <CustomSelect
                         value={snapshot.settings.triggerTestMode}
-                        disabled={!connected || !adaptiveTriggersSupported || !snapshot.settings.adaptiveTriggersEnabled || pendingAction !== null}
+                        disabled={
+                          !connected
+                          || !adaptiveTriggersSupported
+                          || !snapshot.settings.adaptiveTriggersEnabled
+                          || adaptiveTriggerOutputActive
+                          || pendingAction !== null
+                        }
                         options={TRIGGER_TEST_MODE_OPTIONS}
                         ariaLabel="Trigger test type"
                         onChange={setTriggerTestMode}
@@ -4056,7 +4063,7 @@ export function App() {
                             key={value}
                             type="button"
                             className={triggerTarget === value ? 'active' : ''}
-                            disabled={!connected || !adaptiveTriggersSupported}
+                            disabled={!connected || !adaptiveTriggersSupported || adaptiveTriggerOutputActive}
                             onClick={() => setTriggerTarget(value)}
                           >
                             {label}
@@ -4068,8 +4075,8 @@ export function App() {
                   <div className="trigger-action-row">
                     <button className="primary-action" type="button" disabled={testTriggersUnavailable} onClick={runTestAdaptiveTriggers}>
                       <Play size={15} />
-                      {connected && gameStreamActive
-                        ? 'Game Active'
+                      {connected && adaptiveTriggerOutputActive
+                        ? 'Game Triggers Active'
                         : connected && (triggerTestLocked || snapshot.status?.testAdaptiveTriggersBusy)
                           ? 'Testing'
                           : 'Test Triggers'}
@@ -4077,7 +4084,7 @@ export function App() {
                     <button
                       className="secondary-action"
                       type="button"
-                      disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
+                      disabled={!connected || !adaptiveTriggersSupported || adaptiveTriggerOutputActive || pendingAction !== null}
                       onClick={resetAdaptiveTriggers}
                     >
                       <RefreshCcw size={14} />

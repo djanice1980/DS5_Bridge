@@ -52,11 +52,15 @@ constexpr uint32_t kMuteLedFlashDurationUs = 120000;
 constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
 constexpr uint8_t kClassicRumbleTestAmplitude = 160;
 constexpr uint32_t kAdaptiveTriggerTestDurationUs = 2500000;
+constexpr uint32_t kGameTriggerUpdateRecentUs = 2000000;
 constexpr uint8_t kTriggerEffectSize = 11;
 constexpr uint8_t kTriggerEffectRightOffset = 10;
 constexpr uint8_t kTriggerEffectLeftOffset = 21;
 constexpr uint8_t kTriggerEffectPowerOffset = 36;
 constexpr uint8_t kTriggerEffectOff = 0x05;
+constexpr uint8_t kTriggerEffectFeedback = 0x21;
+constexpr uint8_t kTriggerEffectWeapon = 0x25;
+constexpr uint8_t kTriggerEffectVibration = 0x26;
 constexpr uint8_t kTriggerRightEffectFlag = 0x04;
 constexpr uint8_t kTriggerLeftEffectFlag = 0x08;
 constexpr uint8_t kTriggerEffectFlags = kTriggerRightEffectFlag | kTriggerLeftEffectFlag;
@@ -207,6 +211,13 @@ uint8_t adaptive_trigger_test_mode = kTriggerTestModeFeedback;
 uint8_t adaptive_trigger_test_target = kTriggerTargetBoth;
 bool adaptive_trigger_test_active = false;
 uint32_t adaptive_trigger_test_until_us = 0;
+uint8_t cached_game_trigger_right[kTriggerEffectSize]{};
+uint8_t cached_game_trigger_left[kTriggerEffectSize]{};
+bool cached_game_trigger_right_valid = false;
+bool cached_game_trigger_left_valid = false;
+uint8_t cached_game_trigger_motor_power = 0;
+bool cached_game_trigger_motor_power_valid = false;
+uint32_t last_game_trigger_update_us = 0;
 uint8_t companion_mic_volume_percent = 100;
 bool companion_mic_muted = false;
 uint8_t button_remap[RemapButtonCount]{};
@@ -219,6 +230,8 @@ struct LastAck {
 };
 
 LastAck last_ack;
+
+void clear_cached_game_trigger_effects();
 
 uint16_t read_u16(uint8_t const *data) {
     return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
@@ -300,6 +313,7 @@ void restore_defaults() {
     adaptive_trigger_test_mode = kTriggerTestModeFeedback;
     adaptive_trigger_test_target = kTriggerTargetBoth;
     adaptive_trigger_test_active = false;
+    clear_cached_game_trigger_effects();
     bt_reset_adaptive_triggers();
     mute_button_mode = MuteButtonNormal;
     mute_keyboard_usage = kDefaultMuteKeyboardUsage;
@@ -423,12 +437,213 @@ void set_trigger_off(uint8_t *trigger) {
     trigger[0] = kTriggerEffectOff;
 }
 
+bool trigger_effect_mode_active(uint8_t mode) {
+    return mode != 0 && mode != kTriggerEffectOff;
+}
+
+bool trigger_effect_block_active(uint8_t const *trigger) {
+    return trigger != nullptr && trigger_effect_mode_active(trigger[0]);
+}
+
+uint8_t scale_trigger_strength_code(uint8_t value, uint8_t intensity_percent) {
+    const uint8_t strength = static_cast<uint8_t>((value & 0x07) + 1);
+    uint8_t scaled = static_cast<uint8_t>((static_cast<uint16_t>(strength) * intensity_percent + 99) / 100);
+    scaled = std::min<uint8_t>(std::max<uint8_t>(scaled, 1), 8);
+    return static_cast<uint8_t>((value & 0xF8) | ((scaled - 1) & 0x07));
+}
+
+bool scale_packed_trigger_strengths(uint8_t *trigger, uint8_t intensity_percent) {
+    const uint16_t active_zones = static_cast<uint16_t>(trigger[1])
+        | (static_cast<uint16_t>(trigger[2]) << 8);
+    uint32_t packed = static_cast<uint32_t>(trigger[3])
+        | (static_cast<uint32_t>(trigger[4]) << 8)
+        | (static_cast<uint32_t>(trigger[5]) << 16)
+        | (static_cast<uint32_t>(trigger[6]) << 24);
+    uint32_t next = packed;
+
+    for (uint8_t zone = 0; zone < 10; zone++) {
+        if ((active_zones & static_cast<uint16_t>(1 << zone)) == 0) {
+            continue;
+        }
+        const uint8_t shift = static_cast<uint8_t>(zone * 3);
+        const uint8_t value = static_cast<uint8_t>((packed >> shift) & 0x07);
+        const uint8_t scaled = scale_trigger_strength_code(value, intensity_percent) & 0x07;
+        next = (next & ~(0x07u << shift)) | (static_cast<uint32_t>(scaled) << shift);
+    }
+
+    if (next == packed) {
+        return false;
+    }
+
+    trigger[3] = static_cast<uint8_t>(next & 0xFF);
+    trigger[4] = static_cast<uint8_t>((next >> 8) & 0xFF);
+    trigger[5] = static_cast<uint8_t>((next >> 16) & 0xFF);
+    trigger[6] = static_cast<uint8_t>((next >> 24) & 0xFF);
+    return true;
+}
+
+bool scale_trigger_effect_block(uint8_t *trigger, uint8_t intensity_percent) {
+    switch (trigger[0]) {
+        case kTriggerEffectFeedback:
+        case kTriggerEffectVibration:
+            return scale_packed_trigger_strengths(trigger, intensity_percent);
+        case kTriggerEffectWeapon: {
+            const uint8_t next = scale_trigger_strength_code(trigger[3], intensity_percent);
+            if (next == trigger[3]) {
+                return false;
+            }
+            trigger[3] = next;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 bool trigger_effect_block_active(uint8_t const *payload, uint16_t len, uint8_t trigger_flags, uint8_t flag, uint8_t offset) {
     if ((trigger_flags & flag) == 0 || len <= offset) {
         return false;
     }
-    const uint8_t mode = payload[offset];
-    return mode != 0 && mode != kTriggerEffectOff;
+    return trigger_effect_mode_active(payload[offset]);
+}
+
+void clear_cached_game_trigger_effects() {
+    cached_game_trigger_right_valid = false;
+    cached_game_trigger_left_valid = false;
+    cached_game_trigger_motor_power = 0;
+    cached_game_trigger_motor_power_valid = false;
+    last_game_trigger_update_us = 0;
+}
+
+bool game_trigger_update_recent() {
+    return last_game_trigger_update_us != 0
+        && static_cast<uint32_t>(time_us_32() - last_game_trigger_update_us) < kGameTriggerUpdateRecentUs;
+}
+
+void cache_game_trigger_effects(uint8_t const *payload, uint16_t len) {
+    if (payload == nullptr || len == 0) {
+        return;
+    }
+
+    const uint8_t trigger_flags = payload[0] & kTriggerEffectFlags;
+    if (trigger_flags == 0) {
+        return;
+    }
+
+    last_game_trigger_update_us = time_us_32();
+
+    if (
+        (trigger_flags & kTriggerRightEffectFlag)
+        && len > kTriggerEffectRightOffset + kTriggerEffectSize - 1
+    ) {
+        memcpy(cached_game_trigger_right, payload + kTriggerEffectRightOffset, sizeof(cached_game_trigger_right));
+        cached_game_trigger_right_valid = true;
+    }
+    if (
+        (trigger_flags & kTriggerLeftEffectFlag)
+        && len > kTriggerEffectLeftOffset + kTriggerEffectSize - 1
+    ) {
+        memcpy(cached_game_trigger_left, payload + kTriggerEffectLeftOffset, sizeof(cached_game_trigger_left));
+        cached_game_trigger_left_valid = true;
+    }
+
+    cached_game_trigger_motor_power = (
+        len > 1
+        && len > kTriggerEffectPowerOffset
+        && (payload[1] & kTriggerMotorPowerFlag) != 0
+    )
+        ? payload[kTriggerEffectPowerOffset]
+        : 0;
+    cached_game_trigger_motor_power_valid = true;
+}
+
+bool build_scaled_cached_game_trigger_effect(
+    uint8_t *right_trigger,
+    bool &right_valid,
+    uint8_t *left_trigger,
+    bool &left_valid,
+    uint8_t &motor_power,
+    bool &motor_power_valid
+) {
+    right_valid = cached_game_trigger_right_valid && right_trigger != nullptr;
+    left_valid = cached_game_trigger_left_valid && left_trigger != nullptr;
+    if (!right_valid && !left_valid) {
+        motor_power = 0;
+        motor_power_valid = false;
+        return false;
+    }
+
+    if (right_valid) {
+        memcpy(right_trigger, cached_game_trigger_right, kTriggerEffectSize);
+    }
+    if (left_valid) {
+        memcpy(left_trigger, cached_game_trigger_left, kTriggerEffectSize);
+    }
+
+    motor_power = cached_game_trigger_motor_power;
+    motor_power_valid = cached_game_trigger_motor_power_valid;
+
+    if (trigger_effect_intensity_percent == 0) {
+        if (right_valid && trigger_effect_block_active(right_trigger)) {
+            set_trigger_off(right_trigger);
+        }
+        if (left_valid && trigger_effect_block_active(left_trigger)) {
+            set_trigger_off(left_trigger);
+        }
+        motor_power = 0;
+        motor_power_valid = true;
+        return true;
+    }
+
+    if (trigger_effect_intensity_percent < 100) {
+        if (right_valid && trigger_effect_block_active(right_trigger)) {
+            scale_trigger_effect_block(right_trigger, trigger_effect_intensity_percent);
+        }
+        if (left_valid && trigger_effect_block_active(left_trigger)) {
+            scale_trigger_effect_block(left_trigger, trigger_effect_intensity_percent);
+        }
+        motor_power = static_cast<uint8_t>(
+            (motor_power & 0xF0) | trigger_power_reduction(trigger_effect_intensity_percent)
+        );
+        motor_power_valid = true;
+        return true;
+    }
+
+    // Re-send an explicit zero reduction when returning to 100%, in case an
+    // earlier capped report left the controller with a reduced trigger power.
+    if (!motor_power_valid) {
+        motor_power = 0;
+    }
+    motor_power_valid = true;
+    return true;
+}
+
+void replay_cached_game_trigger_effect() {
+    uint8_t right_trigger[kTriggerEffectSize]{};
+    uint8_t left_trigger[kTriggerEffectSize]{};
+    bool right_valid = false;
+    bool left_valid = false;
+    uint8_t motor_power = 0;
+    bool motor_power_valid = false;
+    if (!build_scaled_cached_game_trigger_effect(
+        right_trigger,
+        right_valid,
+        left_trigger,
+        left_valid,
+        motor_power,
+        motor_power_valid
+    )) {
+        return;
+    }
+
+    bt_replay_adaptive_trigger_effect(
+        right_trigger,
+        right_valid,
+        left_trigger,
+        left_valid,
+        motor_power,
+        motor_power_valid
+    );
 }
 
 bool valid_trigger_test_mode(uint16_t mode) {
@@ -454,7 +669,7 @@ bool valid_button_remap_payload(uint8_t const *payload, uint16_t len) {
 bool schedule_adaptive_trigger_test(uint8_t mode, uint8_t target) {
     if (
         !bt_is_controller_connected()
-        || usb_host_hid_output_recent()
+        || game_trigger_update_recent()
         || adaptive_trigger_test_active
     ) {
         return false;
@@ -625,6 +840,7 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     write_u16(buffer + 42, bt_idle_disconnect_timeout_minutes());
     buffer[44] = static_cast<uint8_t>(bt_get_signal_strength());
     buffer[45] = bt_has_signal_strength() ? 1 : 0;
+    buffer[46] = game_trigger_update_recent() ? 1 : 0;
     buffer[58] = lightbar_override_enabled ? 1 : 0;
     buffer[59] = mute_button_mode;
     buffer[60] = mute_keyboard_usage;
@@ -891,6 +1107,8 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                     trigger_effect_intensity_percent,
                     adaptive_trigger_test_target
                 );
+            } else {
+                replay_cached_game_trigger_effect();
             }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
@@ -919,6 +1137,10 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
         case CommandResetAdaptiveTriggers:
             if (value != 0) {
                 set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (game_trigger_update_recent()) {
+                set_ack(command_id, sequence, AckBusy);
                 return;
             }
             reset_adaptive_trigger_test();
@@ -1345,7 +1567,12 @@ void companion_note_host_output_report(uint8_t const *report, uint16_t len) {
 }
 
 bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len) {
-    if (payload == nullptr || trigger_effect_intensity_percent >= 100) {
+    if (payload == nullptr) {
+        return false;
+    }
+
+    cache_game_trigger_effects(payload, len);
+    if (trigger_effect_intensity_percent >= 100) {
         return false;
     }
 
@@ -1395,6 +1622,15 @@ bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len) {
             changed = true;
         }
         return changed;
+    }
+
+    if (right_trigger_active && len > kTriggerEffectRightOffset + kTriggerEffectSize - 1) {
+        changed = scale_trigger_effect_block(payload + kTriggerEffectRightOffset, trigger_effect_intensity_percent)
+            || changed;
+    }
+    if (left_trigger_active && len > kTriggerEffectLeftOffset + kTriggerEffectSize - 1) {
+        changed = scale_trigger_effect_block(payload + kTriggerEffectLeftOffset, trigger_effect_intensity_percent)
+            || changed;
     }
 
     if (len > kTriggerEffectPowerOffset) {

@@ -100,6 +100,14 @@ void audio_debug_note_bt_event(
 void audio_set_haptics_buffer_length(uint8_t length);
 uint8_t audio_haptics_buffer_length();
 void audio_set_state_data(uint8_t const *data, uint8_t len);
+void audio_set_adaptive_trigger_state(
+    uint8_t const *right_trigger,
+    bool right_valid,
+    uint8_t const *left_trigger,
+    bool left_valid,
+    uint8_t motor_power,
+    bool motor_power_valid
+);
 void audio_set_lightbar_state(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);
 void audio_handle_controller_disconnect();
 void set_headset(bool state);

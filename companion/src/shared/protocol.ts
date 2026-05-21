@@ -270,6 +270,7 @@ export interface BridgeStatusPayload {
   testHapticsBusy: boolean;
   testHapticsCooldown: boolean;
   hostOutputRecent: boolean;
+  adaptiveTriggerOutputRecent: boolean;
   testAdaptiveTriggersBusy: boolean;
   uptimeSeconds: number;
   firmwareVersion: string;
@@ -499,6 +500,7 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
     testHapticsBusy: (statusFlags & 0x01) !== 0,
     testHapticsCooldown: (statusFlags & 0x02) !== 0,
     hostOutputRecent: (statusFlags & 0x04) !== 0,
+    adaptiveTriggerOutputRecent: report[47] === 1,
     testAdaptiveTriggersBusy: (statusFlags & 0x08) !== 0,
     uptimeSeconds: readU32(report, 21),
     firmwareVersion: `${firmwareMajor}.${firmwareMinor}.${firmwarePatch}`,

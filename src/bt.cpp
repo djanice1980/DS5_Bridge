@@ -571,6 +571,50 @@ void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uin
     bt_write(report, sizeof(report));
 }
 
+void bt_replay_adaptive_trigger_effect(
+    uint8_t const *right_trigger,
+    bool right_valid,
+    uint8_t const *left_trigger,
+    bool left_valid,
+    uint8_t motor_power,
+    bool motor_power_valid
+) {
+    right_valid = right_valid && right_trigger != nullptr;
+    left_valid = left_valid && left_trigger != nullptr;
+    if ((!right_valid && !left_valid) || hid_interrupt_cid == 0) {
+        return;
+    }
+
+    audio_set_adaptive_trigger_state(
+        right_trigger,
+        right_valid,
+        left_trigger,
+        left_valid,
+        motor_power,
+        motor_power_valid
+    );
+    if (audio_host_encoded_active()) {
+        return;
+    }
+
+    uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
+    init_state_report(report);
+    uint8_t *payload = report + 3;
+    if (right_valid) {
+        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] |= DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT;
+        memcpy(payload + DS_TRIGGER_EFFECT_RIGHT_OFFSET, right_trigger, DS_TRIGGER_EFFECT_SIZE);
+    }
+    if (left_valid) {
+        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] |= DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT;
+        memcpy(payload + DS_TRIGGER_EFFECT_LEFT_OFFSET, left_trigger, DS_TRIGGER_EFFECT_SIZE);
+    }
+    if (motor_power_valid) {
+        payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
+        payload[OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET] = motor_power;
+    }
+    enqueue_state_output(report, sizeof(report), OutputReasonStateOnly);
+}
+
 void bt_reset_adaptive_triggers() {
     bt_set_adaptive_trigger_effect(0, 0);
 }

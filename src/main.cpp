@@ -271,9 +271,10 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 const bool lightbarOverride = companion_lightbar_override_active();
                 const bool hostClearsLeds = dualsense_host_output_clears_leds(outputData + 3, payloadLen);
 #ifdef ENABLE_COMPANION
+                const bool triggerIntensityChanged = companion_apply_trigger_effect_intensity(outputData + 3, payloadLen);
                 uint8_t companionOutput[sizeof(outputData)]{};
                 memcpy(companionOutput, outputData, sizeof(companionOutput));
-                bool sanitizedHostOutput = sanitize_dualsense_host_output_payload(
+                bool sanitizedHostOutput = triggerIntensityChanged || sanitize_dualsense_host_output_payload(
                     companionOutput + 3,
                     payloadLen,
                     lightbarOverride
@@ -281,8 +282,6 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 sanitizedHostOutput = bt_sanitize_host_speaker_amp_ownership(companionOutput, sizeof(companionOutput))
                     || sanitizedHostOutput;
                 sanitizedHostOutput = bt_sanitize_host_mic_ownership(companionOutput, sizeof(companionOutput))
-                    || sanitizedHostOutput;
-                sanitizedHostOutput = companion_apply_trigger_effect_intensity(companionOutput + 3, payloadLen)
                     || sanitizedHostOutput;
                 if (sanitizedHostOutput) {
                     uint8_t forwardedHostReport[48]{};

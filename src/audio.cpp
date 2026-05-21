@@ -40,8 +40,15 @@
 #define STATE_FLAG0_SPEAKER_VOLUME_ENABLE 0x20
 #define STATE_FLAG0_AUDIO_CONTROL_ENABLE 0x80
 #define STATE_FLAG1_AUDIO_CONTROL2_ENABLE 0x80
+#define STATE_FLAG0_RIGHT_TRIGGER_EFFECT 0x04
+#define STATE_FLAG0_LEFT_TRIGGER_EFFECT 0x08
+#define STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE 0x40
 #define STATE_PAYLOAD_VALID_FLAG0_OFFSET 0
 #define STATE_PAYLOAD_VALID_FLAG1_OFFSET 1
+#define STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET 10
+#define STATE_PAYLOAD_TRIGGER_LEFT_OFFSET 21
+#define STATE_PAYLOAD_TRIGGER_EFFECT_SIZE 11
+#define STATE_PAYLOAD_TRIGGER_POWER_OFFSET 36
 #define STATE_PAYLOAD_HEADPHONE_VOLUME_OFFSET 4
 #define STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET 5
 #define STATE_PAYLOAD_AUDIO_CONTROL_OFFSET 7
@@ -236,6 +243,12 @@ static uint8_t state_data[63] = {
     0x00,
     0x00, 0x00, 0xff,
 };
+static uint8_t cached_state_right_trigger[STATE_PAYLOAD_TRIGGER_EFFECT_SIZE]{};
+static uint8_t cached_state_left_trigger[STATE_PAYLOAD_TRIGGER_EFFECT_SIZE]{};
+static bool cached_state_right_trigger_valid = false;
+static bool cached_state_left_trigger_valid = false;
+static uint8_t cached_state_trigger_power = 0;
+static bool cached_state_trigger_power_valid = false;
 
 static float audio_buf[512 * 2];
 static uint audio_buf_pos = 0;
@@ -362,7 +375,85 @@ void audio_set_state_data(uint8_t const *data, uint8_t len) {
     if (copy_len < sizeof(state_data)) {
         memset(state_data + copy_len, 0, sizeof(state_data) - copy_len);
     }
+
+    if (
+        (state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & STATE_FLAG0_RIGHT_TRIGGER_EFFECT) != 0
+        && copy_len > STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET + STATE_PAYLOAD_TRIGGER_EFFECT_SIZE - 1
+    ) {
+        memcpy(
+            cached_state_right_trigger,
+            state_data + STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET,
+            sizeof(cached_state_right_trigger)
+        );
+        cached_state_right_trigger_valid = true;
+    } else if (cached_state_right_trigger_valid) {
+        state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= STATE_FLAG0_RIGHT_TRIGGER_EFFECT;
+        memcpy(
+            state_data + STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET,
+            cached_state_right_trigger,
+            sizeof(cached_state_right_trigger)
+        );
+    }
+
+    if (
+        (state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & STATE_FLAG0_LEFT_TRIGGER_EFFECT) != 0
+        && copy_len > STATE_PAYLOAD_TRIGGER_LEFT_OFFSET + STATE_PAYLOAD_TRIGGER_EFFECT_SIZE - 1
+    ) {
+        memcpy(
+            cached_state_left_trigger,
+            state_data + STATE_PAYLOAD_TRIGGER_LEFT_OFFSET,
+            sizeof(cached_state_left_trigger)
+        );
+        cached_state_left_trigger_valid = true;
+    } else if (cached_state_left_trigger_valid) {
+        state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= STATE_FLAG0_LEFT_TRIGGER_EFFECT;
+        memcpy(
+            state_data + STATE_PAYLOAD_TRIGGER_LEFT_OFFSET,
+            cached_state_left_trigger,
+            sizeof(cached_state_left_trigger)
+        );
+    }
+
+    if (
+        (state_data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] & STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE) != 0
+        && copy_len > STATE_PAYLOAD_TRIGGER_POWER_OFFSET
+    ) {
+        cached_state_trigger_power = state_data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET];
+        cached_state_trigger_power_valid = true;
+    } else if (cached_state_trigger_power_valid) {
+        state_data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] |= STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE;
+        state_data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET] = cached_state_trigger_power;
+    }
+
     clamp_state_speaker_volume();
+}
+
+void audio_set_adaptive_trigger_state(
+    uint8_t const *right_trigger,
+    bool right_valid,
+    uint8_t const *left_trigger,
+    bool left_valid,
+    uint8_t motor_power,
+    bool motor_power_valid
+) {
+    if (right_valid && right_trigger != nullptr) {
+        memcpy(cached_state_right_trigger, right_trigger, sizeof(cached_state_right_trigger));
+        cached_state_right_trigger_valid = true;
+        state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= STATE_FLAG0_RIGHT_TRIGGER_EFFECT;
+        memcpy(state_data + STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET, right_trigger, STATE_PAYLOAD_TRIGGER_EFFECT_SIZE);
+    }
+    if (left_valid && left_trigger != nullptr) {
+        memcpy(cached_state_left_trigger, left_trigger, sizeof(cached_state_left_trigger));
+        cached_state_left_trigger_valid = true;
+        state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= STATE_FLAG0_LEFT_TRIGGER_EFFECT;
+        memcpy(state_data + STATE_PAYLOAD_TRIGGER_LEFT_OFFSET, left_trigger, STATE_PAYLOAD_TRIGGER_EFFECT_SIZE);
+    }
+    if (motor_power_valid) {
+        cached_state_trigger_power = motor_power;
+        cached_state_trigger_power_valid = true;
+        state_data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] |= STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE;
+        state_data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET] = motor_power;
+    }
 }
 
 static uint8_t scale_lightbar_channel_for_state(uint8_t channel, uint8_t brightness_percent) {
@@ -926,6 +1017,10 @@ void audio_handle_controller_disconnect() {
     test_haptics_active = false;
     test_haptics_packets_remaining = 0;
     test_haptics_neutral_packets_remaining = 0;
+    cached_state_right_trigger_valid = false;
+    cached_state_left_trigger_valid = false;
+    cached_state_trigger_power = 0;
+    cached_state_trigger_power_valid = false;
     plug_headset = false;
     controller_state_ready = false;
     host_route_primer_toggle_pending = false;

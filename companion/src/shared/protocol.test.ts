@@ -69,6 +69,7 @@ describe('companion protocol', () => {
     writeU16(report, 43, 45);
     report[45] = 0xd8;
     report[46] = 1;
+    report[47] = 1;
     report[60] = 1;
     report[61] = 0x68;
     report[62] = 0x82;
@@ -91,6 +92,7 @@ describe('companion protocol', () => {
     expect(status.usbSuspendDisconnectEnabled).toBe(true);
     expect(status.sleepKeybindEnabled).toBe(true);
     expect(status.testAdaptiveTriggersBusy).toBe(true);
+    expect(status.adaptiveTriggerOutputRecent).toBe(true);
     expect(status.idleDisconnectTimeoutMinutes).toBe(45);
     expect(status.signalStrengthDbm).toBe(-40);
     expect(status.muteButtonMode).toBe('keyboard');
