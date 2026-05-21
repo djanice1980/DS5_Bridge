@@ -1,6 +1,7 @@
 #include "companion.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 
 #include "audio.h"
@@ -14,13 +15,35 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 0;
-constexpr uint8_t kFirmwareMajor = 0;
-constexpr uint8_t kFirmwareMinor = 5;
-constexpr uint8_t kFirmwarePatch = 15;
+constexpr uint8_t kProtocolMinor = 1;
+constexpr uint8_t kFirmwareMajor = 1;
+constexpr uint8_t kFirmwareMinor = 0;
+constexpr uint8_t kFirmwarePatch = 1;
 constexpr uint8_t kTriangleButtonBit = 0x80;
+constexpr uint8_t kSquareButtonBit = 0x10;
+constexpr uint8_t kCrossButtonBit = 0x20;
+constexpr uint8_t kCircleButtonBit = 0x40;
+constexpr uint8_t kL1ButtonBit = 0x01;
+constexpr uint8_t kR1ButtonBit = 0x02;
+constexpr uint8_t kL2ButtonBit = 0x04;
+constexpr uint8_t kR2ButtonBit = 0x08;
+constexpr uint8_t kCreateButtonBit = 0x10;
+constexpr uint8_t kOptionsButtonBit = 0x20;
+constexpr uint8_t kL3ButtonBit = 0x40;
+constexpr uint8_t kR3ButtonBit = 0x80;
 constexpr uint8_t kHomeButtonBit = 0x01;
 constexpr uint8_t kMuteButtonBit = 0x04;
+constexpr uint8_t kDpadMask = 0x0F;
+constexpr uint8_t kDpadUp = 0x00;
+constexpr uint8_t kDpadUpRight = 0x01;
+constexpr uint8_t kDpadRight = 0x02;
+constexpr uint8_t kDpadDownRight = 0x03;
+constexpr uint8_t kDpadDown = 0x04;
+constexpr uint8_t kDpadDownLeft = 0x05;
+constexpr uint8_t kDpadLeft = 0x06;
+constexpr uint8_t kDpadUpLeft = 0x07;
+constexpr uint8_t kDpadNeutral = 0x08;
+constexpr uint32_t kShortcutRepeatUs = 180000;
 constexpr uint8_t kDefaultMuteKeyboardUsage = 0x68; // F13
 constexpr uint8_t kMuteKeyboardModifierMask = 0x0F;
 constexpr uint8_t kMuteKeyboardHoldFlag = 0x80;
@@ -29,11 +52,15 @@ constexpr uint32_t kMuteLedFlashDurationUs = 120000;
 constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
 constexpr uint8_t kClassicRumbleTestAmplitude = 160;
 constexpr uint32_t kAdaptiveTriggerTestDurationUs = 2500000;
+constexpr uint32_t kGameTriggerUpdateRecentUs = 2000000;
 constexpr uint8_t kTriggerEffectSize = 11;
 constexpr uint8_t kTriggerEffectRightOffset = 10;
 constexpr uint8_t kTriggerEffectLeftOffset = 21;
 constexpr uint8_t kTriggerEffectPowerOffset = 36;
 constexpr uint8_t kTriggerEffectOff = 0x05;
+constexpr uint8_t kTriggerEffectFeedback = 0x21;
+constexpr uint8_t kTriggerEffectWeapon = 0x25;
+constexpr uint8_t kTriggerEffectVibration = 0x26;
 constexpr uint8_t kTriggerRightEffectFlag = 0x04;
 constexpr uint8_t kTriggerLeftEffectFlag = 0x08;
 constexpr uint8_t kTriggerEffectFlags = kTriggerRightEffectFlag | kTriggerLeftEffectFlag;
@@ -65,6 +92,16 @@ enum CommandId : uint8_t {
     CommandSetPollingRateMode = 0x12,
     CommandSetClassicRumbleGain = 0x13,
     CommandTestClassicRumble = 0x14,
+    CommandSetHostAudioEnabled = 0x15,
+    CommandHostAudioHeartbeat = 0x16,
+    CommandStartHostAudio = 0x17,
+    CommandStopHostAudio = 0x18,
+    CommandSetDuplexEnabled = 0x19,
+    CommandSetMicVolume = 0x1A,
+    CommandSetMicMute = 0x1B,
+    CommandSetIdleDisconnectTimeout = 0x1C,
+    CommandSetSpeakerVolumeShortcut = 0x1D,
+    CommandSetButtonRemap = 0x1E,
 };
 
 enum AckResult : uint8_t {
@@ -84,6 +121,62 @@ enum MuteButtonMode : uint8_t {
     MuteButtonQuiet = 2,
 };
 
+enum ShortcutEvent : uint8_t {
+    ShortcutEventControllerVolumeDown = 0x01,
+    ShortcutEventControllerVolumeUp = 0x02,
+    ShortcutEventSleepController = 0x03,
+};
+
+enum ShortcutSetting : uint8_t {
+    ShortcutSettingSleepKeybind,
+    ShortcutSettingControllerVolume,
+};
+
+enum ShortcutCombo : uint8_t {
+    ShortcutComboHomeDpadUp,
+    ShortcutComboHomeDpadDown,
+    ShortcutComboHomeTriangle,
+};
+
+enum ShortcutTrigger : uint8_t {
+    ShortcutTriggerPressed,
+    ShortcutTriggerRepeat,
+};
+
+enum RemapButton : uint8_t {
+    RemapL2,
+    RemapL1,
+    RemapCreate,
+    RemapDpadUp,
+    RemapDpadLeft,
+    RemapDpadDown,
+    RemapDpadRight,
+    RemapL3,
+    RemapR2,
+    RemapR1,
+    RemapOptions,
+    RemapTriangle,
+    RemapCircle,
+    RemapCross,
+    RemapSquare,
+    RemapR3,
+    RemapButtonCount,
+};
+
+struct ShortcutBinding {
+    ShortcutCombo combo;
+    ShortcutEvent event;
+    ShortcutSetting setting;
+    ShortcutTrigger trigger;
+};
+
+constexpr ShortcutBinding kShortcutBindings[] = {
+    {ShortcutComboHomeDpadDown, ShortcutEventControllerVolumeDown, ShortcutSettingControllerVolume, ShortcutTriggerRepeat},
+    {ShortcutComboHomeDpadUp, ShortcutEventControllerVolumeUp, ShortcutSettingControllerVolume, ShortcutTriggerRepeat},
+    {ShortcutComboHomeTriangle, ShortcutEventSleepController, ShortcutSettingSleepKeybind, ShortcutTriggerPressed},
+};
+constexpr size_t kShortcutBindingCount = sizeof(kShortcutBindings) / sizeof(kShortcutBindings[0]);
+
 critical_section_t companion_report_cs;
 uint8_t last_controller_report[63]{};
 bool have_controller_report = false;
@@ -102,7 +195,10 @@ uint8_t mute_keyboard_usage = kDefaultMuteKeyboardUsage;
 uint8_t mute_keyboard_modifiers = 0;
 bool mute_button_last_pressed = false;
 bool sleep_keybind_enabled = false;
-bool sleep_combo_last_pressed = false;
+bool speaker_volume_shortcut_enabled = false;
+bool shortcut_binding_last_pressed[kShortcutBindingCount]{};
+uint32_t shortcut_binding_last_step_us[kShortcutBindingCount]{};
+uint8_t pending_shortcut_event = 0;
 bool mute_keyboard_pending = false;
 bool mute_keyboard_pressed = false;
 uint32_t mute_keyboard_release_at_us = 0;
@@ -115,6 +211,16 @@ uint8_t adaptive_trigger_test_mode = kTriggerTestModeFeedback;
 uint8_t adaptive_trigger_test_target = kTriggerTargetBoth;
 bool adaptive_trigger_test_active = false;
 uint32_t adaptive_trigger_test_until_us = 0;
+uint8_t cached_game_trigger_right[kTriggerEffectSize]{};
+uint8_t cached_game_trigger_left[kTriggerEffectSize]{};
+bool cached_game_trigger_right_valid = false;
+bool cached_game_trigger_left_valid = false;
+uint8_t cached_game_trigger_motor_power = 0;
+bool cached_game_trigger_motor_power_valid = false;
+uint32_t last_game_trigger_update_us = 0;
+uint8_t companion_mic_volume_percent = 100;
+bool companion_mic_muted = false;
+uint8_t button_remap[RemapButtonCount]{};
 
 struct LastAck {
     uint8_t command_id = 0;
@@ -124,6 +230,8 @@ struct LastAck {
 };
 
 LastAck last_ack;
+
+void clear_cached_game_trigger_effects();
 
 uint16_t read_u16(uint8_t const *data) {
     return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
@@ -143,6 +251,12 @@ void write_u32(uint8_t *data, uint32_t value) {
 
 uint32_t uptime_seconds() {
     return to_ms_since_boot(get_absolute_time()) / 1000;
+}
+
+void reset_button_remap() {
+    for (uint8_t i = 0; i < RemapButtonCount; i++) {
+        button_remap[i] = i;
+    }
 }
 
 void write_magic_and_version(uint8_t *buffer) {
@@ -199,22 +313,34 @@ void restore_defaults() {
     adaptive_trigger_test_mode = kTriggerTestModeFeedback;
     adaptive_trigger_test_target = kTriggerTargetBoth;
     adaptive_trigger_test_active = false;
+    clear_cached_game_trigger_effects();
     bt_reset_adaptive_triggers();
     mute_button_mode = MuteButtonNormal;
     mute_keyboard_usage = kDefaultMuteKeyboardUsage;
     mute_keyboard_modifiers = 0;
     mute_button_last_pressed = false;
     sleep_keybind_enabled = false;
-    sleep_combo_last_pressed = false;
+    speaker_volume_shortcut_enabled = false;
+    std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
+    std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
+    pending_shortcut_event = 0;
     mute_keyboard_pending = false;
     mute_keyboard_pressed = false;
     mute_led_flash_pending = false;
     audio_set_quiet_mode(false);
+    audio_host_set_duplex_requested(false);
+    audio_host_set_requested(false);
+    companion_mic_volume_percent = 100;
+    companion_mic_muted = false;
+    audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+    bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
+    reset_button_remap();
     bt_set_mute_led(false);
     lightbar_override_enabled = false;
-    set_lightbar_color(0xff, 0xd7, 0x00, 100);
+    set_lightbar_color(0x00, 0x00, 0xff, 100);
     set_led_enabled(true);
     set_idle_disconnect_enabled(true);
+    bt_set_idle_disconnect_timeout_minutes(15);
     usb_set_suspend_disconnect_enabled(true);
     usb_set_hid_polling_rate_mode(2);
 }
@@ -311,12 +437,213 @@ void set_trigger_off(uint8_t *trigger) {
     trigger[0] = kTriggerEffectOff;
 }
 
+bool trigger_effect_mode_active(uint8_t mode) {
+    return mode != 0 && mode != kTriggerEffectOff;
+}
+
+bool trigger_effect_block_active(uint8_t const *trigger) {
+    return trigger != nullptr && trigger_effect_mode_active(trigger[0]);
+}
+
+uint8_t scale_trigger_strength_code(uint8_t value, uint8_t intensity_percent) {
+    const uint8_t strength = static_cast<uint8_t>((value & 0x07) + 1);
+    uint8_t scaled = static_cast<uint8_t>((static_cast<uint16_t>(strength) * intensity_percent + 99) / 100);
+    scaled = std::min<uint8_t>(std::max<uint8_t>(scaled, 1), 8);
+    return static_cast<uint8_t>((value & 0xF8) | ((scaled - 1) & 0x07));
+}
+
+bool scale_packed_trigger_strengths(uint8_t *trigger, uint8_t intensity_percent) {
+    const uint16_t active_zones = static_cast<uint16_t>(trigger[1])
+        | (static_cast<uint16_t>(trigger[2]) << 8);
+    uint32_t packed = static_cast<uint32_t>(trigger[3])
+        | (static_cast<uint32_t>(trigger[4]) << 8)
+        | (static_cast<uint32_t>(trigger[5]) << 16)
+        | (static_cast<uint32_t>(trigger[6]) << 24);
+    uint32_t next = packed;
+
+    for (uint8_t zone = 0; zone < 10; zone++) {
+        if ((active_zones & static_cast<uint16_t>(1 << zone)) == 0) {
+            continue;
+        }
+        const uint8_t shift = static_cast<uint8_t>(zone * 3);
+        const uint8_t value = static_cast<uint8_t>((packed >> shift) & 0x07);
+        const uint8_t scaled = scale_trigger_strength_code(value, intensity_percent) & 0x07;
+        next = (next & ~(0x07u << shift)) | (static_cast<uint32_t>(scaled) << shift);
+    }
+
+    if (next == packed) {
+        return false;
+    }
+
+    trigger[3] = static_cast<uint8_t>(next & 0xFF);
+    trigger[4] = static_cast<uint8_t>((next >> 8) & 0xFF);
+    trigger[5] = static_cast<uint8_t>((next >> 16) & 0xFF);
+    trigger[6] = static_cast<uint8_t>((next >> 24) & 0xFF);
+    return true;
+}
+
+bool scale_trigger_effect_block(uint8_t *trigger, uint8_t intensity_percent) {
+    switch (trigger[0]) {
+        case kTriggerEffectFeedback:
+        case kTriggerEffectVibration:
+            return scale_packed_trigger_strengths(trigger, intensity_percent);
+        case kTriggerEffectWeapon: {
+            const uint8_t next = scale_trigger_strength_code(trigger[3], intensity_percent);
+            if (next == trigger[3]) {
+                return false;
+            }
+            trigger[3] = next;
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 bool trigger_effect_block_active(uint8_t const *payload, uint16_t len, uint8_t trigger_flags, uint8_t flag, uint8_t offset) {
     if ((trigger_flags & flag) == 0 || len <= offset) {
         return false;
     }
-    const uint8_t mode = payload[offset];
-    return mode != 0 && mode != kTriggerEffectOff;
+    return trigger_effect_mode_active(payload[offset]);
+}
+
+void clear_cached_game_trigger_effects() {
+    cached_game_trigger_right_valid = false;
+    cached_game_trigger_left_valid = false;
+    cached_game_trigger_motor_power = 0;
+    cached_game_trigger_motor_power_valid = false;
+    last_game_trigger_update_us = 0;
+}
+
+bool game_trigger_update_recent() {
+    return last_game_trigger_update_us != 0
+        && static_cast<uint32_t>(time_us_32() - last_game_trigger_update_us) < kGameTriggerUpdateRecentUs;
+}
+
+void cache_game_trigger_effects(uint8_t const *payload, uint16_t len) {
+    if (payload == nullptr || len == 0) {
+        return;
+    }
+
+    const uint8_t trigger_flags = payload[0] & kTriggerEffectFlags;
+    if (trigger_flags == 0) {
+        return;
+    }
+
+    last_game_trigger_update_us = time_us_32();
+
+    if (
+        (trigger_flags & kTriggerRightEffectFlag)
+        && len > kTriggerEffectRightOffset + kTriggerEffectSize - 1
+    ) {
+        memcpy(cached_game_trigger_right, payload + kTriggerEffectRightOffset, sizeof(cached_game_trigger_right));
+        cached_game_trigger_right_valid = true;
+    }
+    if (
+        (trigger_flags & kTriggerLeftEffectFlag)
+        && len > kTriggerEffectLeftOffset + kTriggerEffectSize - 1
+    ) {
+        memcpy(cached_game_trigger_left, payload + kTriggerEffectLeftOffset, sizeof(cached_game_trigger_left));
+        cached_game_trigger_left_valid = true;
+    }
+
+    cached_game_trigger_motor_power = (
+        len > 1
+        && len > kTriggerEffectPowerOffset
+        && (payload[1] & kTriggerMotorPowerFlag) != 0
+    )
+        ? payload[kTriggerEffectPowerOffset]
+        : 0;
+    cached_game_trigger_motor_power_valid = true;
+}
+
+bool build_scaled_cached_game_trigger_effect(
+    uint8_t *right_trigger,
+    bool &right_valid,
+    uint8_t *left_trigger,
+    bool &left_valid,
+    uint8_t &motor_power,
+    bool &motor_power_valid
+) {
+    right_valid = cached_game_trigger_right_valid && right_trigger != nullptr;
+    left_valid = cached_game_trigger_left_valid && left_trigger != nullptr;
+    if (!right_valid && !left_valid) {
+        motor_power = 0;
+        motor_power_valid = false;
+        return false;
+    }
+
+    if (right_valid) {
+        memcpy(right_trigger, cached_game_trigger_right, kTriggerEffectSize);
+    }
+    if (left_valid) {
+        memcpy(left_trigger, cached_game_trigger_left, kTriggerEffectSize);
+    }
+
+    motor_power = cached_game_trigger_motor_power;
+    motor_power_valid = cached_game_trigger_motor_power_valid;
+
+    if (trigger_effect_intensity_percent == 0) {
+        if (right_valid && trigger_effect_block_active(right_trigger)) {
+            set_trigger_off(right_trigger);
+        }
+        if (left_valid && trigger_effect_block_active(left_trigger)) {
+            set_trigger_off(left_trigger);
+        }
+        motor_power = 0;
+        motor_power_valid = true;
+        return true;
+    }
+
+    if (trigger_effect_intensity_percent < 100) {
+        if (right_valid && trigger_effect_block_active(right_trigger)) {
+            scale_trigger_effect_block(right_trigger, trigger_effect_intensity_percent);
+        }
+        if (left_valid && trigger_effect_block_active(left_trigger)) {
+            scale_trigger_effect_block(left_trigger, trigger_effect_intensity_percent);
+        }
+        motor_power = static_cast<uint8_t>(
+            (motor_power & 0xF0) | trigger_power_reduction(trigger_effect_intensity_percent)
+        );
+        motor_power_valid = true;
+        return true;
+    }
+
+    // Re-send an explicit zero reduction when returning to 100%, in case an
+    // earlier capped report left the controller with a reduced trigger power.
+    if (!motor_power_valid) {
+        motor_power = 0;
+    }
+    motor_power_valid = true;
+    return true;
+}
+
+void replay_cached_game_trigger_effect() {
+    uint8_t right_trigger[kTriggerEffectSize]{};
+    uint8_t left_trigger[kTriggerEffectSize]{};
+    bool right_valid = false;
+    bool left_valid = false;
+    uint8_t motor_power = 0;
+    bool motor_power_valid = false;
+    if (!build_scaled_cached_game_trigger_effect(
+        right_trigger,
+        right_valid,
+        left_trigger,
+        left_valid,
+        motor_power,
+        motor_power_valid
+    )) {
+        return;
+    }
+
+    bt_replay_adaptive_trigger_effect(
+        right_trigger,
+        right_valid,
+        left_trigger,
+        left_valid,
+        motor_power,
+        motor_power_valid
+    );
 }
 
 bool valid_trigger_test_mode(uint16_t mode) {
@@ -327,10 +654,22 @@ bool valid_trigger_target(uint8_t target) {
     return target <= kTriggerTargetRight;
 }
 
+bool valid_button_remap_payload(uint8_t const *payload, uint16_t len) {
+    if (payload == nullptr || len < RemapButtonCount) {
+        return false;
+    }
+    for (uint8_t i = 0; i < RemapButtonCount; i++) {
+        if (payload[i] >= RemapButtonCount) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool schedule_adaptive_trigger_test(uint8_t mode, uint8_t target) {
     if (
         !bt_is_controller_connected()
-        || usb_host_hid_output_recent()
+        || game_trigger_update_recent()
         || adaptive_trigger_test_active
     ) {
         return false;
@@ -498,7 +837,10 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[38] = host_output_report_len;
     buffer[39] = host_output_report_id;
     write_u16(buffer + 40, host_output_report_count);
-    memcpy(buffer + 42, host_output_report_first16, sizeof(host_output_report_first16));
+    write_u16(buffer + 42, bt_idle_disconnect_timeout_minutes());
+    buffer[44] = static_cast<uint8_t>(bt_get_signal_strength());
+    buffer[45] = bt_has_signal_strength() ? 1 : 0;
+    buffer[46] = game_trigger_update_recent() ? 1 : 0;
     buffer[58] = lightbar_override_enabled ? 1 : 0;
     buffer[59] = mute_button_mode;
     buffer[60] = mute_keyboard_usage;
@@ -566,6 +908,45 @@ uint16_t build_audio_stats(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+
+    audio_host_status status{};
+    audio_get_host_status(&status);
+    buffer[6] = status.mode;
+    buffer[7] = status.fallback_reason;
+    buffer[8] = status.host_requested ? 1 : 0;
+    buffer[9] = status.heartbeat_healthy ? 1 : 0;
+    buffer[10] = status.stream_active ? 1 : 0;
+    buffer[11] = status.stream_healthy ? 1 : 0;
+    buffer[12] = status.duplex_requested ? 1 : 0;
+    buffer[13] = (status.duplex_active ? 0x01 : 0x00)
+        | (status.headset_plugged ? 0x02 : 0x00)
+        | (status.headset_audio_route ? 0x04 : 0x00)
+        | (status.controller_state_ready ? 0x08 : 0x00);
+    write_u16(buffer + 14, status.stream_generation);
+    write_u32(buffer + 16, status.heartbeat_age_ms);
+    write_u32(buffer + 20, status.frame_age_ms);
+    write_u32(buffer + 24, status.host_frames_received);
+    write_u32(buffer + 28, status.host_frames_dropped);
+    write_u32(buffer + 32, status.mic_packets_received);
+    write_u32(buffer + 36, status.mic_packets_dropped);
+    write_u32(buffer + 40, status.mic_decode_success);
+    write_u32(buffer + 44, status.mic_decode_fail);
+    write_u32(buffer + 48, status.mic_usb_write_success);
+    write_u32(buffer + 52, status.mic_usb_write_short);
+    write_u16(buffer + 56, status.mic_last_decoded_samples);
+    write_u16(buffer + 58, status.mic_last_written_bytes);
+    write_u16(buffer + 60, status.mic_peak_permille);
+    buffer[62] = status.mic_usb_streaming ? 1 : 0;
+    return COMPANION_PAYLOAD_SIZE;
+}
+
 void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     uint8_t command_id = 0;
     uint8_t sequence = 0;
@@ -617,6 +998,29 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckOk);
                 return;
             }
+
+        case CommandSetMicVolume:
+            if (value > 100) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            companion_mic_volume_percent = static_cast<uint8_t>(value);
+            audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+            bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetMicMute:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            companion_mic_muted = value == 1;
+            audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
 
         case CommandSetLightbarColor:
             if (value > 100) {
@@ -703,6 +1107,8 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                     trigger_effect_intensity_percent,
                     adaptive_trigger_test_target
                 );
+            } else {
+                replay_cached_game_trigger_effect();
             }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
@@ -733,6 +1139,10 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
+            if (game_trigger_update_recent()) {
+                set_ack(command_id, sequence, AckBusy);
+                return;
+            }
             reset_adaptive_trigger_test();
             set_ack(command_id, sequence, AckOk);
             return;
@@ -757,6 +1167,15 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetIdleDisconnectTimeout:
+            if (!bt_set_idle_disconnect_timeout_minutes(static_cast<uint16_t>(value))) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandSetUsbSuspendDisconnectEnabled:
             if (value > 1) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -773,7 +1192,31 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             sleep_keybind_enabled = value == 1;
-            sleep_combo_last_pressed = false;
+            std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
+            std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetSpeakerVolumeShortcut:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            speaker_volume_shortcut_enabled = value == 1;
+            std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
+            std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
+            pending_shortcut_event = 0;
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetButtonRemap:
+            if (value != 0 || !valid_button_remap_payload(buffer + 10, bufsize - 10)) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            memcpy(button_remap, buffer + 10, RemapButtonCount);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -815,6 +1258,53 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetHostAudioEnabled:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_set_requested(value == 1);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandHostAudioHeartbeat:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_note_heartbeat();
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandStartHostAudio:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_start_stream();
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandStopHostAudio:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_stop_stream();
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetDuplexEnabled:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_set_duplex_requested(value == 1);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandRestoreDefaults:
             if (value != 0) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -831,6 +1321,167 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     }
 }
 
+bool shortcut_setting_enabled(ShortcutSetting setting) {
+    switch (setting) {
+        case ShortcutSettingSleepKeybind:
+            return sleep_keybind_enabled;
+        case ShortcutSettingControllerVolume:
+            return speaker_volume_shortcut_enabled;
+        default:
+            return false;
+    }
+}
+
+bool shortcut_combo_pressed(const ShortcutBinding &binding, const uint8_t *report) {
+    const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
+    if (!home_pressed) {
+        return false;
+    }
+
+    const uint8_t dpad_direction = report[7] & kDpadMask;
+    switch (binding.combo) {
+        case ShortcutComboHomeDpadUp:
+            return dpad_direction == kDpadUp;
+        case ShortcutComboHomeDpadDown:
+            return dpad_direction == kDpadDown;
+        case ShortcutComboHomeTriangle:
+            return (report[7] & kTriangleButtonBit) != 0;
+        default:
+            return false;
+    }
+}
+
+void suppress_shortcut_input(const ShortcutBinding &binding, uint8_t *report) {
+    report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
+    switch (binding.combo) {
+        case ShortcutComboHomeDpadUp:
+        case ShortcutComboHomeDpadDown:
+            report[7] = static_cast<uint8_t>((report[7] & ~kDpadMask) | kDpadNeutral);
+            break;
+        case ShortcutComboHomeTriangle:
+            report[7] &= static_cast<uint8_t>(~kTriangleButtonBit);
+            break;
+        default:
+            break;
+    }
+}
+
+void process_shortcut_bindings(uint8_t *report) {
+    const uint32_t now = time_us_32();
+    for (size_t i = 0; i < kShortcutBindingCount; i++) {
+        const ShortcutBinding &binding = kShortcutBindings[i];
+        const bool pressed = shortcut_setting_enabled(binding.setting) && shortcut_combo_pressed(binding, report);
+        if (pressed) {
+            suppress_shortcut_input(binding, report);
+            const bool should_emit = binding.trigger == ShortcutTriggerPressed
+                ? !shortcut_binding_last_pressed[i]
+                : (!shortcut_binding_last_pressed[i]
+                    || static_cast<uint32_t>(now - shortcut_binding_last_step_us[i]) >= kShortcutRepeatUs);
+            if (should_emit) {
+                pending_shortcut_event = binding.event;
+                shortcut_binding_last_step_us[i] = now;
+            }
+        } else {
+            shortcut_binding_last_step_us[i] = 0;
+        }
+        shortcut_binding_last_pressed[i] = pressed;
+    }
+}
+
+bool dpad_direction_has(uint8_t direction, RemapButton button) {
+    switch (button) {
+        case RemapDpadUp:
+            return direction == kDpadUp || direction == kDpadUpRight || direction == kDpadUpLeft;
+        case RemapDpadRight:
+            return direction == kDpadRight || direction == kDpadUpRight || direction == kDpadDownRight;
+        case RemapDpadDown:
+            return direction == kDpadDown || direction == kDpadDownRight || direction == kDpadDownLeft;
+        case RemapDpadLeft:
+            return direction == kDpadLeft || direction == kDpadUpLeft || direction == kDpadDownLeft;
+        default:
+            return false;
+    }
+}
+
+uint8_t dpad_direction_from_buttons(bool up, bool right, bool down, bool left) {
+    if (up && right && !down && !left) return kDpadUpRight;
+    if (right && down && !up && !left) return kDpadDownRight;
+    if (down && left && !up && !right) return kDpadDownLeft;
+    if (left && up && !right && !down) return kDpadUpLeft;
+    if (up && !down) return kDpadUp;
+    if (right && !left) return kDpadRight;
+    if (down && !up) return kDpadDown;
+    if (left && !right) return kDpadLeft;
+    return kDpadNeutral;
+}
+
+void apply_button_remap(uint8_t *report, uint16_t len) {
+    if (report == nullptr || len <= 8) {
+        return;
+    }
+
+    bool source_pressed[RemapButtonCount]{};
+    uint8_t source_analog[RemapButtonCount]{};
+    const uint8_t dpad_direction = report[7] & kDpadMask;
+
+    source_pressed[RemapL2] = (report[8] & kL2ButtonBit) != 0;
+    source_pressed[RemapL1] = (report[8] & kL1ButtonBit) != 0;
+    source_pressed[RemapCreate] = (report[8] & kCreateButtonBit) != 0;
+    source_pressed[RemapDpadUp] = dpad_direction_has(dpad_direction, RemapDpadUp);
+    source_pressed[RemapDpadLeft] = dpad_direction_has(dpad_direction, RemapDpadLeft);
+    source_pressed[RemapDpadDown] = dpad_direction_has(dpad_direction, RemapDpadDown);
+    source_pressed[RemapDpadRight] = dpad_direction_has(dpad_direction, RemapDpadRight);
+    source_pressed[RemapL3] = (report[8] & kL3ButtonBit) != 0;
+    source_pressed[RemapR2] = (report[8] & kR2ButtonBit) != 0;
+    source_pressed[RemapR1] = (report[8] & kR1ButtonBit) != 0;
+    source_pressed[RemapOptions] = (report[8] & kOptionsButtonBit) != 0;
+    source_pressed[RemapTriangle] = (report[7] & kTriangleButtonBit) != 0;
+    source_pressed[RemapCircle] = (report[7] & kCircleButtonBit) != 0;
+    source_pressed[RemapCross] = (report[7] & kCrossButtonBit) != 0;
+    source_pressed[RemapSquare] = (report[7] & kSquareButtonBit) != 0;
+    source_pressed[RemapR3] = (report[8] & kR3ButtonBit) != 0;
+
+    for (uint8_t i = 0; i < RemapButtonCount; i++) {
+        source_analog[i] = source_pressed[i] ? 0xFF : 0;
+    }
+    source_analog[RemapL2] = report[4];
+    source_analog[RemapR2] = report[5];
+
+    bool target_pressed[RemapButtonCount]{};
+    uint8_t target_analog[RemapButtonCount]{};
+    for (uint8_t source = 0; source < RemapButtonCount; source++) {
+        const uint8_t target = button_remap[source];
+        if (source_pressed[source]) {
+            target_pressed[target] = true;
+        }
+        target_analog[target] = std::max(target_analog[target], source_analog[source]);
+    }
+
+    report[4] = target_analog[RemapL2];
+    report[5] = target_analog[RemapR2];
+    report[7] &= static_cast<uint8_t>(~(kDpadMask | kSquareButtonBit | kCrossButtonBit | kCircleButtonBit | kTriangleButtonBit));
+    report[7] |= dpad_direction_from_buttons(
+        target_pressed[RemapDpadUp],
+        target_pressed[RemapDpadRight],
+        target_pressed[RemapDpadDown],
+        target_pressed[RemapDpadLeft]
+    );
+    if (target_pressed[RemapSquare]) report[7] |= kSquareButtonBit;
+    if (target_pressed[RemapCross]) report[7] |= kCrossButtonBit;
+    if (target_pressed[RemapCircle]) report[7] |= kCircleButtonBit;
+    if (target_pressed[RemapTriangle]) report[7] |= kTriangleButtonBit;
+
+    report[8] = 0;
+    if (target_pressed[RemapL1]) report[8] |= kL1ButtonBit;
+    if (target_pressed[RemapR1]) report[8] |= kR1ButtonBit;
+    if (target_pressed[RemapL2]) report[8] |= kL2ButtonBit;
+    if (target_pressed[RemapR2]) report[8] |= kR2ButtonBit;
+    if (target_pressed[RemapCreate]) report[8] |= kCreateButtonBit;
+    if (target_pressed[RemapOptions]) report[8] |= kOptionsButtonBit;
+    if (target_pressed[RemapL3]) report[8] |= kL3ButtonBit;
+    if (target_pressed[RemapR3]) report[8] |= kR3ButtonBit;
+}
+
 } // namespace
 
 void companion_init() {
@@ -840,6 +1491,12 @@ void companion_init() {
 }
 
 void companion_loop() {
+    if (pending_shortcut_event != 0 && tud_hid_n_ready(COMPANION_HID_INSTANCE)) {
+        const uint8_t event = pending_shortcut_event;
+        if (tud_hid_n_report(COMPANION_HID_INSTANCE, COMPANION_REPORT_INPUT, &event, 1)) {
+            pending_shortcut_event = 0;
+        }
+    }
     audio_test_haptics_loop();
     classic_rumble_test_loop();
     mute_keyboard_loop();
@@ -851,15 +1508,13 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
         return;
     }
 
-    const bool sleep_combo_pressed = (report[9] & kHomeButtonBit) != 0 && (report[7] & kTriangleButtonBit) != 0;
-    if (sleep_keybind_enabled && sleep_combo_pressed) {
+    const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
+    const uint8_t dpad_direction = report[7] & kDpadMask;
+    const bool dpad_pressed = dpad_direction <= 0x07;
+    process_shortcut_bindings(report);
+    if (home_pressed && dpad_pressed) {
         report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
-        report[7] &= static_cast<uint8_t>(~kTriangleButtonBit);
-        if (!sleep_combo_last_pressed) {
-            bt_disconnect();
-        }
     }
-    sleep_combo_last_pressed = sleep_combo_pressed;
 
     const bool pressed = (report[9] & kMuteButtonBit) != 0;
     if (mute_button_mode != MuteButtonNormal) {
@@ -877,6 +1532,7 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     }
 
     mute_button_last_pressed = pressed;
+    apply_button_remap(report, len);
 }
 
 void companion_update_controller_report(uint8_t const *report, uint16_t len) {
@@ -911,7 +1567,12 @@ void companion_note_host_output_report(uint8_t const *report, uint16_t len) {
 }
 
 bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len) {
-    if (payload == nullptr || trigger_effect_intensity_percent >= 100) {
+    if (payload == nullptr) {
+        return false;
+    }
+
+    cache_game_trigger_effects(payload, len);
+    if (trigger_effect_intensity_percent >= 100) {
         return false;
     }
 
@@ -963,6 +1624,15 @@ bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len) {
         return changed;
     }
 
+    if (right_trigger_active && len > kTriggerEffectRightOffset + kTriggerEffectSize - 1) {
+        changed = scale_trigger_effect_block(payload + kTriggerEffectRightOffset, trigger_effect_intensity_percent)
+            || changed;
+    }
+    if (left_trigger_active && len > kTriggerEffectLeftOffset + kTriggerEffectSize - 1) {
+        changed = scale_trigger_effect_block(payload + kTriggerEffectLeftOffset, trigger_effect_intensity_percent)
+            || changed;
+    }
+
     if (len > kTriggerEffectPowerOffset) {
         const uint8_t next_flags = payload[1] | kTriggerMotorPowerFlag;
         const uint8_t next_power = static_cast<uint8_t>(
@@ -1001,12 +1671,30 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_audio_debug(buffer, reqlen);
         case COMPANION_REPORT_AUDIO_STATS:
             return build_audio_stats(buffer, reqlen);
+        case COMPANION_REPORT_HOST_AUDIO_STATUS:
+            return build_host_audio_status(buffer, reqlen);
         default:
             return 0;
     }
 }
 
 void companion_set_report(uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
+    if (report_type == HID_REPORT_TYPE_OUTPUT) {
+        if (report_id == COMPANION_REPORT_HOST_AUDIO_STREAM) {
+            audio_host_receive_packet(buffer, bufsize);
+            return;
+        }
+        if (bufsize > 0 && buffer[0] == COMPANION_REPORT_HOST_AUDIO_STREAM) {
+            audio_host_receive_packet(buffer + 1, bufsize - 1);
+            return;
+        }
+        if (report_id == 0 && bufsize >= sizeof(kMagic) && has_magic(buffer)) {
+            audio_host_receive_packet(buffer, bufsize);
+            return;
+        }
+        return;
+    }
+
     if (report_type != HID_REPORT_TYPE_FEATURE || report_id != COMPANION_REPORT_COMMAND) {
         set_ack(report_id, 0, AckUnknownCommand);
         return;

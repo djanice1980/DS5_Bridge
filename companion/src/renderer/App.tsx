@@ -1,46 +1,119 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  type LucideIcon,
-  Activity,
-  Bell,
-  Check,
-  ChevronDown,
-  Keyboard,
-  Minus,
-  Moon,
-  MoreHorizontal,
-  Palette,
-  Play,
-  RefreshCcw,
-  Settings2,
-  SlidersHorizontal,
-  Sparkles,
-  Vibrate,
-  Volume2,
-  VolumeX,
-  X,
-  Zap
-} from 'lucide-react';
+  type TablerIcon,
+  IconAdjustmentsSpark,
+  IconActivity as Activity,
+  IconAdjustmentsHorizontal as Settings2,
+  IconAdjustmentsHorizontal as SlidersHorizontal,
+  IconArrowRight as ArrowRight,
+  IconBatteryEco,
+  IconBell as Bell,
+  IconBinary,
+  IconBolt as Zap,
+  IconBulb,
+  IconCheck as Check,
+  IconChevronDown as ChevronDown,
+  IconCpu,
+  IconDeviceFloppy as Save,
+  IconDeviceGamepad2,
+  IconDeviceGamepad3,
+  IconBrandGithub,
+  IconDeviceMobileVibration as Vibrate,
+  IconHeadphones as Headphones,
+  IconKeyboard as Keyboard,
+  IconLayoutDashboard,
+  IconMicrophone as Mic,
+  IconMinus as Minus,
+  IconMoon as Moon,
+  IconPalette as Palette,
+  IconPencil as Pencil,
+  IconPlayerPlay as Play,
+  IconQuestionMark,
+  IconRefresh as RefreshCcw,
+  IconRipple,
+  IconSettings as SettingsIcon,
+  IconBluetooth,
+  IconSparkleHighlight,
+  IconSparkles as Sparkles,
+  IconStethoscope,
+  IconTestPipe,
+  IconTrash as Trash2,
+  IconVolume,
+  IconVolume as Volume2,
+  IconVolumeOff as VolumeX,
+  IconX as X
+} from '@tabler/icons-react';
+import kofiBadgeUrl from '../../../assets/brand/support_me_on_kofi_badge_dark.png';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
+import remappingLayoutImage from '../../../assets/controllers/dualsense-remapping-layout.svg';
+import circleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Circle.svg';
+import createGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Create.svg';
+import crossGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Cross.svg';
+import dpadDownGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Down.svg';
+import dpadLeftGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Left.svg';
+import dpadRightGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Right.svg';
+import dpadUpGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Up.svg';
+import l1GlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/L1.svg';
+import l2GlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/L2.svg';
+import leftStickClickGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Left Stick Click.svg';
+import optionsGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Options.svg';
+import psHomeGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Home.svg';
+import r1GlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/R1.svg';
+import r2GlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/R2.svg';
+import rightStickClickGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Right Stick Click.svg';
+import squareGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Square.svg';
+import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Triangle.svg';
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
-import { ackResultName } from '../shared/protocol';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
-import type { BridgeSnapshot } from '../shared/types';
+import { DEFAULT_BUTTON_REMAP_PROFILE_ID, DEFAULT_CONTROLLER_PROFILE_ID, ackResultName } from '../shared/protocol';
+import type {
+  ControllerProfileSettings,
+  MuteButtonMode,
+  MuteKeyboardBehavior,
+  PollingRateMode,
+  RemapButtonId,
+  TriggerTestMode,
+  TriggerTestTarget
+} from '../shared/protocol';
+import type { BridgeSnapshot, UiScalePercent } from '../shared/types';
 
-type ControlTab = 'haptics' | 'audio' | 'triggers' | 'lighting' | 'system';
+type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
+type RemapButtonDefinition = {
+  id: RemapButtonId;
+  label: string;
+  glyphUrl: string;
+};
+type RemapProfileDialogMode = 'save' | 'rename' | 'delete';
+type ControllerProfileDialogMode = 'save' | 'rename' | 'delete';
+type RemapCalloutLayout = {
+  top: number;
+  points: string;
+};
 type LightbarPaletteCell = {
   color: string;
   name: string;
 };
+type FeatureTipsPanelProps = {
+  tab: 'audio' | 'haptics' | 'triggers' | 'lighting';
+  onSettingsFocusRequest?: (target: SettingsFocusTarget) => void;
+  onFeatureFocusRequest?: (target: FeatureFocusTarget) => void;
+  hostEncodingTipActionable?: boolean;
+};
+type SettingsFocusTarget = 'controller-power-saving' | 'sleep-shortcut' | 'volume-shortcut';
+type NotificationFocusTarget = 'controller-status' | 'low-battery';
+type FeatureFocusTarget = 'host-encoding';
 
 const HAPTICS_STEP = 20;
 const SPEAKER_VOLUME_STEP = 10;
+const MIC_VOLUME_STEP = 10;
 const LIGHTBAR_BRIGHTNESS_STEP = 10;
 const TRIGGER_EFFECT_STEP = 10;
+const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const TEST_HAPTICS_LOCK_MS = 1100;
 const TEST_SPEAKER_LOCK_MS = 900;
+const TEST_MIC_LISTEN_MS = 5000;
 const TEST_SPEAKER_VOLUME_SETTLE_MS = 90;
+const HOST_AUDIO_INITIAL_START_GRACE_MS = 2500;
 const TEST_SPEAKER_ENDPOINT_ATTEMPTS = 12;
 const TEST_SPEAKER_ENDPOINT_RETRY_MS = 150;
 const TEST_SPEAKER_ENDPOINT_REFRESH_MS = 1500;
@@ -75,6 +148,11 @@ const SPEAKER_VOLUME_PRESETS: Array<[string, number]> = [
   ['Medium', 70],
   ['High', 100]
 ];
+const MIC_VOLUME_PRESETS: Array<[string, number]> = [
+  ['Low', 30],
+  ['Medium', 70],
+  ['High', 100]
+];
 const TRIGGER_EFFECT_PRESETS: Array<[string, number]> = [
   ['Low', 30],
   ['Medium', 70],
@@ -83,7 +161,9 @@ const TRIGGER_EFFECT_PRESETS: Array<[string, number]> = [
 const PERCENT_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 10);
 const HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
 const BRIDGE_AUDIO_OUTPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
+const BRIDGE_AUDIO_INPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
 const BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE = 'DualSense audio endpoint unavailable';
+const BRIDGE_MIC_ENDPOINT_UNAVAILABLE = 'DualSense microphone unavailable';
 const MUTE_KEY_OPTIONS: Array<[string, number]> = [
   ['F1', 0x3A], ['F2', 0x3B], ['F3', 0x3C], ['F4', 0x3D], ['F5', 0x3E], ['F6', 0x3F],
   ['F7', 0x40], ['F8', 0x41], ['F9', 0x42], ['F10', 0x43], ['F11', 0x44], ['F12', 0x45],
@@ -109,15 +189,6 @@ const TRIGGER_TEST_MODE_OPTIONS: Array<[string, TriggerTestMode]> = [
   ['Weapon', 'weapon'],
   ['Vibration', 'vibration']
 ];
-const BRIDGE_PRESET_OPTIONS: Array<[string, BridgePresetId]> = [
-  ['Custom', 'custom'],
-  ['Balanced', 'balanced'],
-  ['Quiet', 'quiet'],
-  ['No Speaker', 'no-speaker'],
-  ['No Haptics', 'no-haptics'],
-  ['No Triggers', 'no-triggers'],
-  ['Lights Off', 'lights-off']
-];
 const MUTE_BUTTON_MODE_OPTIONS: Array<[string, MuteButtonMode]> = [
   ['Normal', 'normal'],
   ['Keyboard Key', 'keyboard'],
@@ -137,12 +208,95 @@ const TRIGGER_TARGET_OPTIONS: Array<[string, TriggerTestTarget]> = [
   ['R2', 'r2'],
   ['Both Triggers', 'both']
 ];
-const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: LucideIcon }> = [
+const IDLE_DISCONNECT_TIMEOUT_OPTIONS: Array<[string, number]> = [
+  ['5 min', 5],
+  ['15 min', 15],
+  ['30 min', 30]
+];
+const UI_SCALE_OPTIONS: Array<[string, UiScalePercent]> = [
+  ['75%', 75],
+  ['100%', 100],
+  ['125%', 125],
+  ['150%', 150]
+];
+const REMAP_BUTTONS: Record<RemapButtonId, RemapButtonDefinition> = {
+  l2: { id: 'l2', label: 'L2', glyphUrl: l2GlyphUrl },
+  l1: { id: 'l1', label: 'L1', glyphUrl: l1GlyphUrl },
+  create: { id: 'create', label: 'Create', glyphUrl: createGlyphUrl },
+  'dpad-up': { id: 'dpad-up', label: 'D-pad Up', glyphUrl: dpadUpGlyphUrl },
+  'dpad-left': { id: 'dpad-left', label: 'D-pad Left', glyphUrl: dpadLeftGlyphUrl },
+  'dpad-down': { id: 'dpad-down', label: 'D-pad Down', glyphUrl: dpadDownGlyphUrl },
+  'dpad-right': { id: 'dpad-right', label: 'D-pad Right', glyphUrl: dpadRightGlyphUrl },
+  l3: { id: 'l3', label: 'L3', glyphUrl: leftStickClickGlyphUrl },
+  r2: { id: 'r2', label: 'R2', glyphUrl: r2GlyphUrl },
+  r1: { id: 'r1', label: 'R1', glyphUrl: r1GlyphUrl },
+  options: { id: 'options', label: 'Options', glyphUrl: optionsGlyphUrl },
+  triangle: { id: 'triangle', label: 'Triangle', glyphUrl: triangleGlyphUrl },
+  circle: { id: 'circle', label: 'Circle', glyphUrl: circleGlyphUrl },
+  cross: { id: 'cross', label: 'Cross', glyphUrl: crossGlyphUrl },
+  square: { id: 'square', label: 'Square', glyphUrl: squareGlyphUrl },
+  r3: { id: 'r3', label: 'R3', glyphUrl: rightStickClickGlyphUrl }
+};
+const REMAP_LEFT_BUTTON_IDS: RemapButtonId[] = ['l2', 'l1', 'create', 'dpad-up', 'dpad-left', 'dpad-down', 'dpad-right', 'l3'];
+const REMAP_RIGHT_BUTTON_IDS: RemapButtonId[] = ['r2', 'r1', 'options', 'triangle', 'circle', 'cross', 'square', 'r3'];
+const REMAP_STICK_CLICK_IDS: RemapButtonId[] = ['l3', 'r3'];
+const REMAP_TARGET_OPTIONS: Array<[string, RemapButtonId]> = [
+  ...REMAP_LEFT_BUTTON_IDS,
+  ...REMAP_RIGHT_BUTTON_IDS
+].map((id) => [REMAP_BUTTONS[id].label, id]);
+const DEFAULT_REMAP_DRAFT = Object.fromEntries(
+  REMAP_TARGET_OPTIONS.map(([, id]) => [id, id])
+) as Record<RemapButtonId, RemapButtonId>;
+const REMAP_STICK_CLICK_TARGET_OPTIONS: Array<[string, RemapButtonId]> = REMAP_STICK_CLICK_IDS.map((id) => [
+  REMAP_BUTTONS[id].label,
+  id
+]);
+const REMAP_SVG_VIEWBOX_WIDTH = 597.47;
+const REMAP_SVG_VIEWBOX_HEIGHT = 429.39;
+const REMAP_CALLOUT_POINTS: Record<RemapButtonId, Array<[number, number]>> = {
+  l2: [[2.4, 3.17], [117.91, 3.17], [171.1, 93.49]],
+  l1: [[2.4, 63.71], [129.99, 63.71], [161.13, 118.36]],
+  create: [[2.4, 124.24], [110.86, 124.24], [134, 163], [186.65, 162.89]],
+  'dpad-up': [[2.4, 184.78], [146.83, 184.78]],
+  'dpad-right': [[2.4, 245.32], [126.31, 245.32], [138.09, 221.25]],
+  'dpad-down': [[2.4, 305.86], [124.63, 305.86], [162.42, 241.39]],
+  'dpad-left': [[2.4, 366.39], [106.55, 366.39], [189.13, 221.85]],
+  l3: [[2.4, 426.93], [143.77, 426.93], [230.4, 275.47]],
+  r2: [[595.34, 3.17], [480.78, 3.17], [427.95, 93.94]],
+  r1: [[595.34, 63.71], [468.92, 63.71], [437.92, 117.79]],
+  options: [[595.34, 124.24], [487.5, 124.24], [464.28, 162.89], [411.62, 162.89]],
+  triangle: [[595.34, 184.78], [453.97, 184.78]],
+  circle: [[595.34, 245.32], [486.88, 245.32], [473.71, 222.09]],
+  cross: [[595.34, 305.86], [472.22, 305.86], [438.56, 248.84]],
+  square: [[595.34, 366.39], [485.42, 366.39], [405.35, 223.46]],
+  r3: [[595.34, 426.93], [453.97, 426.93], [369.45, 275.47]]
+};
+const REMAP_CALLOUT_Y: Record<RemapButtonId, number> = {
+  l2: 3.17,
+  l1: 63.71,
+  create: 124.24,
+  'dpad-up': 184.78,
+  'dpad-right': 245.32,
+  'dpad-down': 305.86,
+  'dpad-left': 366.39,
+  l3: 426.93,
+  r2: 3.17,
+  r1: 63.71,
+  options: 124.24,
+  triangle: 184.78,
+  circle: 245.32,
+  cross: 305.86,
+  square: 366.39,
+  r3: 426.93
+};
+const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: TablerIcon }> = [
+  { id: 'overview', label: 'Overview', Icon: IconLayoutDashboard },
+  { id: 'audio', label: 'Audio', Icon: IconVolume },
   { id: 'haptics', label: 'Haptics', Icon: Sparkles },
-  { id: 'audio', label: 'Audio', Icon: Volume2 },
-  { id: 'triggers', label: 'Triggers', Icon: Zap },
-  { id: 'lighting', label: 'Lighting', Icon: Palette },
-  { id: 'system', label: 'System', Icon: Settings2 }
+  { id: 'triggers', label: 'Triggers', Icon: IconDeviceGamepad2 },
+  { id: 'lighting', label: 'Lighting', Icon: IconBulb },
+  { id: 'remapping', label: 'Button Remapping', Icon: IconDeviceGamepad3 },
+  { id: 'system', label: 'System', Icon: IconCpu }
 ];
 
 type SelectValue = string | number;
@@ -154,6 +308,10 @@ type CustomSelectProps<T extends SelectValue> = {
   value: T;
   options: Array<[string, T]>;
   disabled?: boolean;
+  className?: string;
+  showSelectedCheck?: boolean;
+  renderValue?: (label: string, value: T) => ReactNode;
+  renderOption?: (label: string, value: T) => ReactNode;
   ariaLabel: string;
   onChange: (value: T) => void;
 };
@@ -166,12 +324,42 @@ function snapSpeakerVolume(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / SPEAKER_VOLUME_STEP) * SPEAKER_VOLUME_STEP));
 }
 
+function snapMicVolume(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value / MIC_VOLUME_STEP) * MIC_VOLUME_STEP));
+}
+
 function snapLightbarBrightness(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / LIGHTBAR_BRIGHTNESS_STEP) * LIGHTBAR_BRIGHTNESS_STEP));
 }
 
 function snapTriggerEffectIntensity(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / TRIGGER_EFFECT_STEP) * TRIGGER_EFFECT_STEP));
+}
+
+function controllerPowerSavingActiveFromSnapshot(snapshot: BridgeSnapshot | null | undefined): boolean {
+  return Boolean(snapshot?.settings.controllerPowerSavingEnabled && snapshot.diagnostics.hostAudioStatus?.headsetPlugged);
+}
+
+function capControllerPowerSavingValue(value: number, snapshot: BridgeSnapshot | null | undefined): number {
+  return controllerPowerSavingActiveFromSnapshot(snapshot)
+    ? Math.min(value, CONTROLLER_POWER_SAVING_CAP_PERCENT)
+    : value;
+}
+
+function displayHapticsValue(snapshot: BridgeSnapshot): number {
+  return snapHapticsValue(capControllerPowerSavingValue(snapshot.settings.hapticsGainPercent, snapshot));
+}
+
+function displayClassicRumbleValue(snapshot: BridgeSnapshot): number {
+  return snapHapticsValue(capControllerPowerSavingValue(snapshot.settings.classicRumbleGainPercent, snapshot));
+}
+
+function displayLightbarBrightnessValue(snapshot: BridgeSnapshot): number {
+  return snapLightbarBrightness(capControllerPowerSavingValue(snapshot.settings.lightbarBrightnessPercent, snapshot));
+}
+
+function displayTriggerEffectIntensityValue(snapshot: BridgeSnapshot): number {
+  return snapTriggerEffectIntensity(capControllerPowerSavingValue(snapshot.settings.triggerEffectIntensityPercent, snapshot));
 }
 
 function sliderTickClass(value: number, max: number): string | undefined {
@@ -182,6 +370,261 @@ function sliderTickClass(value: number, max: number): string | undefined {
     return 'milestone';
   }
   return undefined;
+}
+
+function FeatureTipsPanel({
+  tab,
+  onSettingsFocusRequest,
+  onFeatureFocusRequest,
+  hostEncodingTipActionable = false
+}: FeatureTipsPanelProps) {
+  const [featureTileSampleActive, setFeatureTileSampleActive] = useState(false);
+  const tips: Array<{
+    key: string;
+    icon: ReactNode;
+    title: string;
+    text: string;
+    tone?: 'success';
+  }> = [
+    {
+      key: 'toggle',
+      icon: <IconSparkleHighlight size={16} />,
+      title: 'Feature Tiles',
+      text: 'Click the square icon tile to enable or disable that feature.'
+    },
+    {
+      key: 'unavailable',
+      icon: <Settings2 size={16} />,
+      title: 'Unavailable',
+      text: 'Dimmed controls need the bridge, controller, or matching feature enabled.'
+    }
+  ];
+
+  if (tab === 'audio') {
+    tips.push({
+      key: 'host-encoding',
+      icon: <Headphones size={16} />,
+      title: 'Headphones',
+      text: 'Use Host Encoding when listening through the controller headphone jack.'
+    });
+  } else {
+    tips.push({
+      key: 'power-saving',
+      icon: <IconBatteryEco size={16} />,
+      title: 'Green Icon',
+      text: 'Power saving is temporarily capping this setting while headphones are connected.',
+      tone: 'success'
+    });
+  }
+
+  if (tab === 'lighting') {
+    tips.push({
+      key: 'custom-color',
+      icon: <Palette size={16} />,
+      title: 'Custom Color',
+      text: 'Double-click the final color swatch to choose a custom lightbar color.'
+    });
+  } else {
+    tips.push({
+      key: 'tests',
+      icon: <Play size={16} />,
+      title: 'Tests',
+      text: 'Tests may pause while a game or audio stream is actively using the controller.'
+    });
+  }
+
+  return (
+    <section className="feature-help-panel" aria-label={`${tab} tips`}>
+      <div className="feature-help-heading">
+        <IconQuestionMark size={16} />
+        <h3>Tips</h3>
+      </div>
+      <div className="feature-help-grid">
+        {tips.map((tip) => (
+          <div
+            className={[
+              'feature-help-item',
+              tip.key === 'host-encoding' && hostEncodingTipActionable ? 'feature-help-item-attention' : ''
+            ].filter(Boolean).join(' ')}
+            key={tip.key}
+          >
+            {tip.key === 'toggle' ? (
+              <button
+                className={`feature-help-icon feature-help-icon-button ${featureTileSampleActive ? 'active' : ''}`}
+                type="button"
+                aria-pressed={featureTileSampleActive}
+                aria-label="Toggle feature tile example"
+                onClick={() => setFeatureTileSampleActive((active) => !active)}
+              >
+                {tip.icon}
+              </button>
+            ) : tip.key === 'power-saving' ? (
+              <button
+                className={`feature-help-icon feature-help-icon-button ${tip.tone ?? ''}`}
+                type="button"
+                aria-label="Open Controller Power Saving settings"
+                onClick={() => onSettingsFocusRequest?.('controller-power-saving')}
+              >
+                {tip.icon}
+              </button>
+            ) : tip.key === 'host-encoding' && hostEncodingTipActionable ? (
+              <button
+                className="feature-help-icon feature-help-icon-button"
+                type="button"
+                aria-label="Highlight Host Encoding"
+                onClick={() => onFeatureFocusRequest?.('host-encoding')}
+              >
+                {tip.icon}
+              </button>
+            ) : (
+              <span className={`feature-help-icon ${tip.tone ?? ''}`} aria-hidden="true">
+                {tip.icon}
+              </span>
+            )}
+            <span className="feature-help-copy">
+              <strong>{tip.title}</strong>
+              <span>{tip.text}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function controllerProfileSettingsFromSnapshot(snapshot: BridgeSnapshot): ControllerProfileSettings {
+  return {
+    hapticsEnabled: snapshot.settings.hapticsEnabled,
+    hapticsGainPercent: snapshot.settings.hapticsGainPercent,
+    classicRumbleEnabled: snapshot.settings.classicRumbleEnabled,
+    classicRumbleGainPercent: snapshot.settings.classicRumbleGainPercent,
+    adaptiveTriggersEnabled: snapshot.settings.adaptiveTriggersEnabled,
+    triggerEffectIntensityPercent: snapshot.settings.triggerEffectIntensityPercent,
+    triggerTestMode: snapshot.settings.triggerTestMode,
+    speakerEnabled: snapshot.settings.speakerEnabled,
+    speakerVolumePercent: snapshot.settings.speakerVolumePercent,
+    micVolumePercent: snapshot.settings.micVolumePercent,
+    micMuted: snapshot.settings.micMuted,
+    lightbarEnabled: snapshot.settings.lightbarEnabled,
+    lightbarColor: snapshot.settings.lightbarColor,
+    lightbarBrightnessPercent: snapshot.settings.lightbarBrightnessPercent,
+    lightbarOverrideEnabled: snapshot.settings.lightbarOverrideEnabled,
+    muteButtonMode: snapshot.settings.muteButtonMode,
+    muteKeyboardUsage: snapshot.settings.muteKeyboardUsage,
+    muteKeyboardModifiers: snapshot.settings.muteKeyboardModifiers,
+    muteKeyboardBehavior: snapshot.settings.muteKeyboardBehavior,
+    sleepKeybindEnabled: snapshot.settings.sleepKeybindEnabled,
+    speakerVolumeShortcutEnabled: snapshot.settings.speakerVolumeShortcutEnabled,
+    pollingRateMode: snapshot.settings.pollingRateMode,
+    hostEncodedAudioEnabled: snapshot.settings.hostEncodedAudioEnabled,
+    duplexMicEnabled: snapshot.settings.duplexMicEnabled,
+    controllerPowerSavingEnabled: snapshot.settings.controllerPowerSavingEnabled
+  };
+}
+
+function optionLabel<T extends string | number>(options: Array<[string, T]>, value: T): string {
+  return options.find(([, optionValue]) => optionValue === value)?.[0] ?? String(value);
+}
+
+function enabledLabel(enabled: boolean): string {
+  return enabled ? 'On' : 'Off';
+}
+
+function percentLabel(value: number): string {
+  return `${value}%`;
+}
+
+function lightbarColorLabel(color: string): string {
+  return LIGHTBAR_COLOR_NAMES[color.toLowerCase()] ?? color.toUpperCase();
+}
+
+function muteButtonSummary(settings: ControllerProfileSettings): string {
+  if (settings.muteButtonMode === 'normal') {
+    return 'Normal';
+  }
+  if (settings.muteButtonMode === 'quiet') {
+    return 'Quiet Toggle';
+  }
+  const key = optionLabel(MUTE_KEY_OPTIONS, settings.muteKeyboardUsage);
+  const modifiers = MUTE_MODIFIER_OPTIONS
+    .filter(([, bit]) => (settings.muteKeyboardModifiers & bit) !== 0)
+    .map(([label]) => label);
+  return [...modifiers, key].join(' + ');
+}
+
+function SystemProfileSummary({
+  settings,
+  powerSavingActive
+}: {
+  settings: ControllerProfileSettings;
+  powerSavingActive: boolean;
+}) {
+  const ecoValueClass = (active: boolean) => (active ? ' eco-limited' : '');
+  const effectiveEcoPercent = (value: number) => percentLabel(Math.min(value, CONTROLLER_POWER_SAVING_CAP_PERCENT));
+  const hapticsEcoLimited = powerSavingActive
+    && settings.hapticsEnabled
+    && settings.hapticsGainPercent > 0;
+  const rumbleEcoLimited = powerSavingActive
+    && settings.classicRumbleEnabled
+    && settings.classicRumbleGainPercent > 0;
+  const triggersEcoLimited = powerSavingActive
+    && settings.adaptiveTriggersEnabled
+    && settings.triggerEffectIntensityPercent > 0;
+  const lightbarEcoLimited = powerSavingActive
+    && settings.lightbarEnabled
+    && settings.lightbarBrightnessPercent > 0;
+
+  return (
+    <div className="system-profile-summary" aria-label="Current profile settings">
+      <div className="system-profile-summary-group">
+        <div className="system-profile-summary-heading">
+          <Volume2 size={15} />
+          <h3>Audio</h3>
+        </div>
+        <dl>
+          <div><dt>Speaker</dt><dd>{settings.speakerEnabled ? percentLabel(settings.speakerVolumePercent) : 'Off'}</dd></div>
+          <div><dt>Mic</dt><dd>{settings.micMuted ? 'Muted' : percentLabel(settings.micVolumePercent)}</dd></div>
+          <div><dt>Host Encoding</dt><dd>{enabledLabel(settings.hostEncodedAudioEnabled)}</dd></div>
+        </dl>
+      </div>
+
+      <div className="system-profile-summary-group">
+        <div className="system-profile-summary-heading">
+          <Sparkles size={15} />
+          <h3>Feel</h3>
+        </div>
+        <dl>
+          <div><dt>Haptics</dt><dd className={ecoValueClass(hapticsEcoLimited)}>{settings.hapticsEnabled ? (hapticsEcoLimited ? effectiveEcoPercent(settings.hapticsGainPercent) : percentLabel(settings.hapticsGainPercent)) : 'Off'}</dd></div>
+          <div><dt>Rumble</dt><dd className={ecoValueClass(rumbleEcoLimited)}>{settings.classicRumbleEnabled ? (rumbleEcoLimited ? effectiveEcoPercent(settings.classicRumbleGainPercent) : percentLabel(settings.classicRumbleGainPercent)) : 'Off'}</dd></div>
+          <div><dt>Triggers</dt><dd className={ecoValueClass(triggersEcoLimited)}>{settings.adaptiveTriggersEnabled ? (triggersEcoLimited ? effectiveEcoPercent(settings.triggerEffectIntensityPercent) : percentLabel(settings.triggerEffectIntensityPercent)) : 'Off'}</dd></div>
+        </dl>
+      </div>
+
+      <div className="system-profile-summary-group">
+        <div className="system-profile-summary-heading">
+          <IconBulb size={15} />
+          <h3>Lighting</h3>
+        </div>
+        <dl>
+          <div><dt>Lightbar</dt><dd className={ecoValueClass(lightbarEcoLimited)}>{settings.lightbarEnabled ? (lightbarEcoLimited ? effectiveEcoPercent(settings.lightbarBrightnessPercent) : percentLabel(settings.lightbarBrightnessPercent)) : 'Off'}</dd></div>
+          <div><dt>Color</dt><dd>{lightbarColorLabel(settings.lightbarColor)}</dd></div>
+          <div><dt>Override</dt><dd>{enabledLabel(settings.lightbarOverrideEnabled)}</dd></div>
+        </dl>
+      </div>
+
+      <div className="system-profile-summary-group">
+        <div className="system-profile-summary-heading">
+          <Settings2 size={15} />
+          <h3>System</h3>
+        </div>
+        <dl>
+          <div><dt>Mute</dt><dd>{muteButtonSummary(settings)}</dd></div>
+          <div><dt>Polling</dt><dd>{optionLabel(POLLING_RATE_OPTIONS, settings.pollingRateMode)}</dd></div>
+          <div><dt>Power Save</dt><dd>{enabledLabel(settings.controllerPowerSavingEnabled)}</dd></div>
+        </dl>
+      </div>
+    </div>
+  );
 }
 
 function normalizeHexColor(value: string): string {
@@ -328,12 +771,36 @@ function hexByte(value: number): string {
   return value.toString(16).padStart(2, '0').toUpperCase();
 }
 
+function normalizeAudioDeviceLabel(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/^\s*\d+\s*-\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isBridgeAudioLabel(label: string): boolean {
+  return BRIDGE_AUDIO_OUTPUT_RE.test(normalizeAudioDeviceLabel(label));
+}
+
 function bridgeAudioOutputScore(device: MediaDeviceInfo): number {
-  const label = device.label.toLowerCase();
+  const label = normalizeAudioDeviceLabel(device.label);
   let score = 1;
   if (label.includes('dualsense') || label.includes('dual sense')) score += 4;
   if (label.includes('wireless controller')) score += 3;
-  if (label.includes('speaker')) score += 2;
+  if (label.includes('speaker') || label.includes('headphone') || label.includes('headset')) score += 2;
+  if (label.includes('microphone') || label.includes('mic')) score -= 4;
+  if (label.includes('ds5') || label.includes('bridge')) score += 1;
+  return score;
+}
+
+function bridgeAudioInputScore(device: MediaDeviceInfo): number {
+  const label = normalizeAudioDeviceLabel(device.label);
+  let score = 1;
+  if (label.includes('dualsense') || label.includes('dual sense')) score += 4;
+  if (label.includes('wireless controller')) score += 3;
+  if (label.includes('microphone') || label.includes('mic')) score += 2;
+  if (label.includes('speaker') || label.includes('headphone')) score -= 4;
   if (label.includes('ds5') || label.includes('bridge')) score += 1;
   return score;
 }
@@ -347,7 +814,7 @@ async function findBridgeAudioOutputIdOnce(): Promise<string | null> {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const outputs = devices.filter((device) => (
       device.kind === 'audiooutput'
-      && BRIDGE_AUDIO_OUTPUT_RE.test(device.label)
+      && isBridgeAudioLabel(device.label)
       && device.deviceId
       && device.deviceId !== 'default'
       && device.deviceId !== 'communications'
@@ -358,6 +825,58 @@ async function findBridgeAudioOutputIdOnce(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+async function findBridgeAudioInputIdOnce(): Promise<string | null> {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    return null;
+  }
+
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter((device) => (
+      device.kind === 'audioinput'
+      && BRIDGE_AUDIO_INPUT_RE.test(normalizeAudioDeviceLabel(device.label))
+      && device.deviceId
+      && device.deviceId !== 'default'
+      && device.deviceId !== 'communications'
+    ));
+    inputs.sort((left, right) => bridgeAudioInputScore(right) - bridgeAudioInputScore(left));
+    const input = inputs[0];
+    return input?.deviceId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function unlockMediaDeviceLabels(): Promise<boolean> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return false;
+  }
+
+  let permissionStream: MediaStream | null = null;
+  try {
+    permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    permissionStream?.getTracks().forEach((track) => track.stop());
+  }
+}
+
+async function findBridgeAudioInputId(): Promise<string | null> {
+  let inputId = await findBridgeAudioInputIdOnce();
+  if (inputId || !navigator.mediaDevices?.getUserMedia) {
+    return inputId;
+  }
+
+  if (!await unlockMediaDeviceLabels()) {
+    return null;
+  }
+
+  inputId = await findBridgeAudioInputIdOnce();
+  return inputId;
 }
 
 function delay(ms: number): Promise<void> {
@@ -413,6 +932,17 @@ async function findBridgeAudioOutputId(attempts = 1): Promise<string | null> {
     }
     if (attempt + 1 < attempts) {
       await delay(TEST_SPEAKER_ENDPOINT_RETRY_MS);
+    }
+  }
+  if (await unlockMediaDeviceLabels()) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const sinkId = await findBridgeAudioOutputIdOnce();
+      if (sinkId) {
+        return sinkId;
+      }
+      if (attempt + 1 < attempts) {
+        await delay(TEST_SPEAKER_ENDPOINT_RETRY_MS);
+      }
     }
   }
   return null;
@@ -522,10 +1052,83 @@ async function playSpeakerToneFile(): Promise<void> {
   await playSpeakerAudioSource(testSpeakerToneUrl);
 }
 
+let micListenAudio: HTMLAudioElement | null = null;
+let micListenStream: MediaStream | null = null;
+let micListenTimer: number | null = null;
+let micListenResolve: (() => void) | null = null;
+
+function stopMicLiveListen(): void {
+  if (micListenTimer !== null) {
+    window.clearTimeout(micListenTimer);
+  }
+  micListenTimer = null;
+  if (micListenAudio) {
+    try {
+      micListenAudio.pause();
+      micListenAudio.srcObject = null;
+    } catch {
+      // Ignore teardown races while the mic endpoint is closing.
+    }
+  }
+  micListenAudio = null;
+  micListenStream?.getTracks().forEach((track) => track.stop());
+  micListenStream = null;
+  const resolve = micListenResolve;
+  micListenResolve = null;
+  resolve?.();
+}
+
+async function openBridgeMicStream(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error(BRIDGE_MIC_ENDPOINT_UNAVAILABLE);
+  }
+
+  const inputId = await findBridgeAudioInputId();
+  if (!inputId) {
+    throw new Error(BRIDGE_MIC_ENDPOINT_UNAVAILABLE);
+  }
+
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      deviceId: { exact: inputId },
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false
+    },
+    video: false
+  });
+}
+
+async function playMicLiveListen(durationMs: number): Promise<void> {
+  stopMicLiveListen();
+  const stream = await openBridgeMicStream();
+  const audio = new Audio();
+  audio.srcObject = stream;
+  audio.volume = 1;
+  micListenAudio = audio;
+  micListenStream = stream;
+
+  try {
+    await audio.play();
+  } catch (error) {
+    stopMicLiveListen();
+    throw error;
+  }
+
+  await new Promise<void>((resolve) => {
+    micListenResolve = resolve;
+    micListenTimer = window.setTimeout(stopMicLiveListen, durationMs);
+  });
+}
+
 function CustomSelect<T extends SelectValue>({
   value,
   options,
   disabled = false,
+  className = '',
+  showSelectedCheck = true,
+  renderValue,
+  renderOption,
   ariaLabel,
   onChange
 }: CustomSelectProps<T>) {
@@ -536,6 +1139,7 @@ function CustomSelect<T extends SelectValue>({
   const longList = options.length > 18;
   const defaultMenuMaxHeight = longList ? 360 : 232;
   const [menuMaxHeight, setMenuMaxHeight] = useState(defaultMenuMaxHeight);
+  const [menuPlacement, setMenuPlacement] = useState<'top' | 'bottom'>('bottom');
 
   function updateMenuMaxHeight() {
     const root = rootRef.current;
@@ -549,9 +1153,14 @@ function CustomSelect<T extends SelectValue>({
     const boundaryRect = boundary?.getBoundingClientRect();
     const menuGap = 6;
     const lowerLimit = Math.min(window.innerHeight, boundaryRect?.bottom ?? window.innerHeight);
+    const upperLimit = Math.max(0, boundaryRect?.top ?? 0);
     const spaceBelow = Math.max(1, Math.floor(lowerLimit - rootRect.bottom - menuGap));
-    const nextMaxHeight = longList ? spaceBelow : Math.min(defaultMenuMaxHeight, spaceBelow);
+    const spaceAbove = Math.max(1, Math.floor(rootRect.top - upperLimit - menuGap));
+    const nextPlacement = spaceBelow < 92 && spaceAbove > spaceBelow ? 'top' : 'bottom';
+    const availableSpace = nextPlacement === 'top' ? spaceAbove : spaceBelow;
+    const nextMaxHeight = longList ? availableSpace : Math.min(defaultMenuMaxHeight, availableSpace);
 
+    setMenuPlacement(nextPlacement);
     setMenuMaxHeight(Math.max(1, nextMaxHeight));
   }
 
@@ -612,7 +1221,7 @@ function CustomSelect<T extends SelectValue>({
   return (
     <div
       ref={rootRef}
-      className={`custom-select ${open ? 'open' : ''} ${disabled ? 'disabled' : ''}`}
+      className={`custom-select ${className} ${open ? 'open' : ''} menu-${menuPlacement} ${disabled ? 'disabled' : ''}`}
       style={{ '--custom-select-menu-max-height': `${menuMaxHeight}px` } as CSSProperties}
     >
       <button
@@ -633,7 +1242,7 @@ function CustomSelect<T extends SelectValue>({
           }
         }}
       >
-        <span>{selected?.[0] ?? String(value)}</span>
+        <span>{selected ? (renderValue?.(selected[0], selected[1]) ?? selected[0]) : String(value)}</span>
         <ChevronDown size={18} />
       </button>
       {open && (
@@ -650,8 +1259,8 @@ function CustomSelect<T extends SelectValue>({
                 className={selectedOption ? 'selected' : ''}
                 onClick={() => choose(optionValue)}
               >
-                <span>{label}</span>
-                {selectedOption && <Check size={15} />}
+                <span>{renderOption?.(label, optionValue) ?? label}</span>
+                {showSelectedCheck && selectedOption && <Check size={15} />}
               </button>
             );
           })}
@@ -691,13 +1300,28 @@ function UptimeValue({
   return <span className="uptime-value">{displayUptime ?? '--'}s</span>;
 }
 
+function RemapGlyphOption({ label, value }: { label: string; value: RemapButtonId }) {
+  const button = REMAP_BUTTONS[value];
+
+  return (
+    <span className="remap-glyph-option" title={label}>
+      <img src={button.glyphUrl} alt={label} />
+    </span>
+  );
+}
+
+function remapTargetOptionsFor(buttonId: RemapButtonId): Array<[string, RemapButtonId]> {
+  return REMAP_STICK_CLICK_IDS.includes(buttonId) ? REMAP_STICK_CLICK_TARGET_OPTIONS : REMAP_TARGET_OPTIONS;
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
-  const [activeControlTab, setActiveControlTab] = useState<ControlTab>('haptics');
+  const [activeControlTab, setActiveControlTab] = useState<ControlTab>('overview');
   const [hapticsValue, setHapticsValue] = useState(100);
   const [classicRumbleValue, setClassicRumbleValue] = useState(100);
   const [speakerVolumeValue, setSpeakerVolumeValue] = useState(100);
+  const [micVolumeValue, setMicVolumeValue] = useState(100);
   const [lightbarColor, setLightbarColor] = useState('#ffff00');
   const [customLightbarColor, setCustomLightbarColor] = useState<string | null>(() => {
     const saved = window.localStorage.getItem('ds5bridge.customLightbarColor');
@@ -711,77 +1335,149 @@ export function App() {
   const [lightbarBrightnessValue, setLightbarBrightnessValue] = useState(100);
   const [triggerEffectIntensityValue, setTriggerEffectIntensityValue] = useState(100);
   const [triggerTarget, setTriggerTarget] = useState<TriggerTestTarget>('both');
+  const [remapDraft, setRemapDraft] = useState<Record<RemapButtonId, RemapButtonId>>(DEFAULT_REMAP_DRAFT);
+  const [remapProfileDialogMode, setRemapProfileDialogMode] = useState<RemapProfileDialogMode | null>(null);
+  const [remapProfileNameDraft, setRemapProfileNameDraft] = useState('');
+  const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
+  const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
+  const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<RemapButtonId, RemapCalloutLayout> | null>(null);
+  const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
+  const [settingsFocusTarget, setSettingsFocusTarget] = useState<SettingsFocusTarget | null>(null);
+  const [notificationFocusTarget, setNotificationFocusTarget] = useState<NotificationFocusTarget | null>(null);
+  const [featureFocusTarget, setFeatureFocusTarget] = useState<FeatureFocusTarget | null>(null);
+  const [featureFocusPulse, setFeatureFocusPulse] = useState(0);
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
+  const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
+  const [windowDragging, setWindowDragging] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
   const [speakerOutputAvailable, setSpeakerOutputAvailable] = useState<boolean | null>(null);
   const [speakerTestError, setSpeakerTestError] = useState<string | null>(null);
+  const [micTestLocked, setMicTestLocked] = useState(false);
+  const [micTestError, setMicTestError] = useState<string | null>(null);
   const [triggerTestLocked, setTriggerTestLocked] = useState(false);
   const [hapticsCommitPending, setHapticsCommitPending] = useState(false);
   const [classicRumbleCommitPending, setClassicRumbleCommitPending] = useState(false);
   const [speakerVolumeCommitPending, setSpeakerVolumeCommitPending] = useState(false);
+  const [micVolumeCommitPending, setMicVolumeCommitPending] = useState(false);
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
-  const [sleepConfirmVisible, setSleepConfirmVisible] = useState(false);
+  const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
+  const [hostEncodingDisableConfirmVisible, setHostEncodingDisableConfirmVisible] = useState(false);
   const hapticsEditingRef = useRef(false);
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
+  const micVolumeEditingRef = useRef(false);
   const lightbarBrightnessEditingRef = useRef(false);
   const triggerEffectEditingRef = useRef(false);
-  const bridgeSettingsRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
+  const remappingLayoutRef = useRef<HTMLDivElement>(null);
+  const remappingLeftSideRef = useRef<HTMLDivElement>(null);
+  const remappingRightSideRef = useRef<HTMLDivElement>(null);
+  const remappingArtRef = useRef<HTMLImageElement>(null);
   const customColorPickerRef = useRef<HTMLDivElement>(null);
   const customSwatchPrimeTimerRef = useRef<number | null>(null);
-  const sleepConfirmTimerRef = useRef<number | null>(null);
-  const sleepConfirmArmedRef = useRef(false);
-  const sleepTogglePromiseRef = useRef<Promise<void> | null>(null);
+  const overviewSleepConfirmTimerRef = useRef<number | null>(null);
+  const settingsFocusTimerRef = useRef<number | null>(null);
+  const notificationFocusTimerRef = useRef<number | null>(null);
+  const featureFocusTimerRef = useRef<number | null>(null);
+  const windowDraggingRef = useRef(false);
+  const windowDragReleaseTimerRef = useRef<number | null>(null);
+  const deferredSnapshotRef = useRef<BridgeSnapshot | null>(null);
+  const overviewSleepConfirmArmedRef = useRef(false);
+  const appOpenedAtRef = useRef(Date.now());
   const connected = snapshot?.state === 'connected';
+  const remapModifiedCount = useMemo(() => (
+    REMAP_TARGET_OPTIONS.filter(([, buttonId]) => remapDraft[buttonId] !== buttonId).length
+  ), [remapDraft]);
+  const selectedControllerProfile = snapshot?.settings.controllerProfiles.find((profile) => (
+    profile.id === snapshot.settings.selectedControllerProfileId
+  ));
+  const selectedControllerProfileId = selectedControllerProfile?.id ?? DEFAULT_CONTROLLER_PROFILE_ID;
+  const controllerProfileOptions = useMemo<Array<[string, string]>>(() => (
+    snapshot?.settings.controllerProfiles.map((profile) => [profile.name, profile.id]) ?? [['Default', DEFAULT_CONTROLLER_PROFILE_ID]]
+  ), [snapshot?.settings.controllerProfiles]);
+  const selectedControllerProfileIsDefault = selectedControllerProfileId === DEFAULT_CONTROLLER_PROFILE_ID;
+  const canDeleteControllerProfile = !selectedControllerProfileIsDefault;
+  const selectedRemapProfile = snapshot?.settings.buttonRemappingProfiles.find((profile) => (
+    profile.id === snapshot.settings.selectedButtonRemappingProfileId
+  ));
+  const selectedRemapProfileId = selectedRemapProfile?.id ?? DEFAULT_BUTTON_REMAP_PROFILE_ID;
+  const remapProfileOptions = useMemo<Array<[string, string]>>(() => (
+    snapshot?.settings.buttonRemappingProfiles.map((profile) => [profile.name, profile.id]) ?? [['Default', DEFAULT_BUTTON_REMAP_PROFILE_ID]]
+  ), [snapshot?.settings.buttonRemappingProfiles]);
+  const selectedRemapProfileIsDefault = selectedRemapProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID;
+
+  function applySnapshot(next: BridgeSnapshot) {
+    setSnapshot(next);
+    setRemapDraft(next.settings.buttonRemappingDraft);
+    if (!hapticsEditingRef.current) {
+      setHapticsValue(displayHapticsValue(next));
+    }
+    if (!classicRumbleEditingRef.current) {
+      setClassicRumbleValue(displayClassicRumbleValue(next));
+    }
+    if (!speakerVolumeEditingRef.current) {
+      setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
+    }
+    if (!micVolumeEditingRef.current) {
+      setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+    }
+    const nextLightbarColor = lightbarColorFromSnapshot(next);
+    setLightbarColor(nextLightbarColor);
+    if (!isLightbarPresetColor(nextLightbarColor)) {
+      setCustomLightbarColor(nextLightbarColor);
+      setCustomColorDraft(nextLightbarColor);
+      window.localStorage.setItem('ds5bridge.customLightbarColor', nextLightbarColor);
+    }
+    if (!lightbarBrightnessEditingRef.current) {
+      setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
+    }
+    if (!triggerEffectEditingRef.current) {
+      setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
+    }
+  }
+
+  function finishWindowDrag() {
+    windowDraggingRef.current = false;
+    setWindowDragging(false);
+    if (windowDragReleaseTimerRef.current !== null) {
+      window.clearTimeout(windowDragReleaseTimerRef.current);
+      windowDragReleaseTimerRef.current = null;
+    }
+    const deferredSnapshot = deferredSnapshotRef.current;
+    deferredSnapshotRef.current = null;
+    if (deferredSnapshot) {
+      applySnapshot(deferredSnapshot);
+    }
+  }
+
+  function beginWindowDrag() {
+    windowDraggingRef.current = true;
+    setWindowDragging(true);
+    if (windowDragReleaseTimerRef.current !== null) {
+      window.clearTimeout(windowDragReleaseTimerRef.current);
+    }
+    windowDragReleaseTimerRef.current = window.setTimeout(finishWindowDrag, 1600);
+    window.addEventListener('mouseup', finishWindowDrag, { once: true });
+    window.addEventListener('blur', finishWindowDrag, { once: true });
+  }
 
   useEffect(() => {
     let cancelled = false;
     window.bridge.getStatus().then((next) => {
       if (!cancelled) {
-        setSnapshot(next);
-        setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
-        setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
-        setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
-        const nextLightbarColor = lightbarColorFromSnapshot(next);
-        setLightbarColor(nextLightbarColor);
-        if (!isLightbarPresetColor(nextLightbarColor)) {
-          setCustomLightbarColor(nextLightbarColor);
-          setCustomColorDraft(nextLightbarColor);
-          window.localStorage.setItem('ds5bridge.customLightbarColor', nextLightbarColor);
-        }
-        setLightbarBrightnessValue(snapLightbarBrightness(lightbarBrightnessFromSnapshot(next)));
-        setTriggerEffectIntensityValue(snapTriggerEffectIntensity(next.settings.triggerEffectIntensityPercent));
+        applySnapshot(next);
       }
     });
     const unsubscribe = window.bridge.onSnapshot((next) => {
-      setSnapshot(next);
-      if (!hapticsEditingRef.current) {
-        setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
+      if (windowDraggingRef.current) {
+        deferredSnapshotRef.current = next;
+        return;
       }
-      if (!classicRumbleEditingRef.current) {
-        setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
-      }
-      if (!speakerVolumeEditingRef.current) {
-        setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
-      }
-      const nextLightbarColor = lightbarColorFromSnapshot(next);
-      setLightbarColor(nextLightbarColor);
-      if (!isLightbarPresetColor(nextLightbarColor)) {
-        setCustomLightbarColor(nextLightbarColor);
-        setCustomColorDraft(nextLightbarColor);
-        window.localStorage.setItem('ds5bridge.customLightbarColor', nextLightbarColor);
-      }
-      if (!lightbarBrightnessEditingRef.current) {
-        setLightbarBrightnessValue(snapLightbarBrightness(lightbarBrightnessFromSnapshot(next)));
-      }
-      if (!triggerEffectEditingRef.current) {
-        setTriggerEffectIntensityValue(snapTriggerEffectIntensity(next.settings.triggerEffectIntensityPercent));
-      }
+      applySnapshot(next);
     });
     return () => {
       cancelled = true;
@@ -789,9 +1485,23 @@ export function App() {
       if (customSwatchPrimeTimerRef.current !== null) {
         window.clearTimeout(customSwatchPrimeTimerRef.current);
       }
-      if (sleepConfirmTimerRef.current !== null) {
-        window.clearTimeout(sleepConfirmTimerRef.current);
+      if (overviewSleepConfirmTimerRef.current !== null) {
+        window.clearTimeout(overviewSleepConfirmTimerRef.current);
       }
+      if (settingsFocusTimerRef.current !== null) {
+        window.clearTimeout(settingsFocusTimerRef.current);
+      }
+      if (notificationFocusTimerRef.current !== null) {
+        window.clearTimeout(notificationFocusTimerRef.current);
+      }
+      if (featureFocusTimerRef.current !== null) {
+        window.clearTimeout(featureFocusTimerRef.current);
+      }
+      if (windowDragReleaseTimerRef.current !== null) {
+        window.clearTimeout(windowDragReleaseTimerRef.current);
+      }
+      window.removeEventListener('mouseup', finishWindowDrag);
+      window.removeEventListener('blur', finishWindowDrag);
     };
   }, []);
 
@@ -801,9 +1511,6 @@ export function App() {
     }
 
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (showBridgeSettings && !bridgeSettingsRef.current?.contains(event.target as Node)) {
-        setShowBridgeSettings(false);
-      }
       if (showNotificationsMenu && !notificationsRef.current?.contains(event.target as Node)) {
         setShowNotificationsMenu(false);
       }
@@ -824,37 +1531,110 @@ export function App() {
   }, [showBridgeSettings, showNotificationsMenu]);
 
   useEffect(() => {
-    let cancelled = false;
-    const mediaDevices = navigator.mediaDevices;
-
-    async function refreshSpeakerOutput() {
-      const available = Boolean(await findBridgeAudioOutputId(2));
-      if (cancelled) {
-        return;
-      }
-      setSpeakerOutputAvailable(available);
-      if (available) {
-        setSpeakerTestError(null);
-      }
-    }
-
-    function handleDeviceChange() {
-      resetSpeakerToneAudio();
-      void refreshSpeakerOutput();
-    }
-
-    void refreshSpeakerOutput();
-    mediaDevices?.addEventListener?.('devicechange', handleDeviceChange);
-
-    return () => {
-      cancelled = true;
-      mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange);
-    };
+    setSpeakerOutputAvailable(true);
   }, []);
 
   useEffect(() => {
+    if (activeControlTab !== 'remapping') {
+      return undefined;
+    }
+
+    const leftSide = remappingLeftSideRef.current;
+    const rightSide = remappingRightSideRef.current;
+    const layout = remappingLayoutRef.current;
+    const art = remappingArtRef.current;
+    if (!leftSide || !rightSide || !layout || !art) {
+      return undefined;
+    }
+    const leftSideElement = leftSide;
+    const rightSideElement = rightSide;
+    const layoutElement = layout;
+    const artElement = art;
+
+    function updateRemapCalloutPositions() {
+      const artRect = artElement.getBoundingClientRect();
+      const leftRect = leftSideElement.getBoundingClientRect();
+      const rightRect = rightSideElement.getBoundingClientRect();
+      const layoutRect = layoutElement.getBoundingClientRect();
+      const layoutScaleX = layoutRect.width / layoutElement.offsetWidth || 1;
+      const layoutScaleY = layoutRect.height / layoutElement.offsetHeight || 1;
+      const toLocalX = (clientX: number) => (clientX - layoutRect.left) / layoutScaleX;
+      const toLocalY = (clientY: number) => (clientY - layoutRect.top) / layoutScaleY;
+      const artLeft = toLocalX(artRect.left);
+      const artTop = toLocalY(artRect.top);
+      const artWidth = artRect.width / layoutScaleX;
+      const artHeight = artRect.height / layoutScaleY;
+      const leftTop = toLocalY(leftRect.top);
+      const rightTop = toLocalY(rightRect.top);
+      const viewBoxAspect = REMAP_SVG_VIEWBOX_WIDTH / REMAP_SVG_VIEWBOX_HEIGHT;
+      const renderedSvgHeight = Math.min(artHeight, artWidth / viewBoxAspect);
+      const renderedSvgWidth = renderedSvgHeight * viewBoxAspect;
+      const renderedSvgTop = artTop + (artHeight - renderedSvgHeight) / 2;
+      const renderedSvgLeft = artLeft + (artWidth - renderedSvgWidth) / 2;
+      const nextLayout = {} as Record<RemapButtonId, RemapCalloutLayout>;
+      const mapSvgPoint = ([x, y]: [number, number]) => (
+        `${renderedSvgLeft + (x / REMAP_SVG_VIEWBOX_WIDTH) * renderedSvgWidth},${renderedSvgTop + (y / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight}`
+      );
+      const remapPillEdgeX = (side: HTMLElement, buttonId: RemapButtonId, edge: 'left' | 'right') => {
+        const pill = side.querySelector<HTMLElement>(`[data-remap-button-id="${buttonId}"]`);
+        if (!pill) {
+          return edge === 'right' ? toLocalX(side.getBoundingClientRect().right) : toLocalX(side.getBoundingClientRect().left);
+        }
+        const pillRect = pill.getBoundingClientRect();
+        return toLocalX(edge === 'right' ? pillRect.right : pillRect.left);
+      };
+
+      for (const buttonId of REMAP_LEFT_BUTTON_IDS) {
+        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - leftTop;
+        const pillRightX = remapPillEdgeX(leftSideElement, buttonId, 'right');
+        nextLayout[buttonId] = {
+          top,
+          points: [
+            `${pillRightX},${leftTop + top}`,
+            ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
+          ].join(' ')
+        };
+      }
+      for (const buttonId of REMAP_RIGHT_BUTTON_IDS) {
+        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - rightTop;
+        const pillLeftX = remapPillEdgeX(rightSideElement, buttonId, 'left');
+        nextLayout[buttonId] = {
+          top,
+          points: [
+            `${pillLeftX},${rightTop + top}`,
+            ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
+          ].join(' ')
+        };
+      }
+
+      setRemapCalloutLayout((current) => {
+        if (current && REMAP_TARGET_OPTIONS.every(([, buttonId]) => (
+          Math.abs(current[buttonId].top - nextLayout[buttonId].top) < 0.5
+          && current[buttonId].points === nextLayout[buttonId].points
+        ))) {
+          return current;
+        }
+        return nextLayout;
+      });
+    }
+
+    updateRemapCalloutPositions();
+    const resizeObserver = new ResizeObserver(updateRemapCalloutPositions);
+    resizeObserver.observe(leftSideElement);
+    resizeObserver.observe(rightSideElement);
+    resizeObserver.observe(layoutElement);
+    resizeObserver.observe(artElement);
+    window.addEventListener('resize', updateRemapCalloutPositions);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateRemapCalloutPositions);
+    };
+  }, [activeControlTab]);
+
+  useEffect(() => {
     if (!connected) {
-      resetSpeakerToneAudio();
+      setSpeakerTestError(null);
     }
   }, [connected]);
 
@@ -920,10 +1700,51 @@ export function App() {
   const lowBatteryToastEnabled = Boolean(snapshot?.settings.notifyLowBattery);
   const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled;
   const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
-  const sleepButtonBusy = pendingAction !== null && pendingAction !== 'sleep-keybind';
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
+  const adaptiveTriggerOutputActive = Boolean(snapshot?.status?.adaptiveTriggerOutputRecent);
   const audioStreamActive = Boolean(snapshot?.status?.audioRecent && pendingAction !== 'speaker' && !speakerTestLocked);
-  const speakerOutputMissing = speakerOutputAvailable === false;
+  const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
+  const headsetOutputDetected = Boolean(hostAudioStatus?.headsetPlugged);
+  const controllerPowerSavingActive = controllerPowerSavingActiveFromSnapshot(snapshot);
+  const hapticsSliderMax = controllerPowerSavingActive ? CONTROLLER_POWER_SAVING_CAP_PERCENT : 200;
+  const percentSliderMax = controllerPowerSavingActive ? CONTROLLER_POWER_SAVING_CAP_PERCENT : 100;
+  const OutputIcon = headsetOutputDetected ? Headphones : Volume2;
+  const outputControlLabel = headsetOutputDetected ? 'Headphones' : 'Speaker';
+  const outputControlLower = headsetOutputDetected ? 'headphones' : 'speaker';
+  const outputPresetLower = headsetOutputDetected ? 'headphones' : 'speaker';
+  const hostAudioEnabled = Boolean(snapshot?.settings.hostEncodedAudioEnabled);
+  const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
+  const audioEnabled = speakerEnabled || duplexMicEnabled;
+  const hostAudioActive = hostAudioStatus?.mode === 'host-encoded-active';
+  const initialHostAudioStartGrace = Date.now() - appOpenedAtRef.current < HOST_AUDIO_INITIAL_START_GRACE_MS;
+  const hostAudioStarting = hostAudioEnabled
+    && !hostAudioActive
+    && (
+      !hostAudioStatus
+      || hostAudioStatus.fallbackReason === 'none'
+      || hostAudioStatus.fallbackReason === 'host-disabled'
+      || (initialHostAudioStartGrace && hostAudioStatus.fallbackReason === 'heartbeat-timeout')
+    );
+  const hostAudioLabel = !connected
+    ? 'Unavailable'
+    : hostAudioActive
+      ? 'Host Encoding Active'
+      : hostAudioStarting
+        ? 'Starting Host Encoding'
+      : hostAudioEnabled
+        ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
+        : 'Pico Local';
+  const hostAudioTone = hostAudioActive
+    ? 'good'
+    : connected && hostAudioEnabled && !hostAudioStarting
+      ? 'warn'
+      : 'idle';
+  const duplexMicLabel = hostAudioStatus?.duplexActive
+    ? 'Duplex Active'
+    : duplexMicEnabled
+      ? 'Disabled in Fallback'
+      : 'Off';
+  const speakerOutputMissing = false;
   const testHapticsUnavailable = !connected
     || !hapticsEnabled
     || pendingAction !== null
@@ -992,6 +1813,16 @@ export function App() {
     || gameStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy);
   const speakerTestReady = !testSpeakerUnavailable && !speakerOutputMissing;
+  const testMicUnavailable = !connected
+    || !hostAudioEnabled
+    || !hostAudioActive
+    || !duplexMicEnabled
+    || pendingAction !== null
+    || micVolumeCommitPending
+    || lightbarCommitPending
+    || micTestLocked
+    || gameStreamActive;
+  const micTestReady = !testMicUnavailable;
   const speakerStatusLabel = speakerTestLocked
     ? 'Playing'
     : connected && speakerTestError
@@ -1008,32 +1839,132 @@ export function App() {
   const speakerStatusTone = speakerTestLocked || speakerTestReady
     ? 'good'
     : connected && (speakerTestError || speakerOutputMissing)
-      ? 'bad'
+        ? 'bad'
       : connected && (gameStreamActive || pendingAction !== null)
         ? 'warn'
         : 'idle';
-  const heroBridgeLabel = 'DS5 Bridge';
-  const heroReadinessLabel = connected && !snapshot.diagnostics.lastError ? 'Ready' : 'DS5 Bridge not detected';
+  const micTestStatusLabel = micTestLocked
+    ? 'Listening'
+    : connected && micTestError
+      ? micTestError
+      : micTestReady
+        ? 'Ready'
+        : connected && !hostAudioEnabled
+          ? 'Host Encoding Off'
+          : connected && !hostAudioActive
+            ? 'Host Encoding Starting'
+            : connected && pendingAction !== null
+              ? 'Command Pending'
+              : 'Unavailable';
+  const micTestStatusTone = micTestLocked || micTestReady
+    ? 'good'
+    : connected && micTestError
+      ? 'bad'
+      : connected && (hostAudioEnabled || pendingAction !== null)
+        ? 'warn'
+        : 'idle';
+  const activeAudioTestUnavailable = showMicrophoneControl ? testMicUnavailable : testSpeakerUnavailable;
+  const activeAudioTestLocked = showMicrophoneControl ? micTestLocked : speakerTestLocked;
+  const activeAudioTestStatusLabel = showMicrophoneControl ? micTestStatusLabel : speakerStatusLabel;
+  const activeAudioTestStatusTone = showMicrophoneControl ? micTestStatusTone : speakerStatusTone;
+  const sidebarDeviceTitle = connected && controllerConnected
+    ? controllerName(snapshot.status?.controllerType)
+    : 'Controller';
+  const sidebarDeviceStatus = connected && controllerConnected
+    ? 'Connected'
+    : 'Bridge not detected';
+  const sidebarBatteryLabel = connected && controllerConnected
+    ? `Battery ${batteryPercentLabel}`
+    : 'Battery unavailable';
+  const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
+    .replace(' / Real-time', '')
+    ?? '--';
+  const overviewHealthLabel = healthLabel(snapshot);
+  const overviewHealthTone = snapshot?.diagnostics.lastError
+    ? 'bad'
+    : connected && controllerConnected
+      ? 'good'
+      : connected
+        ? 'warn'
+        : 'idle';
+  const overviewConnectionStatus = connected && controllerConnected
+    ? 'Stable'
+    : connected
+      ? 'Waiting'
+      : 'Offline';
+  const overviewEncoderState = !connected
+    ? '--'
+    : hostAudioEnabled
+      ? 'On'
+      : 'Off';
+  const overviewEncoderDetail = !connected
+    ? '--'
+    : hostAudioActive
+      ? 'Active'
+      : hostAudioStarting
+        ? 'Starting'
+        : hostAudioEnabled
+          ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
+          : 'Pico Local';
+  const overviewAudioOutputLabel = connected ? (headsetOutputDetected ? 'Headphones' : 'Speaker') : '--';
+  const overviewSpeakerVolumeValue = `${speakerVolumeValue}%`;
+  const overviewFirmwareLabel = snapshot?.status?.firmwareVersion ?? '--';
+  const overviewSignalValue = connected ? snapshot?.status?.signalStrengthDbm : null;
+  const overviewSignalQuality = overviewSignalValue === null || overviewSignalValue === undefined
+    ? null
+    : overviewSignalValue >= -15
+      ? 'Excellent'
+      : overviewSignalValue >= -22
+        ? 'Good'
+        : overviewSignalValue >= -27
+          ? 'Audio Risk'
+          : 'Poor';
+  const overviewSignalTone = overviewSignalQuality === 'Excellent' || overviewSignalQuality === 'Good'
+    ? 'good'
+    : overviewSignalQuality === 'Audio Risk'
+      ? 'warn'
+      : overviewSignalQuality === 'Poor'
+        ? 'bad'
+        : 'idle';
+  const overviewSignalTitle = overviewSignalValue !== null && overviewSignalValue !== undefined
+    ? `${overviewSignalValue} dBm`
+    : undefined;
+  const overviewSignalLabel = overviewSignalQuality
+    ? overviewSignalQuality
+    : '--';
+  const overviewShortcutItems = [
+    snapshot?.settings.sleepKeybindEnabled ? { id: 'sleep', label: 'Sleep Shortcut' } : null,
+    snapshot?.settings.speakerVolumeShortcutEnabled ? { id: 'volume', label: 'Volume Shortcut' } : null
+  ].filter((item): item is { id: 'sleep' | 'volume'; label: string } => Boolean(item));
+  const overviewNotificationItems = [
+    controllerToastEnabled ? { id: 'controller-status', label: 'Controller Status' } : null,
+    lowBatteryToastEnabled ? { id: 'low-battery', label: 'Low Battery' } : null
+  ].filter((item): item is { id: NotificationFocusTarget; label: string } => Boolean(item));
+  const overviewPowerSavingLabel = snapshot?.settings.controllerPowerSavingEnabled
+    ? controllerPowerSavingActive
+      ? 'Active'
+      : 'Enabled'
+    : 'Off';
   const testTriggersUnavailable = !connected
     || !adaptiveTriggersSupported
     || !adaptiveTriggersEnabled
     || pendingAction !== null
     || triggerTestLocked
-    || gameStreamActive
+    || adaptiveTriggerOutputActive
     || Boolean(snapshot?.status?.testAdaptiveTriggersBusy);
   const triggerTestReady = !testTriggersUnavailable;
   const triggerStatusLabel = triggerTestLocked || snapshot?.status?.testAdaptiveTriggersBusy
     ? 'Testing'
     : triggerTestReady
       ? 'Ready'
-      : connected && gameStreamActive
-        ? 'Game Active'
+      : connected && adaptiveTriggerOutputActive
+        ? 'Game Triggers Active'
         : connected && pendingAction !== null
           ? 'Command Pending'
           : 'Unavailable';
   const triggerStatusTone = triggerTestLocked || snapshot?.status?.testAdaptiveTriggersBusy || triggerTestReady
     ? 'good'
-    : connected && (gameStreamActive || pendingAction !== null)
+    : connected && (adaptiveTriggerOutputActive || pendingAction !== null)
       ? 'warn'
       : 'idle';
   const lightbarStateActive = connected && lightbarSupported && lightbarEnabled;
@@ -1062,6 +1993,16 @@ export function App() {
     return () => window.clearInterval(handle);
   }, [connected, speakerOutputAvailable, speakerTestLocked]);
 
+  useEffect(() => () => {
+    stopMicLiveListen();
+  }, []);
+
+  useEffect(() => {
+    if ((!connected || !showMicrophoneControl) && micTestLocked) {
+      stopMicLiveListen();
+    }
+  }, [connected, showMicrophoneControl, micTestLocked]);
+
   const normalizedLightbarColor = normalizeHexColor(lightbarColor);
   const customSwatchColor = customLightbarColor ?? LIGHTBAR_DEFAULT_CUSTOM_COLOR;
   const customSwatchSelected = Boolean(customLightbarColor && normalizedLightbarColor === customLightbarColor);
@@ -1085,6 +2026,7 @@ export function App() {
 
     const debug = snapshot.status.audioDebug;
     const stats = snapshot.diagnostics.audioDebugStats;
+    const host = snapshot.diagnostics.hostAudioStatus;
     const lines = [
       `state=${snapshot.state}`,
       `firmware=${snapshot.status.firmwareVersion}`,
@@ -1100,9 +2042,35 @@ export function App() {
       `usbHostMicMute=${debug.usbHostMicMute ? 'true' : 'false'}`,
       `audioRepairCount=${debug.lastHostOutputCount}`,
       `lastAudioRepairReportId=0x${hexByte(debug.lastHostOutputReportId)}`,
-      `lastAudioRepairLength=${debug.lastHostOutputLength}`,
-      `lastAudioRepairFirst16=${debug.lastHostOutputFirst16.map(hexByte).join(' ')}`
+      `lastAudioRepairLength=${debug.lastHostOutputLength}`
     ];
+    if (host) {
+      lines.push(
+        `hostAudioMode=${host.mode}`,
+        `hostFallbackReason=${host.fallbackReason}`,
+        `hostRequested=${host.hostRequested ? 'true' : 'false'}`,
+        `hostHeartbeatHealthy=${host.heartbeatHealthy ? 'true' : 'false'}`,
+        `hostStreamHealthy=${host.streamHealthy ? 'true' : 'false'}`,
+        `hostGeneration=${host.streamGeneration}`,
+        `hostFramesReceived=${host.hostFramesReceived}`,
+        `hostFramesDropped=${host.hostFramesDropped}`,
+        `controllerStateReady=${host.controllerStateReady ? 'true' : 'false'}`,
+        `headsetPlugged=${host.headsetPlugged ? 'true' : 'false'}`,
+        `headsetAudioRoute=${host.headsetAudioRoute ? 'true' : 'false'}`,
+        `duplexRequested=${host.duplexRequested ? 'true' : 'false'}`,
+        `duplexActive=${host.duplexActive ? 'true' : 'false'}`,
+        `micPacketsReceived=${host.micPacketsReceived}`,
+        `micPacketsDropped=${host.micPacketsDropped}`,
+        `micDecodeSuccess=${host.micDecodeSuccess}`,
+        `micDecodeFail=${host.micDecodeFail}`,
+        `micUsbWriteSuccess=${host.micUsbWriteSuccess}`,
+        `micUsbWriteShort=${host.micUsbWriteShort}`,
+        `micLastDecodedSamples=${host.micLastDecodedSamples}`,
+        `micLastWrittenBytes=${host.micLastWrittenBytes}`,
+        `micPeakPermille=${host.micPeakPermille}`,
+        `micUsbStreaming=${host.micUsbStreaming ? 'true' : 'false'}`
+      );
+    }
     if (stats) {
       lines.push(
         `usbAudioGapMaxUs=${stats.usbAudioGapMaxUs}`,
@@ -1153,6 +2121,7 @@ export function App() {
       !snapshot
       || snapshot.state !== 'connected'
       || !snapshot.settings.hapticsEnabled
+      || (controllerPowerSavingActive && snapshot.settings.hapticsGainPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT && snappedValue === CONTROLLER_POWER_SAVING_CAP_PERCENT)
       || snappedValue === snapshot.settings.hapticsGainPercent
       || hapticsCommitPending
     ) {
@@ -1165,11 +2134,11 @@ export function App() {
     try {
       const next = await window.bridge.setHapticsGain(snappedValue);
       setSnapshot(next);
-      setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
+      setHapticsValue(displayHapticsValue(next));
     } catch {
       const next = await window.bridge.getStatus();
       setSnapshot(next);
-      setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
+      setHapticsValue(displayHapticsValue(next));
     } finally {
       setHapticsCommitPending(false);
       hapticsEditingRef.current = false;
@@ -1182,6 +2151,7 @@ export function App() {
       !snapshot
       || snapshot.state !== 'connected'
       || !snapshot.settings.classicRumbleEnabled
+      || (controllerPowerSavingActive && snapshot.settings.classicRumbleGainPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT && snappedValue === CONTROLLER_POWER_SAVING_CAP_PERCENT)
       || snappedValue === snapshot.settings.classicRumbleGainPercent
       || classicRumbleCommitPending
     ) {
@@ -1194,11 +2164,11 @@ export function App() {
     try {
       const next = await window.bridge.setClassicRumbleGain(snappedValue);
       setSnapshot(next);
-      setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
+      setClassicRumbleValue(displayClassicRumbleValue(next));
     } catch {
       const next = await window.bridge.getStatus();
       setSnapshot(next);
-      setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
+      setClassicRumbleValue(displayClassicRumbleValue(next));
     } finally {
       setClassicRumbleCommitPending(false);
       classicRumbleEditingRef.current = false;
@@ -1238,12 +2208,24 @@ export function App() {
   async function commitLightbar(nextColor = lightbarColor, brightness = lightbarBrightnessValue) {
     const color = normalizeHexColor(nextColor);
     const snappedBrightness = snapLightbarBrightness(brightness);
+    const shouldPreserveSavedBrightness = Boolean(
+      snapshot
+      && controllerPowerSavingActive
+      && snapshot.settings.lightbarBrightnessPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT
+      && snappedBrightness === CONTROLLER_POWER_SAVING_CAP_PERCENT
+    );
     if (
       !snapshot
       || snapshot.state !== 'connected'
       || !lightbarSupported
       || !snapshot.settings.lightbarEnabled
       || lightbarCommitPending
+      || (
+        controllerPowerSavingActive
+        && snapshot.settings.lightbarBrightnessPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT
+        && snappedBrightness === CONTROLLER_POWER_SAVING_CAP_PERCENT
+        && color === normalizeHexColor(snapshot.settings.lightbarColor)
+      )
       || (
         color === normalizeHexColor(snapshot.settings.lightbarColor)
         && snappedBrightness === snapshot.settings.lightbarBrightnessPercent
@@ -1255,9 +2237,16 @@ export function App() {
 
     setLightbarCommitPending(true);
     try {
-      setSnapshot(await window.bridge.setLightbarColor(color, snappedBrightness));
+      const persistedBrightness = shouldPreserveSavedBrightness
+        ? snapshot.settings.lightbarBrightnessPercent
+        : snappedBrightness;
+      const next = await window.bridge.setLightbarColor(color, persistedBrightness);
+      setSnapshot(next);
+      setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
     } catch {
-      setSnapshot(await window.bridge.getStatus());
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
     } finally {
       setLightbarCommitPending(false);
       lightbarBrightnessEditingRef.current = false;
@@ -1271,6 +2260,7 @@ export function App() {
       || snapshot.state !== 'connected'
       || !adaptiveTriggersSupported
       || !snapshot.settings.adaptiveTriggersEnabled
+      || (controllerPowerSavingActive && snapshot.settings.triggerEffectIntensityPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT && snappedValue === CONTROLLER_POWER_SAVING_CAP_PERCENT)
       || snappedValue === snapshot.settings.triggerEffectIntensityPercent
     ) {
       triggerEffectEditingRef.current = false;
@@ -1278,9 +2268,13 @@ export function App() {
     }
 
     try {
-      setSnapshot(await window.bridge.setTriggerEffectIntensity(snappedValue));
+      const next = await window.bridge.setTriggerEffectIntensity(snappedValue);
+      setSnapshot(next);
+      setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
     } catch {
-      setSnapshot(await window.bridge.getStatus());
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
     } finally {
       triggerEffectEditingRef.current = false;
     }
@@ -1333,20 +2327,20 @@ export function App() {
   }
 
   function setLightbarPreset(value: number) {
-    const brightness = snapLightbarBrightness(value);
+    const brightness = snapLightbarBrightness(capControllerPowerSavingValue(value, snapshot));
     setLightbarBrightnessValue(brightness);
     void commitLightbar(lightbarColor, brightness);
   }
 
   function setHapticsPreset(value: number) {
-    const snappedValue = snapHapticsValue(value);
+    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot));
     hapticsEditingRef.current = true;
     setHapticsValue(snappedValue);
     void commitHapticsValue(snappedValue);
   }
 
   function setClassicRumblePreset(value: number) {
-    const snappedValue = snapHapticsValue(value);
+    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot));
     classicRumbleEditingRef.current = true;
     setClassicRumbleValue(snappedValue);
     void commitClassicRumbleValue(snappedValue);
@@ -1359,8 +2353,43 @@ export function App() {
     void commitSpeakerVolume(snappedValue);
   }
 
+  async function commitMicVolume(value = micVolumeValue) {
+    if (
+      !snapshot
+      || snapshot.state !== 'connected'
+      || !hostAudioEnabled
+      || value === snapshot.settings.micVolumePercent
+      || micVolumeCommitPending
+    ) {
+      micVolumeEditingRef.current = false;
+      return;
+    }
+
+    setMicVolumeCommitPending(true);
+    micVolumeEditingRef.current = true;
+    try {
+      const next = await window.bridge.setMicVolume(value);
+      setSnapshot(next);
+      setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+    } catch {
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+    } finally {
+      setMicVolumeCommitPending(false);
+      micVolumeEditingRef.current = false;
+    }
+  }
+
+  function setMicPreset(value: number) {
+    const snappedValue = snapMicVolume(value);
+    micVolumeEditingRef.current = true;
+    setMicVolumeValue(snappedValue);
+    void commitMicVolume(snappedValue);
+  }
+
   function setTriggerIntensityPreset(value: number) {
-    const snappedValue = snapTriggerEffectIntensity(value);
+    const snappedValue = snapTriggerEffectIntensity(capControllerPowerSavingValue(value, snapshot));
     setTriggerEffectIntensityValue(snappedValue);
     void commitTriggerEffectIntensity(snappedValue);
   }
@@ -1370,16 +2399,29 @@ export function App() {
     return LIGHTBAR_COLOR_NAMES[normalized] ?? 'Custom';
   }
 
+  function isPreservingPowerSavingCap(savedValue: number, visibleValue: number): boolean {
+    return controllerPowerSavingActive
+      && savedValue > CONTROLLER_POWER_SAVING_CAP_PERCENT
+      && visibleValue === CONTROLLER_POWER_SAVING_CAP_PERCENT;
+  }
+
   function runFeedbackTest() {
     setTestLocked(true);
     void runAction(showClassicRumbleControl ? 'test-rumble' : 'test', async () => {
       if (snapshot && showClassicRumbleControl) {
-        if (classicRumbleValue !== snapshot.settings.classicRumbleGainPercent) {
+        if (
+          classicRumbleValue !== snapshot.settings.classicRumbleGainPercent
+          && !isPreservingPowerSavingCap(snapshot.settings.classicRumbleGainPercent, classicRumbleValue)
+        ) {
           await window.bridge.setClassicRumbleGain(classicRumbleValue);
         }
         return window.bridge.testClassicRumble();
       }
-      if (snapshot && hapticsValue !== snapshot.settings.hapticsGainPercent) {
+      if (
+        snapshot
+        && hapticsValue !== snapshot.settings.hapticsGainPercent
+        && !isPreservingPowerSavingCap(snapshot.settings.hapticsGainPercent, hapticsValue)
+      ) {
         await window.bridge.setHapticsGain(hapticsValue);
       }
       return window.bridge.testHaptics();
@@ -1394,12 +2436,6 @@ export function App() {
     setSpeakerTestError(null);
     void (async () => {
       try {
-        const speakerEndpointAvailable = Boolean(await findBridgeAudioOutputId());
-        setSpeakerOutputAvailable(speakerEndpointAvailable);
-        if (!speakerEndpointAvailable) {
-          throw new Error(BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE);
-        }
-
         let volumeChanged = false;
         if (snapshot && speakerVolumeSupported && speakerVolumeValue !== snapshot.settings.speakerVolumePercent) {
           speakerVolumeEditingRef.current = true;
@@ -1412,14 +2448,14 @@ export function App() {
         if (volumeChanged) {
           await delay(TEST_SPEAKER_VOLUME_SETTLE_MS);
         }
-        await playSpeakerToneFile();
+        const next = await window.bridge.testSpeaker();
+        setSnapshot(next);
+        setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
         setSpeakerOutputAvailable(true);
       } catch (error) {
         const message = error instanceof Error ? error.message : BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE;
         setSpeakerTestError(message);
-        if (message === BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE) {
-          setSpeakerOutputAvailable(false);
-        }
+        setSpeakerOutputAvailable(true);
         const next = await window.bridge.getStatus();
         setSnapshot(next);
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
@@ -1432,10 +2468,42 @@ export function App() {
     })();
   }
 
+  function runTestMic() {
+    setMicTestLocked(true);
+    setPendingAction('mic-test');
+    setMicTestError(null);
+    void (async () => {
+      try {
+        if (snapshot && micVolumeValue !== snapshot.settings.micVolumePercent) {
+          micVolumeEditingRef.current = true;
+          const next = await window.bridge.setMicVolume(micVolumeValue);
+          setSnapshot(next);
+          setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+          micVolumeEditingRef.current = false;
+        }
+        await playMicLiveListen(TEST_MIC_LISTEN_MS);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : BRIDGE_MIC_ENDPOINT_UNAVAILABLE;
+        setMicTestError(message);
+        const next = await window.bridge.getStatus();
+        setSnapshot(next);
+        setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+      } finally {
+        micVolumeEditingRef.current = false;
+        setPendingAction(null);
+        setMicTestLocked(false);
+      }
+    })();
+  }
+
   function runTestAdaptiveTriggers() {
     setTriggerTestLocked(true);
     void runAction('triggers', async () => {
-      if (snapshot && triggerEffectIntensityValue !== snapshot.settings.triggerEffectIntensityPercent) {
+      if (
+        snapshot
+        && triggerEffectIntensityValue !== snapshot.settings.triggerEffectIntensityPercent
+        && !isPreservingPowerSavingCap(snapshot.settings.triggerEffectIntensityPercent, triggerEffectIntensityValue)
+      ) {
         await window.bridge.setTriggerEffectIntensity(triggerEffectIntensityValue);
       }
       return window.bridge.testAdaptiveTriggers(snapshot?.settings.triggerTestMode ?? 'feedback', triggerTarget);
@@ -1452,8 +2520,135 @@ export function App() {
     void runAction('triggers-reset', () => window.bridge.resetAdaptiveTriggers());
   }
 
-  function applyPreset(presetId: BridgePresetId) {
-    void runAction('preset', () => window.bridge.applyPreset(presetId));
+  function selectControllerProfile(profileId: string) {
+    void runAction('controller-profile', () => window.bridge.selectControllerProfile(profileId));
+  }
+
+  function renameControllerProfile() {
+    if (!selectedControllerProfile || selectedControllerProfileIsDefault) {
+      return;
+    }
+    setControllerProfileNameDraft(selectedControllerProfile.name);
+    setControllerProfileDialogMode('rename');
+  }
+
+  function saveControllerProfile() {
+    setControllerProfileNameDraft(`Custom Profile ${snapshot?.settings.controllerProfiles.length ?? 1}`);
+    setControllerProfileDialogMode('save');
+  }
+
+  function deleteControllerProfile() {
+    if (!selectedControllerProfile || !canDeleteControllerProfile) {
+      return;
+    }
+    setControllerProfileDialogMode('delete');
+  }
+
+  function closeControllerProfileDialog() {
+    setControllerProfileDialogMode(null);
+    setControllerProfileNameDraft('');
+  }
+
+  function submitControllerProfileDialog() {
+    if (!selectedControllerProfile && controllerProfileDialogMode !== 'save') {
+      return;
+    }
+    if (controllerProfileDialogMode === 'save') {
+      const nextName = controllerProfileNameDraft.trim();
+      if (!nextName) {
+        return;
+      }
+      closeControllerProfileDialog();
+      void runAction('controller-save-profile', () => window.bridge.saveControllerProfile(nextName));
+      return;
+    }
+    if (controllerProfileDialogMode === 'rename' && selectedControllerProfile && !selectedControllerProfileIsDefault) {
+      const nextName = controllerProfileNameDraft.trim();
+      if (!nextName || nextName === selectedControllerProfile.name) {
+        closeControllerProfileDialog();
+        return;
+      }
+      closeControllerProfileDialog();
+      void runAction('controller-rename-profile', () => (
+        window.bridge.renameControllerProfile(selectedControllerProfile.id, nextName)
+      ));
+      return;
+    }
+    if (controllerProfileDialogMode === 'delete' && selectedControllerProfile && canDeleteControllerProfile) {
+      closeControllerProfileDialog();
+      void runAction('controller-delete-profile', () => (
+        window.bridge.deleteControllerProfile(selectedControllerProfile.id)
+      ));
+    }
+  }
+
+  function selectButtonRemappingProfile(profileId: string) {
+    void runAction('remap-profile', () => window.bridge.selectButtonRemappingProfile(profileId));
+  }
+
+  function setButtonRemap(buttonId: RemapButtonId, targetId: RemapButtonId) {
+    setRemapDraft((draft) => ({ ...draft, [buttonId]: targetId }));
+    void runAction(`remap-${buttonId}`, () => window.bridge.setButtonRemap(buttonId, targetId));
+  }
+
+  function restoreButtonRemappingDefaults() {
+    void runAction('remap-restore', () => window.bridge.restoreButtonRemappingDefaults());
+  }
+
+  function renameButtonRemappingProfile() {
+    if (!selectedRemapProfile || selectedRemapProfileIsDefault) {
+      return;
+    }
+    setRemapProfileNameDraft(selectedRemapProfile.name);
+    setRemapProfileDialogMode('rename');
+  }
+
+  function saveButtonRemappingProfile() {
+    setRemapProfileNameDraft(`Custom Profile ${snapshot?.settings.buttonRemappingProfiles.length ?? 1}`);
+    setRemapProfileDialogMode('save');
+  }
+
+  function deleteButtonRemappingProfile() {
+    if (!selectedRemapProfile || selectedRemapProfileIsDefault) {
+      return;
+    }
+    setRemapProfileDialogMode('delete');
+  }
+
+  function closeRemapProfileDialog() {
+    setRemapProfileDialogMode(null);
+    setRemapProfileNameDraft('');
+  }
+
+  function submitRemapProfileDialog() {
+    if (!selectedRemapProfile && remapProfileDialogMode !== 'save') {
+      return;
+    }
+    if (remapProfileDialogMode === 'save') {
+      const nextName = remapProfileNameDraft.trim();
+      if (!nextName) {
+        return;
+      }
+      closeRemapProfileDialog();
+      void runAction('remap-save-profile', () => window.bridge.saveButtonRemappingProfile(nextName));
+      return;
+    }
+    if (remapProfileDialogMode === 'rename' && selectedRemapProfile && !selectedRemapProfileIsDefault) {
+      const nextName = remapProfileNameDraft.trim();
+      if (!nextName || nextName === selectedRemapProfile.name) {
+        closeRemapProfileDialog();
+        return;
+      }
+      closeRemapProfileDialog();
+      void runAction('remap-rename-profile', () => (
+        window.bridge.renameButtonRemappingProfile(selectedRemapProfile.id, nextName)
+      ));
+      return;
+    }
+    if (remapProfileDialogMode === 'delete' && selectedRemapProfile && !selectedRemapProfileIsDefault) {
+      closeRemapProfileDialog();
+      void runAction('remap-delete-profile', () => window.bridge.deleteButtonRemappingProfile(selectedRemapProfile.id));
+    }
   }
 
   function toggleHapticsEnabled() {
@@ -1473,6 +2668,56 @@ export function App() {
     void runAction('speaker-enabled', () => window.bridge.setSpeakerEnabled(!snapshot.settings.speakerEnabled));
   }
 
+  function toggleHostEncodedAudioEnabled() {
+    if (!snapshot) return;
+    if (snapshot.settings.hostEncodedAudioEnabled) {
+      setHostEncodingDisableConfirmVisible(true);
+      return;
+    }
+    void runAction('host-audio-enabled', () => window.bridge.setHostEncodedAudioEnabled(true));
+  }
+
+  function closeHostEncodingDisableConfirm() {
+    setHostEncodingDisableConfirmVisible(false);
+  }
+
+  function confirmDisableHostEncoding() {
+    if (!snapshot) {
+      closeHostEncodingDisableConfirm();
+      return;
+    }
+    void runAction('host-audio-enabled', () => window.bridge.setHostEncodedAudioEnabled(false));
+    closeHostEncodingDisableConfirm();
+  }
+
+  function toggleAudioEnabled() {
+    if (!snapshot) return;
+    const enabled = !(snapshot.settings.speakerEnabled || snapshot.settings.duplexMicEnabled);
+    void runAction('audio-enabled', async () => {
+      let next = snapshot;
+      if (next.settings.speakerEnabled !== enabled) {
+        next = await window.bridge.setSpeakerEnabled(enabled);
+      }
+      const micEnabled = enabled && next.settings.hostEncodedAudioEnabled;
+      if (next.settings.duplexMicEnabled !== micEnabled) {
+        next = await window.bridge.setDuplexMicEnabled(micEnabled);
+      }
+      return next;
+    });
+  }
+
+  function toggleDuplexMicEnabled() {
+    if (!snapshot) return;
+    void runAction('duplex-mic-enabled', () => (
+      window.bridge.setDuplexMicEnabled(!snapshot.settings.duplexMicEnabled)
+    ));
+  }
+
+  function toggleMicMute() {
+    if (!snapshot) return;
+    void runAction('mic-mute', () => window.bridge.setMicMute(!snapshot.settings.micMuted));
+  }
+
   function toggleAdaptiveTriggersEnabled() {
     if (!snapshot) return;
     void runAction('triggers-enabled', () => (
@@ -1483,6 +2728,55 @@ export function App() {
   function toggleLightbarEnabled() {
     if (!snapshot) return;
     void runAction('lightbar-enabled', () => window.bridge.setLightbarEnabled(!snapshot.settings.lightbarEnabled));
+  }
+
+  function focusBridgeSettings(target: SettingsFocusTarget) {
+    setShowNotificationsMenu(false);
+    setShowBridgeSettings(true);
+    setNotificationFocusTarget(null);
+    setFeatureFocusTarget(null);
+    setSettingsFocusTarget(target);
+    if (settingsFocusTimerRef.current !== null) {
+      window.clearTimeout(settingsFocusTimerRef.current);
+    }
+    settingsFocusTimerRef.current = window.setTimeout(() => {
+      setSettingsFocusTarget(null);
+      settingsFocusTimerRef.current = null;
+    }, 2200);
+  }
+
+  function focusNotificationSettings(target: NotificationFocusTarget) {
+    setShowBridgeSettings(false);
+    setShowNotificationsMenu(true);
+    setSettingsFocusTarget(null);
+    setFeatureFocusTarget(null);
+    setNotificationFocusTarget(target);
+    if (notificationFocusTimerRef.current !== null) {
+      window.clearTimeout(notificationFocusTimerRef.current);
+    }
+    notificationFocusTimerRef.current = window.setTimeout(() => {
+      setNotificationFocusTarget(null);
+      notificationFocusTimerRef.current = null;
+    }, 2200);
+  }
+
+  function focusFeatureControl(target: FeatureFocusTarget) {
+    if (target === 'host-encoding' && hostAudioEnabled) {
+      return;
+    }
+    setShowBridgeSettings(false);
+    setShowNotificationsMenu(false);
+    setSettingsFocusTarget(null);
+    setNotificationFocusTarget(null);
+    setFeatureFocusTarget(target);
+    setFeatureFocusPulse((pulse) => pulse + 1);
+    if (featureFocusTimerRef.current !== null) {
+      window.clearTimeout(featureFocusTimerRef.current);
+    }
+    featureFocusTimerRef.current = window.setTimeout(() => {
+      setFeatureFocusTarget(null);
+      featureFocusTimerRef.current = null;
+    }, 2200);
   }
 
   function setMuteButtonAction(
@@ -1515,66 +2809,38 @@ export function App() {
     );
   }
 
-  function clearSleepConfirmation() {
-    sleepConfirmArmedRef.current = false;
-    setSleepConfirmVisible(false);
-    if (sleepConfirmTimerRef.current !== null) {
-      window.clearTimeout(sleepConfirmTimerRef.current);
-      sleepConfirmTimerRef.current = null;
+  function clearOverviewSleepConfirmation() {
+    overviewSleepConfirmArmedRef.current = false;
+    setOverviewSleepConfirmVisible(false);
+    if (overviewSleepConfirmTimerRef.current !== null) {
+      window.clearTimeout(overviewSleepConfirmTimerRef.current);
+      overviewSleepConfirmTimerRef.current = null;
     }
   }
 
-  function armSleepConfirmation() {
-    sleepConfirmArmedRef.current = true;
-    setSleepConfirmVisible(true);
-    if (sleepConfirmTimerRef.current !== null) {
-      window.clearTimeout(sleepConfirmTimerRef.current);
+  function armOverviewSleepConfirmation() {
+    overviewSleepConfirmArmedRef.current = true;
+    setOverviewSleepConfirmVisible(true);
+    if (overviewSleepConfirmTimerRef.current !== null) {
+      window.clearTimeout(overviewSleepConfirmTimerRef.current);
     }
-    sleepConfirmTimerRef.current = window.setTimeout(() => {
-      sleepConfirmArmedRef.current = false;
-      setSleepConfirmVisible(false);
-      sleepConfirmTimerRef.current = null;
+    overviewSleepConfirmTimerRef.current = window.setTimeout(() => {
+      overviewSleepConfirmArmedRef.current = false;
+      setOverviewSleepConfirmVisible(false);
+      overviewSleepConfirmTimerRef.current = null;
     }, SLEEP_CONFIRM_MS);
   }
 
-  function handleSleepButtonClick(detail: number) {
-    if (!snapshot || detail > 1 || sleepButtonBusy || !connected || !sleepControllerSupported) {
+  function handleOverviewSleepController() {
+    if (!snapshot || !connected || !sleepControllerSupported || !controllerConnected || pendingAction !== null) {
       return;
     }
-
-    armSleepConfirmation();
-    const togglePromise = runAction('sleep-keybind', () => (
-      window.bridge.setSleepKeybindEnabled(!snapshot.settings.sleepKeybindEnabled)
-    ));
-    const trackedPromise = togglePromise.finally(() => {
-      if (sleepTogglePromiseRef.current === trackedPromise) {
-        sleepTogglePromiseRef.current = null;
-      }
-    });
-    sleepTogglePromiseRef.current = trackedPromise;
-  }
-
-  function handleSleepButtonDoubleClick() {
-    if (!snapshot || sleepButtonBusy || !connected || !sleepControllerSupported || !controllerConnected) {
+    if (!overviewSleepConfirmArmedRef.current) {
+      armOverviewSleepConfirmation();
       return;
     }
-    if (!sleepConfirmArmedRef.current) {
-      armSleepConfirmation();
-      return;
-    }
-
-    clearSleepConfirmation();
-    const waitForToggle = sleepTogglePromiseRef.current ?? Promise.resolve();
-    void waitForToggle.then(async () => {
-      setPendingAction('sleep-controller');
-      try {
-        setSnapshot(await window.bridge.sleepController());
-      } catch {
-        setSnapshot(await window.bridge.getStatus());
-      } finally {
-        setPendingAction(null);
-      }
-    });
+    clearOverviewSleepConfirmation();
+    void runAction('overview-sleep-controller', () => window.bridge.sleepController());
   }
 
   function toggleControllerNotifications() {
@@ -1612,7 +2878,7 @@ export function App() {
   }
 
   return (
-    <div className="shell">
+    <div className={`shell ${windowDragging ? 'window-dragging' : ''}`}>
       <div
         className="window-bar"
         onMouseDown={(event) => {
@@ -1622,6 +2888,9 @@ export function App() {
           }
           setShowBridgeSettings(false);
           setShowNotificationsMenu(false);
+          if (event.button === 0) {
+            beginWindowDrag();
+          }
         }}
       >
         <span className="bridge-wordmark" aria-label="DS5 Bridge">
@@ -1631,29 +2900,6 @@ export function App() {
         </span>
         <div className="topbar-right">
           <div className="bridge-tools">
-            <div className="sleep-control">
-              <button
-                className={`topbar-sleep-button ${sleepKeybindEnabled ? 'active' : ''} ${sleepConfirmVisible ? 'confirm' : ''}`}
-                type="button"
-                aria-label="Sleep controller"
-                aria-pressed={sleepKeybindEnabled}
-                disabled={!connected || !sleepControllerSupported || sleepButtonBusy}
-                onClick={(event) => handleSleepButtonClick(event.detail)}
-                onDoubleClick={handleSleepButtonDoubleClick}
-              >
-                <Moon size={16} />
-                <span>Sleep</span>
-              </button>
-              <div className="sleep-keybind-tooltip" role="tooltip">
-                Press PlayStation Home + Triangle to sleep
-              </div>
-              {sleepConfirmVisible && (
-                <div className="sleep-confirm" role="status">
-                  Double-click to sleep now
-                </div>
-              )}
-            </div>
-            <span className="bridge-tool-divider" aria-hidden="true" />
             <div className="notifications-control" ref={notificationsRef}>
               <button
                 className={`topbar-tool notification-tool ${showNotificationsMenu ? 'active' : ''} ${notificationsEnabled ? 'armed' : ''}`}
@@ -1671,7 +2917,7 @@ export function App() {
                     <Bell size={16} />
                     <span>Notifications</span>
                   </div>
-                  <div className="settings-menu-row">
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'controller-status' ? 'settings-menu-row-highlight' : ''}`}>
                     <div>
                       <strong>Controller Status</strong>
                       <span>Toast when the controller connects or disconnects</span>
@@ -1687,7 +2933,7 @@ export function App() {
                       <span />
                     </button>
                   </div>
-                  <div className="settings-menu-row">
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'low-battery' ? 'settings-menu-row-highlight' : ''}`}>
                     <div>
                       <strong>Low Battery</strong>
                       <span>Toast when battery reaches 20% or below</span>
@@ -1716,6 +2962,7 @@ export function App() {
                 </div>
               )}
             </div>
+            <span className="bridge-tool-divider" aria-hidden="true" />
           </div>
           <div className="window-actions">
             <button type="button" title="Minimize" onClick={() => void window.bridge.minimizeWindow()}>
@@ -1730,143 +2977,483 @@ export function App() {
 
       <main className="app-content">
         <section className={`hero-card status-${statusTone}`}>
-          <div className="hero-actions">
-            <div className="header-settings" ref={bridgeSettingsRef}>
-              <button
-                className={`icon-button ${showBridgeSettings ? 'active' : ''}`}
-                type="button"
-                title="Bridge settings"
-                aria-haspopup="menu"
-                aria-expanded={showBridgeSettings}
-                onClick={() => setShowBridgeSettings((value) => !value)}
-              >
-                <MoreHorizontal size={22} />
-              </button>
-              {showBridgeSettings && (
-                <div className="settings-menu" role="menu" aria-label="Bridge settings">
-                  <div className="settings-menu-heading">
-                    <Settings2 size={16} />
-                    <span>Bridge Settings</span>
-                  </div>
-                  <div className="settings-menu-row">
-                    <div>
-                      <strong>Pico LED</strong>
-                      <span>Board status LED while connected</span>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={snapshot.settings.ledEnabled}
-                      className={`switch ${snapshot.settings.ledEnabled ? 'on' : ''}`}
-                      disabled={!connected}
-                      onClick={() => void runAction('led', () => window.bridge.setLedEnabled(!snapshot.settings.ledEnabled))}
-                    >
-                      <span />
-                    </button>
-                  </div>
-                  <div className="settings-menu-row">
-                    <div>
-                      <strong>Idle Disconnect</strong>
-                      <span>Disconnect controller after 30 minutes idle</span>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={snapshot.settings.idleDisconnectEnabled}
-                      className={`switch ${snapshot.settings.idleDisconnectEnabled ? 'on' : ''}`}
-                      disabled={!connected}
-                      onClick={() => void runAction('idle', () => (
-                        window.bridge.setIdleDisconnectEnabled(!snapshot.settings.idleDisconnectEnabled)
-                      ))}
-                    >
-                      <span />
-                    </button>
-                  </div>
-                  <div className="settings-menu-row">
-                    <div>
-                      <strong>PC Sleep Disconnect</strong>
-                      <span>Disconnect controller when USB host suspends</span>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={snapshot.settings.usbSuspendDisconnectEnabled}
-                      className={`switch ${snapshot.settings.usbSuspendDisconnectEnabled ? 'on' : ''}`}
-                      disabled={!connected || !usbSuspendDisconnectSupported}
-                      onClick={() => void runAction('usb-suspend', () => (
-                        window.bridge.setUsbSuspendDisconnectEnabled(!snapshot.settings.usbSuspendDisconnectEnabled)
-                      ))}
-                    >
-                      <span />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
+          <div className="sidebar-section-label">Device</div>
           <div className="hero-main">
             <img className="controller-art" src={controllerImage} alt="" />
             <div className="status-copy">
               <div className="connection-row">
-                <strong>{connected ? (controllerConnected ? controllerName(snapshot.status?.controllerType) : 'No Controller') : 'Controller'}</strong>
+                <strong>{sidebarDeviceTitle}</strong>
               </div>
-              <div className="bridge-state">
-                <span>{heroBridgeLabel}</span>
+              <div className="bridge-state compact-device-status">
+                <span className={`dot ${connected && controllerConnected ? 'good' : connected ? 'warn' : ''}`} />
+                <span>{sidebarDeviceStatus}</span>
               </div>
-              <div className="battery-row">
-                <span
-                  className={`battery-icon ${batteryLevelTone} ${batteryCharging ? 'charging' : ''}`}
-                  aria-hidden="true"
-                >
-                  {[0, 1, 2].map((segment) => (
-                    <span
-                      key={segment}
-                      className={[
-                        segment < batterySegmentCount ? 'active' : '',
-                        segment === batteryChargingSegment ? 'charging-segment' : '',
-                        segment === 0 && batteryCritical ? 'critical-segment' : ''
-                      ].filter(Boolean).join(' ')}
-                    />
-                  ))}
-                </span>
-                <strong>{connected ? batteryPercentLabel : '--'}</strong>
-                <span>{heroReadinessLabel}</span>
-              </div>
-              <div
-                className={`battery-track ${batteryLevelTone} ${batteryCharging ? 'charging' : ''}`}
-                style={{ '--battery-scale': connected ? batteryPercent / 100 : 0 } as CSSProperties}
-              >
-                <div />
+              <div className="battery-row compact-battery-row">
+                {connected && controllerConnected && (
+                  <span
+                    className={`battery-icon ${batteryLevelTone} ${batteryCharging ? 'charging' : ''}`}
+                    aria-hidden="true"
+                  >
+                    {[0, 1, 2].map((segment) => (
+                      <span
+                        key={segment}
+                        className={[
+                          segment < batterySegmentCount ? 'active' : '',
+                          segment === batteryChargingSegment ? 'charging-segment' : '',
+                          segment === 0 && batteryCritical ? 'critical-segment' : ''
+                        ].filter(Boolean).join(' ')}
+                      />
+                    ))}
+                  </span>
+                )}
+                <span>{sidebarBatteryLabel}</span>
               </div>
             </div>
           </div>
-          <div className="control-tabs" role="tablist" aria-label="Controls">
-            {CONTROL_TABS.map(({ id, label, Icon }) => (
+          <div className="sidebar-section-label">Controls</div>
+          <div className="sidebar-controls">
+            <div className="control-tabs" role="tablist" aria-label="Controls">
+              {CONTROL_TABS.map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  id={`control-tab-${id}`}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeControlTab === id}
+                  aria-controls={`control-panel-${id}`}
+                  className={activeControlTab === id ? 'active' : ''}
+                  onClick={() => selectControlTab(id)}
+                >
+                  <Icon size={18} stroke={2} />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="sidebar-actions">
+            <div className="sidebar-support">
               <button
-                key={id}
-                id={`control-tab-${id}`}
+                className="sidebar-kofi-link"
                 type="button"
-                role="tab"
-                aria-selected={activeControlTab === id}
-                aria-controls={`control-panel-${id}`}
-                className={activeControlTab === id ? 'active' : ''}
-                onClick={() => selectControlTab(id)}
+                aria-label="Support SundayMoments on Ko-fi"
+                onClick={() => void window.bridge.openExternal('https://ko-fi.com/sundaymoments')}
               >
-                <Icon size={16} />
-                {label}
+                <img className="sidebar-kofi-badge" src={kofiBadgeUrl} alt="" />
               </button>
-            ))}
+            </div>
+            <div className="header-settings">
+              <button
+                className={`sidebar-action-button ${showBridgeSettings ? 'active' : ''}`}
+                type="button"
+                aria-haspopup="dialog"
+                aria-expanded={showBridgeSettings}
+                onClick={() => setShowBridgeSettings((value) => !value)}
+              >
+                <SettingsIcon size={18} />
+                <span>Settings</span>
+              </button>
+            </div>
           </div>
         </section>
 
       <section className="control-panel flat-control-panel">
         <div className="control-pages">
           <div
-            className="control-page haptics-page"
+            className={`control-page overview-page ${activeControlTab === 'overview' ? 'active' : ''}`}
+            role="tabpanel"
+            id="control-panel-overview"
+            aria-labelledby="control-tab-overview"
+            aria-hidden={activeControlTab !== 'overview'}
+          >
+            <div className="feature-heading overview-heading">
+              <div>
+                <h2>Overview</h2>
+                <p>At-a-glance status of your controller and active settings.</p>
+              </div>
+              <span className={`overview-health health-label ${overviewHealthTone}`}>
+                <span className={`dot ${overviewHealthTone}`} />
+                {overviewHealthLabel}
+              </span>
+            </div>
+
+            <div className="overview-card-grid">
+              <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
+                <div className="overview-card-title">
+                  <span className="feature-icon overview-icon"><Activity size={19} /></span>
+                  <h3>Connection</h3>
+                </div>
+                <div className="overview-fields">
+                  <div>
+                    <span>USB</span>
+                    <strong className={overviewConnectionStatus === 'Stable' ? 'success-value' : ''}>
+                      {overviewConnectionStatus}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Polling Rate</span>
+                    <strong>{connected && pollingRateControlSupported ? pollingRateLabel : '--'}</strong>
+                  </div>
+                </div>
+              </button>
+
+              <button className="overview-card" type="button" onClick={() => selectControlTab('audio')}>
+                <div className="overview-card-title">
+                  <span className="feature-icon overview-icon"><IconBinary size={20} /></span>
+                  <h3>Encoder</h3>
+                </div>
+                <div className="overview-fields">
+                  <div>
+                    <span>Host Encoding</span>
+                    <strong className={overviewEncoderState === 'On' ? 'success-value' : ''}>
+                      {overviewEncoderState}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Status</span>
+                    <strong>{overviewEncoderDetail}</strong>
+                  </div>
+                </div>
+              </button>
+
+              <button className="overview-card" type="button" onClick={() => selectControlTab('audio')}>
+                <div className="overview-card-title">
+                  <span className="feature-icon overview-icon"><Volume2 size={19} /></span>
+                  <h3>Audio</h3>
+                </div>
+                <div className="overview-fields">
+                  <div>
+                    <span>Route</span>
+                    <strong>{overviewAudioOutputLabel}</strong>
+                  </div>
+                  <div>
+                    <span>Volume</span>
+                    <strong>{overviewSpeakerVolumeValue}</strong>
+                  </div>
+                </div>
+              </button>
+
+              <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
+                <div className="overview-card-title">
+                  <span className="feature-icon overview-icon"><IconBluetooth size={19} /></span>
+                  <h3>Wireless</h3>
+                </div>
+                <div className="overview-fields">
+                  <div>
+                    <span>Signal</span>
+                    <strong className={`signal-value ${overviewSignalTone}`} title={overviewSignalTitle}>
+                      {overviewSignalLabel}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Firmware</span>
+                    <strong>{overviewFirmwareLabel}</strong>
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            <div className="overview-control-grid">
+              <section className="overview-control-panel overview-quick-actions" aria-label="Quick actions">
+                <div className="overview-panel-heading">
+                  <span className="feature-icon overview-icon"><Zap size={18} /></span>
+                  <div>
+                    <h3>Quick Actions</h3>
+                  </div>
+                </div>
+                <div className="overview-action-grid">
+                  <button
+                    type="button"
+                    disabled={activeFeedbackTestUnavailable}
+                    onClick={runFeedbackTest}
+                  >
+                    <Play size={15} />
+                    Test Haptics
+                  </button>
+                  <button
+                    type="button"
+                    disabled={testSpeakerUnavailable}
+                    onClick={runTestSpeaker}
+                  >
+                    <Volume2 size={15} />
+                    Test Speaker
+                  </button>
+                  <button
+                    type="button"
+                    disabled={testMicUnavailable}
+                    onClick={runTestMic}
+                  >
+                    <Mic size={15} />
+                    Listen Mic
+                  </button>
+                  <button
+                    type="button"
+                    className={overviewSleepConfirmVisible ? 'confirm' : undefined}
+                    disabled={!connected || !sleepControllerSupported || !controllerConnected || pendingAction !== null}
+                    onClick={handleOverviewSleepController}
+                  >
+                    <Moon size={15} />
+                    {overviewSleepConfirmVisible ? 'Confirm Sleep' : 'Sleep Controller'}
+                  </button>
+                </div>
+              </section>
+
+              <section className="overview-control-panel overview-sliders" aria-label="Quick controls">
+                <div className="overview-panel-heading">
+                  <span className="feature-icon overview-icon"><IconAdjustmentsSpark size={18} /></span>
+                  <div>
+                    <h3>Quick Controls</h3>
+                  </div>
+                </div>
+                <div className="overview-slider-list">
+                  <label className={`overview-slider-row ${(!connected || !snapshot.settings.hapticsEnabled) ? 'disabled' : ''}`}>
+                    <span>Haptics</span>
+                    <div className="overview-range-control">
+                      <input
+                        type="range"
+                        min="0"
+                        max={hapticsSliderMax}
+                        step={HAPTICS_STEP}
+                        value={hapticsValue}
+                        disabled={!connected || !snapshot.settings.hapticsEnabled}
+                        style={{ '--range-fill': `${(hapticsValue / hapticsSliderMax) * 100}%` } as CSSProperties}
+                        onPointerDown={() => {
+                          hapticsEditingRef.current = true;
+                        }}
+                        onChange={(event) => setHapticsValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                        onPointerUp={() => void commitHapticsValue()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            hapticsEditingRef.current = true;
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            void commitHapticsValue();
+                          }
+                        }}
+                        onBlur={() => void commitHapticsValue()}
+                      />
+                      <div className="overview-range-ticks" aria-hidden="true">
+                        {HAPTICS_SLIDER_TICKS.map((value) => (
+                          <span key={value} className={sliderTickClass(value, 200)} />
+                        ))}
+                      </div>
+                    </div>
+                    <strong>{hapticsValue}%</strong>
+                  </label>
+                  <label className={`overview-slider-row ${(!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending) ? 'disabled' : ''}`}>
+                    <span>Speaker</span>
+                    <div className="overview-range-control">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step={SPEAKER_VOLUME_STEP}
+                        value={speakerVolumeValue}
+                        disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
+                        style={{ '--range-fill': `${speakerVolumeValue}%` } as CSSProperties}
+                        onPointerDown={() => {
+                          speakerVolumeEditingRef.current = true;
+                        }}
+                        onChange={(event) => setSpeakerVolumeValue(snapSpeakerVolume(Number(event.currentTarget.value)))}
+                        onPointerUp={() => void commitSpeakerVolume()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            speakerVolumeEditingRef.current = true;
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            void commitSpeakerVolume();
+                          }
+                        }}
+                        onBlur={() => void commitSpeakerVolume()}
+                      />
+                      <div className="overview-range-ticks" aria-hidden="true">
+                        {PERCENT_SLIDER_TICKS.map((value) => (
+                          <span key={value} className={sliderTickClass(value, 100)} />
+                        ))}
+                      </div>
+                    </div>
+                    <strong>{speakerVolumeValue}%</strong>
+                  </label>
+                  <label className={`overview-slider-row ${(!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending) ? 'disabled' : ''}`}>
+                    <span>Mic</span>
+                    <div className="overview-range-control">
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step={MIC_VOLUME_STEP}
+                        value={micVolumeValue}
+                        disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
+                        style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
+                        onPointerDown={() => {
+                          micVolumeEditingRef.current = true;
+                        }}
+                        onChange={(event) => setMicVolumeValue(snapMicVolume(Number(event.currentTarget.value)))}
+                        onPointerUp={() => void commitMicVolume()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            micVolumeEditingRef.current = true;
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            void commitMicVolume();
+                          }
+                        }}
+                        onBlur={() => void commitMicVolume()}
+                      />
+                      <div className="overview-range-ticks" aria-hidden="true">
+                        {PERCENT_SLIDER_TICKS.map((value) => (
+                          <span key={value} className={sliderTickClass(value, 100)} />
+                        ))}
+                      </div>
+                    </div>
+                    <strong>{micVolumeValue}%</strong>
+                  </label>
+                  <label className={`overview-slider-row ${(!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled || lightbarCommitPending) ? 'disabled' : ''}`}>
+                    <span>Lightbar</span>
+                    <div className="overview-range-control">
+                      <input
+                        type="range"
+                        min="0"
+                        max={percentSliderMax}
+                        step={LIGHTBAR_BRIGHTNESS_STEP}
+                        value={lightbarBrightnessValue}
+                        disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled || lightbarCommitPending}
+                        style={{ '--range-fill': `${(lightbarBrightnessValue / percentSliderMax) * 100}%` } as CSSProperties}
+                        onPointerDown={() => {
+                          lightbarBrightnessEditingRef.current = true;
+                        }}
+                        onChange={(event) => setLightbarBrightnessValue(snapLightbarBrightness(Number(event.currentTarget.value)))}
+                        onPointerUp={() => void commitLightbar()}
+                        onKeyDown={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            lightbarBrightnessEditingRef.current = true;
+                          }
+                        }}
+                        onKeyUp={(event) => {
+                          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                            void commitLightbar();
+                          }
+                        }}
+                        onBlur={() => void commitLightbar()}
+                      />
+                      <div className="overview-range-ticks" aria-hidden="true">
+                        {PERCENT_SLIDER_TICKS.map((value) => (
+                          <span key={value} className={sliderTickClass(value, 100)} />
+                        ))}
+                      </div>
+                    </div>
+                    <strong>{lightbarBrightnessValue}%</strong>
+                  </label>
+                </div>
+              </section>
+            </div>
+
+            <section className="overview-status-panel" aria-label="Active settings summary">
+              <div className="overview-status-group">
+                <div className="overview-status-heading">
+                  <IconDeviceGamepad2 size={15} />
+                  <span>Shortcuts</span>
+                </div>
+                <div className="overview-chip-row">
+                  {overviewShortcutItems.length > 0 ? (
+                    overviewShortcutItems.map((item) => (
+                      <button
+                        className="overview-chip overview-shortcut-chip active"
+                        key={item.id}
+                        type="button"
+                        onClick={() => focusBridgeSettings(item.id === 'sleep' ? 'sleep-shortcut' : 'volume-shortcut')}
+                      >
+                        {item.label}
+                        {item.id === 'sleep' ? (
+                          <span className="settings-shortcut-tooltip shortcut-glyph-tooltip overview-shortcut-tooltip" role="tooltip">
+                            <span>Put controller to sleep with</span>
+                            <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
+                              <span className="shortcut-glyph-key">
+                                <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                              </span>
+                              <span className="shortcut-plus" aria-hidden="true">+</span>
+                              <span className="shortcut-glyph-key">
+                                <img src={triangleGlyphUrl} alt="Triangle" />
+                              </span>
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="settings-shortcut-tooltip shortcut-glyph-tooltip overview-shortcut-tooltip" role="tooltip">
+                            <span>Controller volume up/down with</span>
+                            <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
+                              <span className="shortcut-glyph-key">
+                                <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                              </span>
+                              <span className="shortcut-plus" aria-hidden="true">+</span>
+                              <span className="shortcut-glyph-pair">
+                                <span className="shortcut-glyph-key">
+                                  <img src={dpadUpGlyphUrl} alt="D-pad Up" />
+                                </span>
+                                <span className="shortcut-glyph-key">
+                                  <img src={dpadDownGlyphUrl} alt="D-pad Down" />
+                                </span>
+                              </span>
+                            </span>
+                          </span>
+                        )}
+                      </button>
+                    ))
+                  ) : (
+                    <span className="overview-chip muted">None enabled</span>
+                  )}
+                </div>
+              </div>
+              <div className="overview-status-group">
+                <div className="overview-status-heading">
+                  <IconBatteryEco size={15} />
+                  <span>Power Saving</span>
+                </div>
+                <div className="overview-chip-row">
+                  <button
+                    className={`overview-chip ${snapshot.settings.controllerPowerSavingEnabled ? 'active success' : 'muted'}`}
+                    type="button"
+                    onClick={() => focusBridgeSettings('controller-power-saving')}
+                  >
+                    {overviewPowerSavingLabel}
+                  </button>
+                </div>
+              </div>
+              <div className="overview-status-group">
+                <div className="overview-status-heading">
+                  <Bell size={15} />
+                  <span>Notifications</span>
+                </div>
+                <div className="overview-chip-row">
+                  {overviewNotificationItems.length > 0 ? (
+                    overviewNotificationItems.map((item) => (
+                      <button
+                        className="overview-chip active"
+                        key={item.id}
+                        type="button"
+                        onClick={() => focusNotificationSettings(item.id)}
+                      >
+                        {item.label}
+                      </button>
+                    ))
+                  ) : (
+                    <span className="overview-chip muted">Off</span>
+                  )}
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <div
+            className={`control-page haptics-page ${activeControlTab === 'haptics' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-haptics"
             aria-labelledby="control-tab-haptics"
-            hidden={activeControlTab !== 'haptics'}
+            aria-hidden={activeControlTab !== 'haptics'}
           >
               <div className="feature-heading">
                 <div>
@@ -1890,25 +3477,41 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon">
-                      {showClassicRumbleControl ? <Vibrate size={20} /> : <Sparkles size={20} />}
-                    </span>
-                    <div className="title-copy">
-                      <h3>{showClassicRumbleControl ? 'Rumble' : 'Intensity'}</h3>
-                      <p>
-                        {showClassicRumbleControl
-                          ? 'Scale game rumble motor strength.'
-                          : 'Scale haptic feedback strength.'}
-                      </p>
-                    </div>
                     <button
                       type="button"
-                      className="card-flip-button haptics-flip-button"
-                      onClick={() => setShowClassicRumbleControl((value) => !value)}
+                      className={`feature-icon haptics-enable-button ${showClassicRumbleControl ? 'icon-medium' : 'icon-compact'} ${activeHapticsFeatureEnabled ? 'active' : ''} ${controllerPowerSavingActive && activeHapticsFeatureEnabled ? 'power-saving-active' : ''}`}
+                      aria-pressed={activeHapticsFeatureEnabled}
+                      aria-label={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
+                      title={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={showClassicRumbleControl ? toggleClassicRumbleEnabled : toggleHapticsEnabled}
                     >
-                      {showClassicRumbleControl ? <Sparkles size={17} /> : <Vibrate size={17} />}
-                      {showClassicRumbleControl ? 'Haptics' : 'Rumble'}
+                      {showClassicRumbleControl ? <Vibrate size={20} /> : <Sparkles size={20} />}
                     </button>
+                    <div className="title-copy">
+                      <h3>{showClassicRumbleControl ? 'Rumble' : 'Intensity'}</h3>
+                      <p>{showClassicRumbleControl ? 'Rumble Strength' : 'Haptic Strength'}</p>
+                    </div>
+                    <div className="dual-selector haptics-mode-selector" role="tablist" aria-label="Haptics control mode">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={!showClassicRumbleControl}
+                        className={!showClassicRumbleControl ? 'active' : ''}
+                        onClick={() => setShowClassicRumbleControl(false)}
+                      >
+                        Haptics
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={showClassicRumbleControl}
+                        className={showClassicRumbleControl ? 'active' : ''}
+                        onClick={() => setShowClassicRumbleControl(true)}
+                      >
+                        Rumble
+                      </button>
+                    </div>
                   </div>
                   <div className="framed-slider">
                     <label className="slider-row">
@@ -1918,11 +3521,11 @@ export function App() {
                           <input
                             type="range"
                             min="0"
-                            max="200"
+                            max={hapticsSliderMax}
                             step={HAPTICS_STEP}
                             value={classicRumbleValue}
                             disabled={!connected || !snapshot.settings.classicRumbleEnabled}
-                            style={{ '--range-fill': `${classicRumbleValue / 2}%` } as CSSProperties}
+                            style={{ '--range-fill': `${(classicRumbleValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                             onPointerDown={() => {
                               classicRumbleEditingRef.current = true;
                             }}
@@ -1944,11 +3547,11 @@ export function App() {
                           <input
                             type="range"
                             min="0"
-                            max="200"
+                            max={hapticsSliderMax}
                             step={HAPTICS_STEP}
                             value={hapticsValue}
                             disabled={!connected || !snapshot.settings.hapticsEnabled}
-                            style={{ '--range-fill': `${hapticsValue / 2}%` } as CSSProperties}
+                            style={{ '--range-fill': `${(hapticsValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                             onPointerDown={() => {
                               hapticsEditingRef.current = true;
                             }}
@@ -2004,7 +3607,7 @@ export function App() {
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Activity size={20} /></span>
+                    <span className="feature-icon"><IconTestPipe size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
                       <p>Run a short test to feel the current settings.</p>
@@ -2040,139 +3643,295 @@ export function App() {
                   </div>
                 </section>
               </div>
+              <FeatureTipsPanel tab="haptics" onSettingsFocusRequest={focusBridgeSettings} />
           </div>
 
           <div
-            className="control-page audio-page"
+            className={`control-page audio-page ${activeControlTab === 'audio' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-audio"
             aria-labelledby="control-tab-audio"
-            hidden={activeControlTab !== 'audio'}
+            aria-hidden={activeControlTab !== 'audio'}
           >
               <div className="feature-heading">
                 <div>
                   <h2>Audio</h2>
-                  <p>Adjust controller speaker volume and run a quick test.</p>
+                  <p>Adjust controller {outputControlLower} and microphone levels.</p>
                 </div>
-                <div className="inline-switch">
-                  <span>Enabled</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={snapshot.settings.speakerEnabled}
-                    className={`switch ${snapshot.settings.speakerEnabled ? 'on' : ''}`}
-                    disabled={!connected || !speakerVolumeSupported || pendingAction !== null}
-                    onClick={toggleSpeakerEnabled}
+                <div className="audio-heading-controls">
+                  <div
+                    className={[
+                      'inline-switch',
+                      featureFocusTarget === 'host-encoding' ? `feature-focus-highlight feature-focus-highlight-${featureFocusPulse % 2}` : ''
+                    ].filter(Boolean).join(' ')}
                   >
-                    <span />
-                  </button>
+                    <span>Host Encoding</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={hostAudioEnabled}
+                      aria-label="Enable host encoded audio"
+                      className={`switch ${hostAudioEnabled ? 'on' : ''}`}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={toggleHostEncodedAudioEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                  <div className="inline-switch">
+                    <span>Enabled</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={audioEnabled}
+                      aria-label="Enable audio"
+                      className={`switch ${audioEnabled ? 'on' : ''}`}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={toggleAudioEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
                 </div>
               </div>
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Volume2 size={20} /></span>
+                    <button
+                      type="button"
+                      className={`feature-icon audio-enable-button icon-medium ${
+                        showMicrophoneControl
+                          ? duplexMicEnabled
+                            ? 'active'
+                            : ''
+                          : snapshot.settings.speakerEnabled
+                            ? 'active'
+                            : ''
+                      }`}
+                      aria-pressed={showMicrophoneControl ? duplexMicEnabled : snapshot.settings.speakerEnabled}
+                      aria-label={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
+                      title={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
+                      disabled={
+                        showMicrophoneControl
+                          ? !connected || !hostAudioEnabled || pendingAction !== null
+                          : !connected || !speakerVolumeSupported || pendingAction !== null
+                      }
+                      onClick={showMicrophoneControl ? toggleDuplexMicEnabled : toggleSpeakerEnabled}
+                    >
+                      {showMicrophoneControl ? <Mic size={20} /> : <OutputIcon size={20} />}
+                    </button>
                     <div className="title-copy">
-                      <h3>Speaker</h3>
-                      <p>Controls the DualSense speaker output level.</p>
+                      <h3>{showMicrophoneControl ? 'Microphone' : outputControlLabel}</h3>
+                      <p>
+                        {showMicrophoneControl
+                          ? 'Microphone level'
+                          : `${outputControlLabel} level`}
+                      </p>
+                    </div>
+                    <div className="dual-selector audio-mode-selector" role="tablist" aria-label="Audio control mode">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={!showMicrophoneControl}
+                        className={!showMicrophoneControl ? 'active' : ''}
+                        onClick={() => setShowMicrophoneControl(false)}
+                      >
+                        {outputControlLabel}
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={showMicrophoneControl}
+                        className={showMicrophoneControl ? 'active' : ''}
+                        onClick={() => setShowMicrophoneControl(true)}
+                      >
+                        Mic
+                      </button>
                     </div>
                   </div>
                   <div className="framed-slider">
                     <label className="slider-row">
                       <span>0%</span>
                       <div className="range-control">
-                        <input
-                          type="range"
-                          min="0"
-                          max="100"
-                          step={SPEAKER_VOLUME_STEP}
-                          value={speakerVolumeValue}
-                          disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled}
-                          style={{ '--range-fill': `${speakerVolumeValue}%` } as CSSProperties}
-                          onPointerDown={() => {
-                            speakerVolumeEditingRef.current = true;
-                          }}
-                          onChange={(event) => setSpeakerVolumeValue(snapSpeakerVolume(Number(event.currentTarget.value)))}
-                          onPointerUp={() => void commitSpeakerVolume()}
-                          onKeyDown={(event) => {
-                            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                        {showMicrophoneControl ? (
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step={MIC_VOLUME_STEP}
+                            value={micVolumeValue}
+                            disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
+                            style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
+                            aria-label="Microphone level"
+                            onPointerDown={() => {
+                              micVolumeEditingRef.current = true;
+                            }}
+                            onChange={(event) => setMicVolumeValue(snapMicVolume(Number(event.currentTarget.value)))}
+                            onPointerUp={() => void commitMicVolume()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                micVolumeEditingRef.current = true;
+                              }
+                            }}
+                            onKeyUp={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                void commitMicVolume();
+                              }
+                            }}
+                            onBlur={() => void commitMicVolume()}
+                          />
+                        ) : (
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step={SPEAKER_VOLUME_STEP}
+                            value={speakerVolumeValue}
+                            disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled}
+                            style={{ '--range-fill': `${speakerVolumeValue}%` } as CSSProperties}
+                            onPointerDown={() => {
                               speakerVolumeEditingRef.current = true;
-                            }
-                          }}
-                          onKeyUp={(event) => {
-                            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
-                              void commitSpeakerVolume();
-                            }
-                          }}
-                          onBlur={() => void commitSpeakerVolume()}
-                        />
+                            }}
+                            onChange={(event) => setSpeakerVolumeValue(snapSpeakerVolume(Number(event.currentTarget.value)))}
+                            onPointerUp={() => void commitSpeakerVolume()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                speakerVolumeEditingRef.current = true;
+                              }
+                            }}
+                            onKeyUp={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                void commitSpeakerVolume();
+                              }
+                            }}
+                            onBlur={() => void commitSpeakerVolume()}
+                          />
+                        )}
                         <div className="range-ticks" aria-hidden="true">
                           {PERCENT_SLIDER_TICKS.map((value) => (
                             <span key={value} className={sliderTickClass(value, 100)} />
                           ))}
                         </div>
                       </div>
-                      <strong>{speakerVolumeValue}%</strong>
+                      <strong>{showMicrophoneControl ? micVolumeValue : speakerVolumeValue}%</strong>
                     </label>
                   </div>
-                  <p>Use presets for quick speaker levels.</p>
-                  <div className="segmented-row">
-                    {SPEAKER_VOLUME_PRESETS.map(([label, value]) => (
-                      <button
-                        key={label}
-                        type="button"
-                        className={speakerVolumeValue === value ? 'active' : ''}
-                        disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
-                        onClick={() => setSpeakerPreset(Number(value))}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  {showMicrophoneControl ? (
+                    <>
+                      <p>Use presets for quick microphone levels.</p>
+                      <div className="segmented-row">
+                        {MIC_VOLUME_PRESETS.map(([label, value]) => (
+                          <button
+                            key={label}
+                            type="button"
+                            className={micVolumeValue === value ? 'active' : ''}
+                            disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
+                            onClick={() => setMicPreset(Number(value))}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mic-option-grid">
+                        <button
+                          type="button"
+                          className={snapshot.settings.micMuted ? 'active danger' : ''}
+                          aria-pressed={snapshot.settings.micMuted}
+                          disabled={!connected || !duplexMicEnabled || pendingAction !== null}
+                          onClick={toggleMicMute}
+                        >
+                          <VolumeX size={15} />
+                          Mute
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p>Use presets for quick {outputPresetLower} levels.</p>
+                      <div className="segmented-row">
+                        {SPEAKER_VOLUME_PRESETS.map(([label, value]) => (
+                          <button
+                            key={label}
+                            type="button"
+                            className={speakerVolumeValue === value ? 'active' : ''}
+                            disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
+                            onClick={() => setSpeakerPreset(Number(value))}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Activity size={20} /></span>
+                    <span className="feature-icon"><IconTestPipe size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
-                      <p>Play a short sample through the controller speaker.</p>
+                      <p>{showMicrophoneControl ? 'Listen to the controller microphone for five seconds.' : `Play a short sample through the controller ${outputControlLower}.`}</p>
                     </div>
                   </div>
-                  <button className="primary-action" type="button" disabled={testSpeakerUnavailable} onClick={runTestSpeaker}>
-                    <Play size={15} />
-                    {connected && speakerTestLocked
-                      ? 'Playing Tone'
-                      : connected && gameStreamActive
-                        ? 'Game Active'
+                  <button
+                    className="primary-action"
+                    type="button"
+                    disabled={activeAudioTestUnavailable}
+                    onClick={showMicrophoneControl ? runTestMic : runTestSpeaker}
+                  >
+                    {showMicrophoneControl ? <Mic size={15} /> : <Play size={15} />}
+                    {showMicrophoneControl
+                      ? connected && micTestLocked
+                        ? 'Live Listening'
+                        : connected && micTestError
+                          ? 'Retry Mic'
+                          : 'Test Mic'
+                      : connected && speakerTestLocked
+                        ? 'Playing Tone'
+                        : connected && gameStreamActive
+                          ? 'Game Active'
                         : connected && speakerOutputMissing
-                          ? 'Retry Speaker'
-                        : 'Test Speaker'}
+                            ? `Retry ${outputControlLabel}`
+                          : `Test ${outputControlLabel}`}
                   </button>
-                  <button className="secondary-action" type="button" disabled={!speakerTestLocked} onClick={() => setSpeakerTestLocked(false)}>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    disabled={!activeAudioTestLocked}
+                    onClick={showMicrophoneControl ? stopMicLiveListen : () => setSpeakerTestLocked(false)}
+                  >
                     <span className="stop-glyph" aria-hidden="true" />
                     Stop Test
                   </button>
-                  <div className={`feature-status test-status ${speakerStatusTone}`}>
-                    <span className="status-badge" title={speakerStatusLabel}>
-                      <span className={`dot ${speakerStatusTone}`} />
-                      <strong>{speakerStatusLabel}</strong>
+                  <div className="feature-status test-status audio-test-status">
+                    <span className={`status-badge ${activeAudioTestStatusTone}`} title={activeAudioTestStatusLabel}>
+                      <span className={`dot ${activeAudioTestStatusTone}`} />
+                      <strong>{activeAudioTestStatusLabel}</strong>
+                    </span>
+                    <span className={`status-badge ${hostAudioTone}`} title={hostAudioLabel}>
+                      <span className={`dot ${hostAudioTone}`} />
+                      <strong>{hostAudioLabel}</strong>
                     </span>
                   </div>
                 </section>
               </div>
+              <FeatureTipsPanel
+                tab="audio"
+                hostEncodingTipActionable={!hostAudioEnabled}
+                onFeatureFocusRequest={focusFeatureControl}
+              />
           </div>
 
           <div
-            className="control-page triggers-page"
+            className={`control-page triggers-page ${activeControlTab === 'triggers' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-triggers"
             aria-labelledby="control-tab-triggers"
-            hidden={activeControlTab !== 'triggers'}
+            aria-hidden={activeControlTab !== 'triggers'}
           >
               <div className="feature-heading">
                 <div>
                   <h2>Adaptive Triggers</h2>
-                  <p>Set trigger effect intensity and test mode.</p>
+                  <p>Set trigger effect intensity and test mode</p>
                 </div>
                 <div className="inline-switch">
                   <span>Enabled</span>
@@ -2191,10 +3950,20 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Zap size={20} /></span>
+                    <button
+                      type="button"
+                      className={`feature-icon triggers-enable-button icon-compact ${snapshot.settings.adaptiveTriggersEnabled ? 'active' : ''} ${controllerPowerSavingActive && snapshot.settings.adaptiveTriggersEnabled ? 'power-saving-active' : ''}`}
+                      aria-pressed={snapshot.settings.adaptiveTriggersEnabled}
+                      aria-label="Enable adaptive triggers"
+                      title="Enable adaptive triggers"
+                      disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
+                      onClick={toggleAdaptiveTriggersEnabled}
+                    >
+                      <IconDeviceGamepad2 size={20} />
+                    </button>
                     <div className="title-copy">
                       <h3>Intensity</h3>
-                      <p>Set the overall strength of adaptive trigger effects.</p>
+                      <p>Set the overall strength of adaptive trigger effects</p>
                     </div>
                   </div>
                   <div className="framed-slider">
@@ -2204,11 +3973,11 @@ export function App() {
                         <input
                           type="range"
                           min="0"
-                          max="100"
+                          max={percentSliderMax}
                           step={TRIGGER_EFFECT_STEP}
                           value={triggerEffectIntensityValue}
                           disabled={!connected || !adaptiveTriggersSupported || !snapshot.settings.adaptiveTriggersEnabled}
-                          style={{ '--range-fill': `${triggerEffectIntensityValue}%` } as CSSProperties}
+                          style={{ '--range-fill': `${(triggerEffectIntensityValue / percentSliderMax) * 100}%` } as CSSProperties}
                           onPointerDown={() => {
                             triggerEffectEditingRef.current = true;
                           }}
@@ -2237,7 +4006,7 @@ export function App() {
                       <strong>{triggerEffectIntensityValue}%</strong>
                     </label>
                   </div>
-                  <p>Use presets for quick trigger levels.</p>
+                  <p>Use presets for quick trigger levels</p>
                   <div className="segmented-row">
                     {TRIGGER_EFFECT_PRESETS.map(([label, value]) => (
                       <button
@@ -2254,17 +4023,23 @@ export function App() {
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Activity size={20} /></span>
+                    <span className="feature-icon"><IconTestPipe size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
-                      <p>Choose a trigger effect and run a short test.</p>
+                      <p>Choose a trigger effect and run a short test</p>
                     </div>
                   </div>
                   <div className="test-options">
                     <div className="select-row wide-select trigger-test-mode-control">
                       <CustomSelect
                         value={snapshot.settings.triggerTestMode}
-                        disabled={!connected || !adaptiveTriggersSupported || !snapshot.settings.adaptiveTriggersEnabled || pendingAction !== null}
+                        disabled={
+                          !connected
+                          || !adaptiveTriggersSupported
+                          || !snapshot.settings.adaptiveTriggersEnabled
+                          || adaptiveTriggerOutputActive
+                          || pendingAction !== null
+                        }
                         options={TRIGGER_TEST_MODE_OPTIONS}
                         ariaLabel="Trigger test type"
                         onChange={setTriggerTestMode}
@@ -2277,7 +4052,7 @@ export function App() {
                             key={value}
                             type="button"
                             className={triggerTarget === value ? 'active' : ''}
-                            disabled={!connected || !adaptiveTriggersSupported}
+                            disabled={!connected || !adaptiveTriggersSupported || adaptiveTriggerOutputActive}
                             onClick={() => setTriggerTarget(value)}
                           >
                             {label}
@@ -2289,8 +4064,8 @@ export function App() {
                   <div className="trigger-action-row">
                     <button className="primary-action" type="button" disabled={testTriggersUnavailable} onClick={runTestAdaptiveTriggers}>
                       <Play size={15} />
-                      {connected && gameStreamActive
-                        ? 'Game Active'
+                      {connected && adaptiveTriggerOutputActive
+                        ? 'Game Triggers Active'
                         : connected && (triggerTestLocked || snapshot.status?.testAdaptiveTriggersBusy)
                           ? 'Testing'
                           : 'Test Triggers'}
@@ -2298,7 +4073,7 @@ export function App() {
                     <button
                       className="secondary-action"
                       type="button"
-                      disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
+                      disabled={!connected || !adaptiveTriggersSupported || adaptiveTriggerOutputActive || pendingAction !== null}
                       onClick={resetAdaptiveTriggers}
                     >
                       <RefreshCcw size={14} />
@@ -2313,19 +4088,20 @@ export function App() {
                   </div>
                 </section>
               </div>
+              <FeatureTipsPanel tab="triggers" onSettingsFocusRequest={focusBridgeSettings} />
           </div>
 
           <div
-            className="control-page lighting-page"
+            className={`control-page lighting-page ${activeControlTab === 'lighting' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-lighting"
             aria-labelledby="control-tab-lighting"
-            hidden={activeControlTab !== 'lighting'}
+            aria-hidden={activeControlTab !== 'lighting'}
           >
               <div className="feature-heading">
                 <div>
                   <h2>Lighting</h2>
-                  <p>Customize the controller light bar and override behavior.</p>
+                  <p>Customize the controller light bar and override behavior</p>
                 </div>
                 <div className="inline-switch">
                   <span>Enabled</span>
@@ -2344,10 +4120,20 @@ export function App() {
               <div className="feature-card-grid lighting-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Palette size={20} /></span>
+                    <button
+                      type="button"
+                      className={`feature-icon lighting-enable-button icon-large ${snapshot.settings.lightbarEnabled ? 'active' : ''} ${controllerPowerSavingActive && snapshot.settings.lightbarEnabled ? 'power-saving-active' : ''}`}
+                      aria-pressed={snapshot.settings.lightbarEnabled}
+                      aria-label="Enable lighting"
+                      title="Enable lighting"
+                      disabled={!connected || !lightbarSupported || pendingAction !== null}
+                      onClick={toggleLightbarEnabled}
+                    >
+                      <IconBulb size={20} />
+                    </button>
                     <div className="title-copy">
                       <h3>Brightness</h3>
-                      <p>Set the controller light bar brightness.</p>
+                      <p>Set the controller light bar brightness</p>
                     </div>
                   </div>
                   <div className="framed-slider">
@@ -2357,11 +4143,11 @@ export function App() {
                         <input
                           type="range"
                           min="0"
-                          max="100"
+                          max={percentSliderMax}
                           step={LIGHTBAR_BRIGHTNESS_STEP}
                           value={lightbarBrightnessValue}
                           disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled}
-                          style={{ '--range-fill': `${lightbarBrightnessValue}%` } as CSSProperties}
+                          style={{ '--range-fill': `${(lightbarBrightnessValue / percentSliderMax) * 100}%` } as CSSProperties}
                           onPointerDown={() => {
                             lightbarBrightnessEditingRef.current = true;
                           }}
@@ -2388,7 +4174,7 @@ export function App() {
                       <strong>{lightbarBrightnessValue}%</strong>
                     </label>
                   </div>
-                  <p>Use presets for quick light bar levels.</p>
+                  <p>Use presets for quick light bar levels</p>
                   <div className="segmented-row">
                     {LIGHTBAR_PRESETS.map(([label, value]) => (
                       <button
@@ -2405,16 +4191,16 @@ export function App() {
                 </section>
                 <section className="feature-card behavior-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Zap size={20} /></span>
+                    <span className="feature-icon"><Palette size={20} /></span>
                     <div className="title-copy">
                       <h3>Behavior</h3>
-                      <p>Set light bar behavior.</p>
+                      <p>Set light bar behavior</p>
                     </div>
                   </div>
                   <div className="behavior-toggle-row">
                     <div>
                       <strong>Light Bar Override</strong>
-                      <p>Use app-controlled lighting instead of the default controller behavior.</p>
+                      <p>Use app-controlled lighting instead of the default controller behavior</p>
                     </div>
                     <button
                       type="button"
@@ -2515,14 +4301,188 @@ export function App() {
                   </div>
                 </section>
               </div>
+              <FeatureTipsPanel tab="lighting" onSettingsFocusRequest={focusBridgeSettings} />
           </div>
 
           <div
-            className="control-page system-page"
+            className={`control-page remapping-page ${activeControlTab === 'remapping' ? 'active' : ''}`}
+            role="tabpanel"
+            id="control-panel-remapping"
+            aria-labelledby="control-tab-remapping"
+            aria-hidden={activeControlTab !== 'remapping'}
+          >
+              <div className="feature-heading system-heading remapping-heading">
+                <div>
+                  <h2>Button Remapping</h2>
+                  <p>Choose replacement targets for controller button slots.</p>
+                </div>
+                <div className="profile-controls">
+                  <CustomSelect
+                    value={selectedRemapProfileId}
+                    disabled={pendingAction !== null}
+                    options={remapProfileOptions}
+                    ariaLabel="Button remapping profile"
+                    onChange={selectButtonRemappingProfile}
+                  />
+                  <button
+                    className="heading-action"
+                    type="button"
+                    disabled={pendingAction !== null}
+                    onClick={restoreButtonRemappingDefaults}
+                  >
+                    <RefreshCcw size={18} />
+                    Restore Defaults
+                  </button>
+                </div>
+              </div>
+              <section className="feature-card remapping-card">
+                <div className="remapping-profile-strip">
+                  <div className="system-profile-save-status">
+                    <Check size={16} />
+                    <span>Changes Are Automatically Saved</span>
+                  </div>
+                  <div className="remapping-profile-actions">
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null || selectedRemapProfileIsDefault}
+                      onClick={renameButtonRemappingProfile}
+                    >
+                      <Pencil size={15} />
+                      Rename Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null}
+                      onClick={saveButtonRemappingProfile}
+                    >
+                      <Save size={15} />
+                      Save New Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null || selectedRemapProfileIsDefault}
+                      onClick={deleteButtonRemappingProfile}
+                    >
+                      <Trash2 size={15} />
+                      Delete Profile
+                    </button>
+                  </div>
+                </div>
+                <div className="remapping-layout" ref={remappingLayoutRef}>
+                  <svg className="remapping-callout-layer" aria-hidden="true">
+                    {remapCalloutLayout && (
+                      <g>
+                        {REMAP_TARGET_OPTIONS.map(([, buttonId]) => {
+                          const remapped = remapDraft[buttonId] !== buttonId;
+                          return (
+                            <g key={buttonId} className={hoveredRemapButton === buttonId || remapped ? 'active' : undefined}>
+                              <polyline
+                                className="remapping-callout-underlay"
+                                points={remapCalloutLayout[buttonId].points}
+                              />
+                              <polyline
+                                className="remapping-callout-line"
+                                points={remapCalloutLayout[buttonId].points}
+                              />
+                            </g>
+                          );
+                        })}
+                      </g>
+                    )}
+                  </svg>
+                  <div className="remapping-side remapping-side-left" ref={remappingLeftSideRef} aria-label="Left side button mappings">
+                    {REMAP_LEFT_BUTTON_IDS.map((buttonId) => {
+                      const button = REMAP_BUTTONS[buttonId];
+                      const targetOptions = remapTargetOptionsFor(buttonId);
+                      const remapped = remapDraft[buttonId] !== buttonId;
+                      return (
+                        <div
+                          className={`remapping-pill ${remapped ? 'changed' : ''}`}
+                          data-remap-button-id={buttonId}
+                          key={buttonId}
+                          onMouseEnter={() => setHoveredRemapButton(buttonId)}
+                          onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                          onFocusCapture={() => setHoveredRemapButton(buttonId)}
+                          onBlurCapture={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                          style={{
+                            '--remapping-callout-top': remapCalloutLayout
+                              ? `${remapCalloutLayout[buttonId].top}px`
+                              : `${(REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * 100}%`
+                          } as CSSProperties}
+                        >
+                          <span className="remapping-source">
+                            <img src={button.glyphUrl} alt={button.label} title={button.label} />
+                          </span>
+                          <span className="remapping-arrow" aria-hidden="true">
+                            <ArrowRight size={15} />
+                          </span>
+                          <CustomSelect
+                            value={remapDraft[buttonId]}
+                            options={targetOptions}
+                            className="remapping-select"
+                            showSelectedCheck={false}
+                            ariaLabel={`${button.label} remap target`}
+                            renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                            renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                            onChange={(value) => setButtonRemap(buttonId, value)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="remapping-controller-stage" aria-hidden="true">
+                    <img ref={remappingArtRef} className="remapping-controller-art" src={remappingLayoutImage} alt="" />
+                  </div>
+                  <div className="remapping-side remapping-side-right" ref={remappingRightSideRef} aria-label="Right side button mappings">
+                    {REMAP_RIGHT_BUTTON_IDS.map((buttonId) => {
+                      const button = REMAP_BUTTONS[buttonId];
+                      const targetOptions = remapTargetOptionsFor(buttonId);
+                      const remapped = remapDraft[buttonId] !== buttonId;
+                      return (
+                        <div
+                          className={`remapping-pill ${remapped ? 'changed' : ''}`}
+                          data-remap-button-id={buttonId}
+                          key={buttonId}
+                          onMouseEnter={() => setHoveredRemapButton(buttonId)}
+                          onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                          onFocusCapture={() => setHoveredRemapButton(buttonId)}
+                          onBlurCapture={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                          style={{
+                            '--remapping-callout-top': remapCalloutLayout
+                              ? `${remapCalloutLayout[buttonId].top}px`
+                              : `${(REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * 100}%`
+                          } as CSSProperties}
+                        >
+                          <span className="remapping-source">
+                            <img src={button.glyphUrl} alt={button.label} title={button.label} />
+                          </span>
+                          <span className="remapping-arrow" aria-hidden="true">
+                            <ArrowRight size={15} />
+                          </span>
+                          <CustomSelect
+                            value={remapDraft[buttonId]}
+                            options={targetOptions}
+                            className="remapping-select"
+                            showSelectedCheck={false}
+                            ariaLabel={`${button.label} remap target`}
+                            renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                            renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                            onChange={(value) => setButtonRemap(buttonId, value)}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
+          </div>
+
+          <div
+            className={`control-page system-page ${activeControlTab === 'system' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-system"
             aria-labelledby="control-tab-system"
-            hidden={activeControlTab !== 'system'}
+            aria-hidden={activeControlTab !== 'system'}
           >
               <div className="feature-heading system-heading">
                 <div>
@@ -2531,11 +4491,11 @@ export function App() {
                 </div>
                 <div className="profile-controls">
                   <CustomSelect
-                    value={snapshot.settings.selectedPresetId}
+                    value={selectedControllerProfileId}
                     disabled={!connected || pendingAction !== null}
-                    options={BRIDGE_PRESET_OPTIONS}
-                    ariaLabel="Bridge profile"
-                    onChange={applyPreset}
+                    options={controllerProfileOptions}
+                    ariaLabel="System profile"
+                    onChange={selectControllerProfile}
                   />
                   <button
                     className="heading-action"
@@ -2551,13 +4511,11 @@ export function App() {
 
               <div className="feature-card-grid">
                 <section className="system-card mute-card">
-                  <div className="system-card-heading">
-                    <div className="feature-card-title system-card-title">
-                      <span className="system-icon"><VolumeX size={20} /></span>
-                      <div className="title-copy">
-                        <h3>Mute Button</h3>
-                        <p>Set controller mute behavior.</p>
-                      </div>
+                  <div className="feature-card-title system-card-heading">
+                    <span className="feature-icon system-icon icon-wide"><VolumeX size={20} /></span>
+                    <div className="title-copy">
+                      <h3>Mute Button</h3>
+                      <p>Set controller mute behavior.</p>
                     </div>
                   </div>
                   <div className="system-fields">
@@ -2624,28 +4582,38 @@ export function App() {
                 </section>
 
                 <section className={`system-card device-card ${showDiagnostics ? 'expanded' : ''}`}>
-                  <div className="system-card-heading">
-                    <div className="feature-card-title system-card-title">
-                      <span className="system-icon">
-                        {showDiagnostics ? <SlidersHorizontal size={20} /> : <Settings2 size={20} />}
-                      </span>
-                      <div className="title-copy">
-                        <h3>{showDiagnostics ? 'Diagnostics' : 'Device'}</h3>
+                  <div className="feature-card-title system-card-heading">
+                    <span className="feature-icon system-icon icon-wide">
+                      {showDiagnostics ? <IconStethoscope size={20} /> : <Settings2 size={20} />}
+                    </span>
+                    <div className="title-copy">
+                      <h3>{showDiagnostics ? 'Diagnostics' : 'Device'}</h3>
                         <p>
                           {showDiagnostics
-                            ? 'Protocol and debug data.'
-                            : 'Firmware and polling.'}
+                            ? 'Debug Data'
+                            : 'Firmware'}
                         </p>
-                      </div>
                     </div>
-                    <button
-                      type="button"
-                      className="card-flip-button"
-                      onClick={() => setShowDiagnostics((value) => !value)}
-                    >
-                      {showDiagnostics ? <Settings2 size={17} /> : <SlidersHorizontal size={17} />}
-                      {showDiagnostics ? 'Device' : 'Diagnostics'}
-                    </button>
+                    <div className="dual-selector system-mode-selector" role="tablist" aria-label="System control mode">
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={!showDiagnostics}
+                        className={!showDiagnostics ? 'active' : ''}
+                        onClick={() => setShowDiagnostics(false)}
+                      >
+                        Device
+                      </button>
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={showDiagnostics}
+                        className={showDiagnostics ? 'active' : ''}
+                        onClick={() => setShowDiagnostics(true)}
+                      >
+                        Diagnostics
+                      </button>
+                    </div>
                   </div>
                   {showDiagnostics ? (
                     <div className="device-diagnostics">
@@ -2722,10 +4690,466 @@ export function App() {
                   )}
                 </section>
               </div>
+              <section className="feature-help-panel system-profile-panel" aria-label="System profiles and tips">
+                <div className="system-profile-strip">
+                  <div className="system-profile-save-status">
+                    <Check size={16} />
+                    <span>Changes Are Automatically Saved</span>
+                  </div>
+                  <div className="remapping-profile-actions">
+                    <button
+                      type="button"
+                      disabled={selectedControllerProfileIsDefault || pendingAction !== null}
+                      onClick={renameControllerProfile}
+                    >
+                      <Pencil size={15} />
+                      Rename Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null}
+                      onClick={saveControllerProfile}
+                    >
+                      <Save size={15} />
+                      Save New Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canDeleteControllerProfile || pendingAction !== null}
+                      onClick={deleteControllerProfile}
+                    >
+                      <Trash2 size={15} />
+                      Delete Profile
+                    </button>
+                  </div>
+                </div>
+                <SystemProfileSummary
+                  settings={controllerProfileSettingsFromSnapshot(snapshot)}
+                  powerSavingActive={controllerPowerSavingActive}
+                />
+              </section>
           </div>
         </div>
       </section>
       </main>
+
+      {hostEncodingDisableConfirmVisible && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeHostEncodingDisableConfirm}
+        >
+          <form
+            className="settings-menu bridge-settings-modal host-encoding-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Disable host encoding"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              confirmDisableHostEncoding();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                <IconBinary size={16} />
+                <span>Disable Host Encoding?</span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close host encoding dialog"
+                onClick={closeHostEncodingDisableConfirm}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="remap-profile-dialog-copy">
+              Host encoding helps keep controller audio smooth. Turning it off may cause audio stuttering.
+            </p>
+            <div className="remap-profile-dialog-actions">
+              <button type="button" className="secondary-action" onClick={closeHostEncodingDisableConfirm}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="primary-action danger"
+                disabled={pendingAction !== null}
+              >
+                Disable
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {remapProfileDialogMode && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeRemapProfileDialog}
+        >
+          <form
+            className="settings-menu bridge-settings-modal remap-profile-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Button remapping profile"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitRemapProfileDialog();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                {remapProfileDialogMode === 'delete' ? <Trash2 size={16} /> : <Save size={16} />}
+                <span>
+                  {remapProfileDialogMode === 'save'
+                    ? 'Save New Profile'
+                    : remapProfileDialogMode === 'rename'
+                      ? 'Rename Profile'
+                      : 'Delete Profile'}
+                </span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close profile dialog"
+                onClick={closeRemapProfileDialog}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {remapProfileDialogMode === 'delete' ? (
+              <p className="remap-profile-dialog-copy">
+                Delete {selectedRemapProfile?.name ?? 'this profile'}?
+              </p>
+            ) : (
+              <label className="remap-profile-name-field">
+                <span>Profile Name</span>
+                <input
+                  autoFocus
+                  value={remapProfileNameDraft}
+                  maxLength={48}
+                  onChange={(event) => setRemapProfileNameDraft(event.target.value)}
+                />
+              </label>
+            )}
+            <div className="remap-profile-dialog-actions">
+              <button type="button" className="secondary-action" onClick={closeRemapProfileDialog}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className={`primary-action ${remapProfileDialogMode === 'delete' ? 'danger' : ''}`}
+                disabled={pendingAction !== null || (remapProfileDialogMode !== 'delete' && remapProfileNameDraft.trim().length === 0)}
+              >
+                {remapProfileDialogMode === 'delete' ? 'Delete' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {controllerProfileDialogMode && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeControllerProfileDialog}
+        >
+          <form
+            className="settings-menu bridge-settings-modal remap-profile-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="System profile"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitControllerProfileDialog();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                {controllerProfileDialogMode === 'delete' ? <Trash2 size={16} /> : <Save size={16} />}
+                <span>
+                  {controllerProfileDialogMode === 'save'
+                    ? 'Save New Profile'
+                    : controllerProfileDialogMode === 'rename'
+                      ? 'Rename Profile'
+                      : 'Delete Profile'}
+                </span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close system profile dialog"
+                onClick={closeControllerProfileDialog}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {controllerProfileDialogMode === 'delete' ? (
+              <p className="remap-profile-dialog-copy">
+                Delete {selectedControllerProfile?.name ?? 'this profile'}?
+              </p>
+            ) : (
+              <label className="remap-profile-name-field">
+                <span>Profile Name</span>
+                <input
+                  autoFocus
+                  value={controllerProfileNameDraft}
+                  maxLength={48}
+                  onChange={(event) => setControllerProfileNameDraft(event.target.value)}
+                />
+              </label>
+            )}
+            <div className="remap-profile-dialog-actions">
+              <button type="button" className="secondary-action" onClick={closeControllerProfileDialog}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className={`primary-action ${controllerProfileDialogMode === 'delete' ? 'danger' : ''}`}
+                disabled={pendingAction !== null || (controllerProfileDialogMode !== 'delete' && controllerProfileNameDraft.trim().length === 0)}
+              >
+                {controllerProfileDialogMode === 'delete' ? 'Delete' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {showBridgeSettings && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={() => setShowBridgeSettings(false)}
+        >
+          <div
+            className="settings-menu bridge-settings-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Bridge settings"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                <SettingsIcon size={16} />
+                <span>Bridge Settings</span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close bridge settings"
+                onClick={() => setShowBridgeSettings(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="bridge-settings-columns">
+              <div className="bridge-settings-column">
+                <div className="settings-menu-section-label">General</div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>UI Scale</strong>
+                  </div>
+                  <CustomSelect
+                    value={snapshot.settings.uiScalePercent}
+                    options={UI_SCALE_OPTIONS}
+                    className="settings-scale-select"
+                    showSelectedCheck={false}
+                    ariaLabel="UI scale"
+                    disabled={pendingAction !== null}
+                    onChange={(value) => {
+                      void runAction('ui-scale', () => window.bridge.setUiScalePercent(value));
+                    }}
+                  />
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Launch at Startup</strong>
+                    <span>Start in the tray when Windows starts</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.launchAtStartupEnabled}
+                    className={`switch ${snapshot.settings.launchAtStartupEnabled ? 'on' : ''}`}
+                    disabled={pendingAction !== null}
+                    onClick={() => void runAction('launch-at-startup', () => (
+                      window.bridge.setLaunchAtStartupEnabled(!snapshot.settings.launchAtStartupEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Pico LED</strong>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.ledEnabled}
+                    className={`switch ${snapshot.settings.ledEnabled ? 'on' : ''}`}
+                    disabled={!connected}
+                    onClick={() => void runAction('led', () => window.bridge.setLedEnabled(!snapshot.settings.ledEnabled))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-section-label">Connection Behavior</div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Idle Disconnect</strong>
+                  </div>
+                  <div className="settings-menu-controls">
+                    <CustomSelect
+                      value={snapshot.settings.idleDisconnectTimeoutMinutes}
+                      options={IDLE_DISCONNECT_TIMEOUT_OPTIONS}
+                      className="settings-timeout-select"
+                      showSelectedCheck={false}
+                      ariaLabel="Idle disconnect timeout"
+                      disabled={!connected || !snapshot.settings.idleDisconnectEnabled}
+                      onChange={(value) => {
+                        void runAction('idle-timeout', () => window.bridge.setIdleDisconnectTimeoutMinutes(value));
+                      }}
+                    />
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={snapshot.settings.idleDisconnectEnabled}
+                      className={`switch ${snapshot.settings.idleDisconnectEnabled ? 'on' : ''}`}
+                      disabled={!connected}
+                      onClick={() => void runAction('idle', () => (
+                        window.bridge.setIdleDisconnectEnabled(!snapshot.settings.idleDisconnectEnabled)
+                      ))}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>PC Sleep Disconnect</strong>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.usbSuspendDisconnectEnabled}
+                    className={`switch ${snapshot.settings.usbSuspendDisconnectEnabled ? 'on' : ''}`}
+                    disabled={!connected || !usbSuspendDisconnectSupported}
+                    onClick={() => void runAction('usb-suspend', () => (
+                      window.bridge.setUsbSuspendDisconnectEnabled(!snapshot.settings.usbSuspendDisconnectEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+              </div>
+              <div className="bridge-settings-column">
+                <div className="settings-menu-section-label">Power & Controller</div>
+                <div className={`settings-menu-row ${settingsFocusTarget === 'controller-power-saving' ? 'settings-menu-row-highlight' : ''}`}>
+                  <div className="settings-menu-copy">
+                    <strong>Controller Power Saving</strong>
+                    <span>Caps haptics, triggers, and lightbar brightness at 60% while headphones are plugged in</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.controllerPowerSavingEnabled}
+                    className={`switch ${snapshot.settings.controllerPowerSavingEnabled ? 'on' : ''}`}
+                    disabled={pendingAction !== null}
+                    onClick={() => void runAction('controller-power-saving', () => (
+                      window.bridge.setControllerPowerSavingEnabled(!snapshot.settings.controllerPowerSavingEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-section-label">Shortcuts</div>
+                <div className={`settings-menu-row ${settingsFocusTarget === 'sleep-shortcut' ? 'settings-menu-row-highlight' : ''}`}>
+                  <div className="settings-menu-copy settings-menu-copy-tooltip">
+                    <strong>Sleep Shortcut</strong>
+                    <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
+                      <span>Put controller to sleep with</span>
+                      <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
+                        <span className="shortcut-glyph-key">
+                          <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                        </span>
+                        <span className="shortcut-plus" aria-hidden="true">+</span>
+                        <span className="shortcut-glyph-key">
+                          <img src={triangleGlyphUrl} alt="Triangle" />
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.sleepKeybindEnabled}
+                    className={`switch ${snapshot.settings.sleepKeybindEnabled ? 'on' : ''}`}
+                    disabled={!connected || !sleepControllerSupported || pendingAction !== null}
+                    onClick={() => void runAction('sleep-keybind', () => (
+                      window.bridge.setSleepKeybindEnabled(!snapshot.settings.sleepKeybindEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className={`settings-menu-row ${settingsFocusTarget === 'volume-shortcut' ? 'settings-menu-row-highlight' : ''}`}>
+                  <div className="settings-menu-copy settings-menu-copy-tooltip">
+                    <strong>Volume Shortcut</strong>
+                    <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
+                      <span>Controller volume up/down with</span>
+                      <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
+                        <span className="shortcut-glyph-key">
+                          <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                        </span>
+                        <span className="shortcut-plus" aria-hidden="true">+</span>
+                        <span className="shortcut-glyph-pair">
+                          <span className="shortcut-glyph-key">
+                            <img src={dpadUpGlyphUrl} alt="D-pad Up" />
+                          </span>
+                          <span className="shortcut-glyph-key">
+                            <img src={dpadDownGlyphUrl} alt="D-pad Down" />
+                          </span>
+                        </span>
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.speakerVolumeShortcutEnabled}
+                    className={`switch ${snapshot.settings.speakerVolumeShortcutEnabled ? 'on' : ''}`}
+                    disabled={!connected}
+                    onClick={() => void runAction('volume-shortcut', () => (
+                      window.bridge.setSpeakerVolumeShortcutEnabled(!snapshot.settings.speakerVolumeShortcutEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-section-label">About</div>
+                <button
+                  type="button"
+                  className="settings-menu-link-row"
+                  onClick={() => void window.bridge.openExternal('https://github.com/SundayMoments')}
+                >
+                  <span className="settings-menu-link-icon" aria-hidden="true">
+                    <IconBrandGithub size={18} />
+                  </span>
+                  <span className="settings-menu-link-copy">
+                    <strong>GitHub</strong>
+                    <span>SundayMoments</span>
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

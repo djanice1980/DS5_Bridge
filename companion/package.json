@@ -1,6 +1,6 @@
 {
   "name": "ds5-bridge-companion",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Windows companion app for the Pico DS5 Bridge companion firmware.",
   "author": "SundayMoments",
@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.main.json && vite build",
+    "build:host-audio": "dotnet publish native/HostAudioHelper/HostAudioHelper.csproj -c Release -r win-x64 --self-contained false -o native/HostAudioHelper/bin/publish/win-x64",
+    "build": "npm run build:host-audio && tsc -p tsconfig.main.json && vite build",
     "package:win": "npm run build && node scripts/package-win.mjs",
     "installer:win": "npm run build && electron-builder --win nsis --x64",
     "test": "vitest run src",
@@ -44,6 +45,13 @@
           "ds5-bridge_app-icon-tile.png",
           "ds5-bridge_mark.png"
         ]
+      },
+      {
+        "from": "native/HostAudioHelper/bin/publish/win-x64",
+        "to": "native/HostAudioHelper",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "asar": true,
@@ -76,12 +84,13 @@
     "node-hid": "^3.2.0"
   },
   "devDependencies": {
+    "@tabler/icons-react": "^3.44.0",
     "@types/node": "^25.0.3",
     "@types/node-hid": "^1.3.4",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
-    "electron": "^39.2.7",
+    "electron": "^39.8.10",
     "electron-builder": "^26.8.1",
     "lucide-react": "^0.561.0",
     "playwright": "^1.59.1",
@@ -89,7 +98,7 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "typescript": "^5.9.3",
-    "vite": "^7.3.0",
+    "vite": "^7.3.3",
     "vitest": "^4.0.16"
   }
 }

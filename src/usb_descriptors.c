@@ -28,12 +28,16 @@
 
 extern uint8_t usb_hid_polling_interval_ms_value;
 
+#ifndef DS5_AUDIO_DEBUG_ENABLED
+#define DS5_AUDIO_DEBUG_ENABLED 0
+#endif
+
 #define CONFIG_TOTAL_LEN_STANDARD 0x00E3
-#define CONFIG_TOTAL_LEN_COMPANION 0x0115
-#ifdef DS5_ENABLE_AUDIO_DEBUG_REPORTS
-#define COMPANION_HID_REPORT_DESC_LEN 0x0040
+#define CONFIG_TOTAL_LEN_COMPANION 0x011C
+#if DS5_AUDIO_DEBUG_ENABLED
+#define COMPANION_HID_REPORT_DESC_LEN 0x0050
 #else
-#define COMPANION_HID_REPORT_DESC_LEN 0x0030
+#define COMPANION_HID_REPORT_DESC_LEN 0x0040
 #endif
 #define KEYBOARD_HID_REPORT_DESC_LEN 0x002D
 
@@ -162,8 +166,8 @@ uint8_t descriptor_configuration[] = {
     0x04, // bTerminalID: 4
     0x02, 0x04, // wTerminalType: Headset (0x0402)
     0x03, // bAssocTerminal: 3 (paired with speaker)
-    0x02, // bNrChannels: 2
-    0x03, 0x00, // wChannelConfig: L/R Front (0x0003)
+    0x01, // bNrChannels: 1
+    0x00, 0x00, // wChannelConfig: non-predefined mono
     0x00, // iChannelNames: 0
     0x00, // iTerminal: 0
 
@@ -277,12 +281,12 @@ uint8_t descriptor_configuration[] = {
     0x01, // bDelay: 1 frame
     0x01, 0x00, // wFormatTag: PCM (0x0001)
 
-    // Format Type Descriptor (2-channel, 16-bit, 48kHz)
+    // Format Type Descriptor (1-channel, 16-bit, 48kHz)
     0x0B, // bLength: 11
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: FORMAT_TYPE
     0x01, // bFormatType: TYPE_I
-    0x02, // bNrChannels: 2
+    0x01, // bNrChannels: 1
     0x02, // bSubframeSize: 2
     0x10, // bBitResolution: 16
     0x01, // bSamFreqType: 1
@@ -293,7 +297,7 @@ uint8_t descriptor_configuration[] = {
     0x05, // bDescriptorType (ENDPOINT)
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
-    0xC4, 0x00, // wMaxPacketSize: 196 bytes
+    0x62, 0x00, // wMaxPacketSize: 98 bytes
     0x01, // bInterval: 1
     0x00, // bRefresh
     0x00, // bSynchAddress
@@ -352,7 +356,7 @@ uint8_t descriptor_configuration[] = {
     0x04, // bDescriptorType (INTERFACE)
     0x04, // bInterfaceNumber: 4
     0x00, // bAlternateSetting: 0
-    0x01, // bNumEndpoints: 1 (IN)
+    0x02, // bNumEndpoints: 2 (IN + OUT)
     0x03, // bInterfaceClass: HID
     0x00, // bInterfaceSubClass: None
     0x00, // bInterfaceProtocol: None
@@ -371,6 +375,14 @@ uint8_t descriptor_configuration[] = {
     0x07, // bLength
     0x05, // bDescriptorType (ENDPOINT)
     0x85, // bEndpointAddress: IN EP5
+    0x03, // bmAttributes: Interrupt
+    0x40, 0x00, // wMaxPacketSize: 64
+    0x01, // bInterval: 1
+
+    // Endpoint Descriptor (Companion HID OUT: EP7)
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    0x07, // bEndpointAddress: OUT EP7
     0x03, // bmAttributes: Interrupt
     0x40, 0x00, // wMaxPacketSize: 64
     0x01, // bInterval: 1
@@ -599,7 +611,11 @@ uint8_t const desc_hid_report_companion[] = {
     0x09, 0x03, //   Usage (Ack)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs)
-#ifdef DS5_ENABLE_AUDIO_DEBUG_REPORTS
+    0x85, 0x08, //   Report ID (8)
+    0x09, 0x08, //   Usage (Host Audio Status)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs)
+#if DS5_AUDIO_DEBUG_ENABLED
     0x85, 0x05, //   Report ID (5)
     0x09, 0x05, //   Usage (Audio Debug)
     0x95, 0x3F, //   Report Count (63)
@@ -613,6 +629,10 @@ uint8_t const desc_hid_report_companion[] = {
     0x09, 0x04, //   Usage (Compatibility Input)
     0x95, 0x01, //   Report Count (1)
     0x81, 0x02, //   Input (Data,Var,Abs)
+    0x85, 0x07, //   Report ID (7)
+    0x09, 0x07, //   Usage (Host Audio Stream)
+    0x95, 0x3F, //   Report Count (63)
+    0x91, 0x02, //   Output (Data,Var,Abs)
     0xC0, // End Collection
 };
 

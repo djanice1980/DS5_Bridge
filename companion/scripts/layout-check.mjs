@@ -16,6 +16,7 @@ try {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForSelector('.hero-card', { timeout: 10000 });
   await page.waitForTimeout(250);
+  const controlsNav = page.getByRole('tablist', { name: 'Controls' });
 
   const failures = [];
   const rows = [];
@@ -26,7 +27,7 @@ try {
   let targetTextLeft = null;
 
   for (const tab of tabs) {
-    await page.getByRole('tab', { name: tab }).click();
+    await controlsNav.getByRole('tab', { name: tab }).click();
     await page.waitForTimeout(150);
 
     const measurement = await page.evaluate(() => {
@@ -72,7 +73,7 @@ try {
   }
 
   for (const tab of testButtonTabs) {
-    await page.getByRole('tab', { name: tab }).click();
+    await controlsNav.getByRole('tab', { name: tab }).click();
     await page.waitForTimeout(150);
 
     const measurements = await page.evaluate(() => {
@@ -191,7 +192,7 @@ try {
     }
   }
 
-  await page.getByRole('tab', { name: 'System' }).click();
+  await controlsNav.getByRole('tab', { name: 'System' }).click();
   await page.waitForTimeout(150);
 
   const systemTypography = await page.evaluate(() => {

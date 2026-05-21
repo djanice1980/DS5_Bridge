@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { rcedit } from 'rcedit';
 
@@ -12,6 +13,7 @@ const outDir = path.join(companionDir, 'artifacts', `DS5 Bridge-win32-x64-${stam
 const appDir = path.join(outDir, 'resources', 'app');
 const assetDir = path.join('assets', 'controllers');
 const appIcon = path.join(repoDir, assetDir, 'ds5-bridge_app-icon-tile.ico');
+const hostAudioHelperDir = path.join(companionDir, 'native', 'HostAudioHelper', 'bin', 'publish', 'win-x64');
 const appPackage = JSON.parse(fs.readFileSync(path.join(companionDir, 'package.json'), 'utf8'));
 const appAssets = [
   'ds5-bridge_app-icon-tile.ico',
@@ -22,6 +24,34 @@ const appAssets = [
 const runtimePackages = [
   'node-hid'
 ];
+
+function gitValue(args, fallback = 'unknown') {
+  try {
+    return execSync(`git ${args}`, {
+      cwd: repoDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function sourceNotice() {
+  const commit = gitValue('rev-parse HEAD');
+  const dirty = gitValue('status --porcelain', '') ? 'yes' : 'no';
+  return [
+    'DS5 Bridge source code:',
+    'https://github.com/SundayMoments/DS5_Bridge',
+    '',
+    `This binary release corresponds to commit: ${commit}`,
+    `Working tree dirty at build time: ${dirty}`,
+    '',
+    'License:',
+    'GNU Affero General Public License v3.0 only',
+    'See LICENSE and NOTICE.'
+  ].join('\n') + '\n';
+}
 
 function copyRecursive(src, dest, filter = () => true) {
   if (!filter(src)) {
@@ -64,8 +94,14 @@ if (!fs.existsSync(electronDist)) {
 if (!fs.existsSync(path.join(companionDir, 'dist'))) {
   throw new Error('Companion dist is missing. Run npm run build first.');
 }
+if (!fs.existsSync(path.join(hostAudioHelperDir, 'HostAudioHelper.exe'))) {
+  throw new Error('Host audio helper is missing. Run npm run build:host-audio first.');
+}
 
 copyRecursive(electronDist, outDir);
+copyRecursive(path.join(repoDir, 'LICENSE'), path.join(outDir, 'LICENSE'));
+copyRecursive(path.join(repoDir, 'NOTICE'), path.join(outDir, 'NOTICE'));
+fs.writeFileSync(path.join(outDir, 'SOURCE.txt'), sourceNotice(), 'utf8');
 
 const electronExe = path.join(outDir, 'electron.exe');
 const bridgeExe = path.join(outDir, 'DS5 Bridge.exe');
@@ -91,6 +127,7 @@ copyRecursive(path.join(companionDir, 'package.json'), path.join(appDir, 'packag
 for (const asset of appAssets) {
   copyRecursive(path.join(repoDir, assetDir, asset), path.join(appDir, assetDir, asset));
 }
+copyRecursive(hostAudioHelperDir, path.join(outDir, 'resources', 'native', 'HostAudioHelper'));
 for (const packageName of runtimePackages) {
   copyPackage(packageName);
 }

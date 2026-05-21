@@ -3,9 +3,22 @@ import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
   COMMAND_ID,
+  DEFAULT_BUTTON_REMAP_PROFILE,
+  HOST_AUDIO_COMPACT_FRAME_LENGTH,
+  HOST_AUDIO_FAST_FRAME_CHUNK_COUNT,
+  HOST_AUDIO_FAST_PAYLOAD_LENGTH,
+  HOST_AUDIO_FRAME_CHUNK_COUNT,
+  HOST_AUDIO_PACKET_TYPE,
+  HOST_AUDIO_PAYLOAD_LENGTH,
+  HOST_AUDIO_REPORT_FRAME_LENGTH,
   MAGIC,
+  PROTOCOL_MAJOR,
+  PROTOCOL_MINOR,
   REPORT_ID,
+  buildButtonRemapPayload,
   buildCommandReport,
+  buildHostAudioFastFrameReports,
+  buildHostAudioFrameChunkReports,
   normalizeBridgePresetId,
   parseAudioDebugReport,
   parseAudioStatsReport,
@@ -20,8 +33,8 @@ function baseReport(reportId: number): number[] {
   report[2] = MAGIC.charCodeAt(1);
   report[3] = MAGIC.charCodeAt(2);
   report[4] = MAGIC.charCodeAt(3);
-  report[5] = 1;
-  report[6] = 0;
+  report[5] = PROTOCOL_MAJOR;
+  report[6] = PROTOCOL_MINOR;
   return report;
 }
 
@@ -30,6 +43,11 @@ function writeU32(report: number[], offset: number, value: number): void {
   report[offset + 1] = (value >> 8) & 0xff;
   report[offset + 2] = (value >> 16) & 0xff;
   report[offset + 3] = (value >> 24) & 0xff;
+}
+
+function writeU16(report: number[], offset: number, value: number): void {
+  report[offset] = value & 0xff;
+  report[offset + 1] = (value >> 8) & 0xff;
 }
 
 describe('companion protocol', () => {
@@ -48,6 +66,10 @@ describe('companion protocol', () => {
     report[26] = 5;
     report[27] = 15;
     report[28] = 0xff;
+    writeU16(report, 43, 45);
+    report[45] = 0xd8;
+    report[46] = 1;
+    report[47] = 1;
     report[60] = 1;
     report[61] = 0x68;
     report[62] = 0x82;
@@ -70,6 +92,9 @@ describe('companion protocol', () => {
     expect(status.usbSuspendDisconnectEnabled).toBe(true);
     expect(status.sleepKeybindEnabled).toBe(true);
     expect(status.testAdaptiveTriggersBusy).toBe(true);
+    expect(status.adaptiveTriggerOutputRecent).toBe(true);
+    expect(status.idleDisconnectTimeoutMinutes).toBe(45);
+    expect(status.signalStrengthDbm).toBe(-40);
     expect(status.muteButtonMode).toBe('keyboard');
     expect(status.muteKeyboardUsage).toBe(0x68);
     expect(status.muteKeyboardModifiers).toBe(0x02);
@@ -183,6 +208,24 @@ describe('companion protocol', () => {
     expect(report[9]).toBe(1);
   });
 
+  it('builds an idle disconnect timeout command report', () => {
+    const report = buildCommandReport(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT, 6, 15);
+    expect(report[7]).toBe(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT);
+    expect(report[8]).toBe(6);
+    expect(report[9]).toBe(15);
+  });
+
+  it('builds a button remap command payload', () => {
+    const payload = buildButtonRemapPayload({
+      ...DEFAULT_BUTTON_REMAP_PROFILE.mappings,
+      cross: 'circle'
+    });
+    const report = buildCommandReport(COMMAND_ID.SET_BUTTON_REMAP, 7, 0, payload);
+    expect(payload).toHaveLength(16);
+    expect(report[7]).toBe(COMMAND_ID.SET_BUTTON_REMAP);
+    expect(report[11 + 13]).toBe(12);
+  });
+
   it('builds sleep controller command reports', () => {
     const keybindReport = buildCommandReport(COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED, 6, 1);
     const sleepReport = buildCommandReport(COMMAND_ID.SLEEP_CONTROLLER, 7, 0);
@@ -190,6 +233,45 @@ describe('companion protocol', () => {
     expect(keybindReport[9]).toBe(1);
     expect(sleepReport[7]).toBe(COMMAND_ID.SLEEP_CONTROLLER);
     expect(sleepReport[9]).toBe(0);
+  });
+
+  it('chunks a synthetic host audio frame for the companion OUT stream', () => {
+    const frame = new Array<number>(HOST_AUDIO_REPORT_FRAME_LENGTH).fill(0);
+    frame[0] = 0x36;
+    frame[76] = 0x92;
+    const reports = buildHostAudioFrameChunkReports({
+      streamGeneration: 7,
+      frameSequence: 33,
+      frame
+    });
+
+    expect(frame).toHaveLength(HOST_AUDIO_REPORT_FRAME_LENGTH);
+    expect(frame[0]).toBe(0x36);
+    expect(frame[76]).toBe(0x92);
+    expect(reports).toHaveLength(HOST_AUDIO_FRAME_CHUNK_COUNT);
+    expect(reports[0][0]).toBe(REPORT_ID.HOST_AUDIO_STREAM);
+    expect(reports[0][7]).toBe(HOST_AUDIO_PACKET_TYPE.FRAME_CHUNK);
+    expect(reports[0][9]).toBe(7);
+    expect(reports[0][11]).toBe(33);
+    expect(reports[0][13]).toBe(0);
+    expect(reports[0][14]).toBe(HOST_AUDIO_FRAME_CHUNK_COUNT);
+    expect(reports[0][15]).toBe(HOST_AUDIO_PAYLOAD_LENGTH);
+    expect(reports.at(-1)?.[15]).toBe(HOST_AUDIO_REPORT_FRAME_LENGTH % HOST_AUDIO_PAYLOAD_LENGTH);
+  });
+
+  it('chunks compact host audio frames with the fast stream format', () => {
+    const frame = new Array<number>(HOST_AUDIO_COMPACT_FRAME_LENGTH).fill(0).map((_, index) => index & 0xff);
+    const reports = buildHostAudioFastFrameReports({ frame, frameSequence: 42 });
+
+    expect(reports).toHaveLength(HOST_AUDIO_FAST_FRAME_CHUNK_COUNT);
+    expect(reports[0][0]).toBe(REPORT_ID.HOST_AUDIO_STREAM);
+    expect(reports[0][1]).toBe(HOST_AUDIO_PACKET_TYPE.FAST_FRAME_FRAGMENT);
+    expect(reports[0][2]).toBe(42);
+    expect(reports[0][4]).toBe(0);
+    expect(reports[0][5]).toBe(HOST_AUDIO_FAST_FRAME_CHUNK_COUNT);
+    expect(reports[0][6]).toBe(HOST_AUDIO_FAST_PAYLOAD_LENGTH);
+    expect(reports[0][7]).toBe(0);
+    expect(reports.at(-1)?.[6]).toBe(HOST_AUDIO_COMPACT_FRAME_LENGTH % HOST_AUDIO_FAST_PAYLOAD_LENGTH);
   });
 
   it('builds polling rate command reports', () => {

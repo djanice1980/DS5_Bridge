@@ -97,7 +97,7 @@ if(ENABLE_AUDIO_DEBUG_REPORTS OR ENABLE_DEBUG_LOGS)
 endif()
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "0.5.3")
+pico_set_program_version(ds5-bridge "1.0.1")
 
 if(ENABLE_DEBUG_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)

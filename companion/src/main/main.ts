@@ -2,20 +2,27 @@ import { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, scr
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BridgeService } from './bridge-service';
 import { SettingsStore } from './settings-store';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
+import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
+import type { UiScalePercent } from '../shared/types';
 
 const APP_NAME = 'DS5 Bridge';
-const WINDOWS_APP_USER_MODEL_ID = 'io.github.ds5bridge.companion';
+const WINDOWS_APP_USER_MODEL_ID = 'io.github.sundaymoments.ds5bridge';
 const WINDOWS_TOAST_ACTIVATOR_CLSID = '{A8B3700D-4BB5-4E22-BF57-0C43B7C2FDF6}';
 const APP_MARK_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');
 const APP_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
+const BASE_WINDOW_WIDTH = 1120;
+const BASE_WINDOW_HEIGHT = 630;
+const START_IN_TRAY_ARG = '--start-in-tray';
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let bridgeService: BridgeService | null = null;
 let isQuitting = false;
+let shutdownComplete = false;
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function windowsAppUserModelId(): string {
   return WINDOWS_APP_USER_MODEL_ID;
@@ -23,6 +30,10 @@ function windowsAppUserModelId(): string {
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(windowsAppUserModelId());
+}
+
+if (!hasSingleInstanceLock) {
+  app.quit();
 }
 
 function appResourcePath(relativePath: string): string {
@@ -56,16 +67,103 @@ async function createTrayIcon(): Promise<Electron.NativeImage> {
   }
 }
 
-function createWindow(): BrowserWindow {
+function scaledWindowSize(uiScalePercent: UiScalePercent): { width: number; height: number } {
+  const scale = uiScalePercent / 100;
+  return {
+    width: Math.round(BASE_WINDOW_WIDTH * scale),
+    height: Math.round(BASE_WINDOW_HEIGHT * scale)
+  };
+}
+
+function applyWindowScale(window: BrowserWindow, uiScalePercent: UiScalePercent, recenter: boolean): void {
+  const { width, height } = scaledWindowSize(uiScalePercent);
+  const currentBounds = window.getBounds();
+  const display = screen.getDisplayMatching(currentBounds);
+  const workArea = display.workArea;
+  const centerX = currentBounds.x + (currentBounds.width / 2);
+  const centerY = currentBounds.y + (currentBounds.height / 2);
+  const x = recenter
+    ? Math.round(Math.max(workArea.x, Math.min(centerX - (width / 2), workArea.x + workArea.width - width)))
+    : currentBounds.x;
+  const y = recenter
+    ? Math.round(Math.max(workArea.y, Math.min(centerY - (height / 2), workArea.y + workArea.height - height)))
+    : currentBounds.y;
+
+  window.webContents.setZoomFactor(uiScalePercent / 100);
+  window.setMinimumSize(width, height);
+  window.setMaximumSize(width, height);
+  window.setBounds({ x, y, width, height }, false);
+  window.setResizable(false);
+  window.setMaximizable(false);
+  window.setFullScreenable(false);
+}
+
+function applySnapshotWindowScale(snapshot: { settings: { uiScalePercent: UiScalePercent } }): void {
+  if (mainWindow) {
+    applyWindowScale(mainWindow, snapshot.settings.uiScalePercent, true);
+  }
+}
+
+function shouldStartInTray(argv = process.argv): boolean {
+  return argv.includes(START_IN_TRAY_ARG);
+}
+
+function loginItemArgs(): string[] {
+  return process.defaultApp
+    ? [app.getAppPath(), START_IN_TRAY_ARG]
+    : [START_IN_TRAY_ARG];
+}
+
+function applyLaunchAtStartup(enabled: boolean): void {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      openAsHidden: enabled,
+      path: process.execPath,
+      args: loginItemArgs()
+    });
+  } catch (error) {
+    console.warn('Failed to update launch at startup setting:', error);
+  }
+}
+
+function normalizeFilePath(value: string): string {
+  return path.normalize(value).toLowerCase();
+}
+
+function isAppFileUrl(url: string, appIndexPath: string): boolean {
+  try {
+    return normalizeFilePath(fileURLToPath(url)) === normalizeFilePath(appIndexPath);
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedExternalUrl(url: string): boolean {
+  return /^https:\/\/ko-fi\.com\/sundaymoments\/?$/i.test(url)
+    || /^https:\/\/github\.com\/SundayMoments\/?$/i.test(url);
+}
+
+function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
+  const { width, height } = scaledWindowSize(uiScalePercent);
+  const rendererIndexPath = path.join(__dirname, '..', '..', 'renderer', 'index.html');
   const window = new BrowserWindow({
-    width: 900,
-    height: 680,
-    minWidth: 900,
-    minHeight: 680,
+    width,
+    height,
+    minWidth: width,
+    minHeight: height,
+    maxWidth: width,
+    maxHeight: height,
     show: false,
     title: 'DS5 Bridge',
     frame: false,
-    resizable: true,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     transparent: false,
     backgroundColor: '#0b1017',
     skipTaskbar: false,
@@ -78,6 +176,25 @@ function createWindow(): BrowserWindow {
     }
   });
 
+  window.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(
+      webContents === window.webContents
+      && (permission === 'media' || permission === 'speaker-selection')
+    );
+  });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (isAppFileUrl(url, rendererIndexPath)) {
+      return;
+    }
+    event.preventDefault();
+  });
+
   window.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
@@ -87,8 +204,16 @@ function createWindow(): BrowserWindow {
   window.on('will-move', () => bridgeService?.pausePollingFor(1200));
   window.on('move', () => bridgeService?.pausePollingFor(700));
 
-  window.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
+  window.loadFile(rendererIndexPath);
+  window.webContents.once('did-finish-load', () => {
+    applyWindowScale(window, uiScalePercent, false);
+  });
   return window;
+}
+
+function sendWindowMaximizedState(): void {
+  if (!mainWindow || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send('window:maximizedChanged', mainWindow.isMaximized());
 }
 
 function showWindowCentered(): void {
@@ -371,6 +496,19 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:getStatus', () => service.getSnapshot());
   ipcMain.handle('bridge:listDevices', () => service.listDevices());
   ipcMain.handle('bridge:applyPreset', (_event, value: BridgePresetId) => service.applyPreset(value));
+  ipcMain.handle('bridge:selectControllerProfile', (_event, profileId: string) => (
+    service.selectControllerProfile(profileId)
+  ));
+  ipcMain.handle('bridge:saveControllerProfile', (_event, name?: string) => service.saveControllerProfile(name));
+  ipcMain.handle('bridge:updateControllerProfile', (_event, profileId: string) => (
+    service.updateControllerProfile(profileId)
+  ));
+  ipcMain.handle('bridge:renameControllerProfile', (_event, profileId: string, name: string) => (
+    service.renameControllerProfile(profileId, name)
+  ));
+  ipcMain.handle('bridge:deleteControllerProfile', (_event, profileId: string) => (
+    service.deleteControllerProfile(profileId)
+  ));
   ipcMain.handle('bridge:setHapticsGain', (_event, value: number) => service.setHapticsGain(value));
   ipcMain.handle('bridge:setHapticsEnabled', (_event, value: boolean) => service.setHapticsEnabled(value));
   ipcMain.handle('bridge:setHapticsBufferLength', (_event, value: number) => service.setHapticsBufferLength(value));
@@ -385,6 +523,12 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:setSpeakerVolume', (_event, value: number) => service.setSpeakerVolume(value));
   ipcMain.handle('bridge:setSpeakerEnabled', (_event, value: boolean) => service.setSpeakerEnabled(value));
+  ipcMain.handle('bridge:setMicVolume', (_event, value: number) => service.setMicVolume(value));
+  ipcMain.handle('bridge:setMicMute', (_event, value: boolean) => service.setMicMute(value));
+  ipcMain.handle('bridge:setHostEncodedAudioEnabled', (_event, value: boolean) => (
+    service.setHostEncodedAudioEnabled(value)
+  ));
+  ipcMain.handle('bridge:setDuplexMicEnabled', (_event, value: boolean) => service.setDuplexMicEnabled(value));
   ipcMain.handle('bridge:setLightbarColor', (_event, color: string, brightness: number) => (
     service.setLightbarColor(color, brightness)
   ));
@@ -403,12 +547,31 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:setLedEnabled', (_event, value: boolean) => service.setLedEnabled(value));
   ipcMain.handle('bridge:setIdleDisconnectEnabled', (_event, value: boolean) => service.setIdleDisconnectEnabled(value));
+  ipcMain.handle('bridge:setIdleDisconnectTimeoutMinutes', (_event, value: number) => (
+    service.setIdleDisconnectTimeoutMinutes(value)
+  ));
   ipcMain.handle('bridge:setUsbSuspendDisconnectEnabled', (_event, value: boolean) => (
     service.setUsbSuspendDisconnectEnabled(value)
   ));
   ipcMain.handle('bridge:setSleepKeybindEnabled', (_event, value: boolean) => (
     service.setSleepKeybindEnabled(value)
   ));
+  ipcMain.handle('bridge:setSpeakerVolumeShortcutEnabled', (_event, value: boolean) => (
+    service.setSpeakerVolumeShortcutEnabled(value)
+  ));
+  ipcMain.handle('bridge:setControllerPowerSavingEnabled', (_event, value: boolean) => (
+    service.setControllerPowerSavingEnabled(value)
+  ));
+  ipcMain.handle('bridge:setUiScalePercent', (_event, value: UiScalePercent) => {
+    const snapshot = service.setUiScalePercent(value);
+    applySnapshotWindowScale(snapshot);
+    return snapshot;
+  });
+  ipcMain.handle('bridge:setLaunchAtStartupEnabled', (_event, value: boolean) => {
+    const snapshot = service.setLaunchAtStartupEnabled(Boolean(value));
+    applyLaunchAtStartup(snapshot.settings.launchAtStartupEnabled);
+    return snapshot;
+  });
   ipcMain.handle('bridge:setPollingRateMode', (_event, value: PollingRateMode) => (
     service.setPollingRateMode(value)
   ));
@@ -421,26 +584,78 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:testNotification', () => service.testNotification());
   ipcMain.handle('bridge:testHaptics', () => service.testHaptics());
+  ipcMain.handle('bridge:testSpeaker', () => service.testSpeaker());
   ipcMain.handle('bridge:testClassicRumble', () => service.testClassicRumble());
   ipcMain.handle('bridge:testAdaptiveTriggers', (_event, value?: TriggerTestMode, target?: TriggerTestTarget) => (
     service.testAdaptiveTriggers(value, target)
   ));
   ipcMain.handle('bridge:resetAdaptiveTriggers', () => service.resetAdaptiveTriggers());
-  ipcMain.handle('bridge:restoreDefaults', () => service.restoreDefaults());
+  ipcMain.handle('bridge:restoreDefaults', async () => {
+    const snapshot = await service.restoreDefaults();
+    applySnapshotWindowScale(snapshot);
+    applyLaunchAtStartup(snapshot.settings.launchAtStartupEnabled);
+    return snapshot;
+  });
+  ipcMain.handle('bridge:setButtonRemap', (_event, buttonId: RemapButtonId, targetId: RemapButtonId) => (
+    service.setButtonRemap(buttonId, targetId)
+  ));
+  ipcMain.handle('bridge:selectButtonRemappingProfile', (_event, profileId: string) => (
+    service.selectButtonRemappingProfile(profileId)
+  ));
+  ipcMain.handle('bridge:saveButtonRemappingProfile', (_event, name?: string) => (
+    service.saveButtonRemappingProfile(name)
+  ));
+  ipcMain.handle('bridge:updateButtonRemappingProfile', (_event, profileId: string) => (
+    service.updateButtonRemappingProfile(profileId)
+  ));
+  ipcMain.handle('bridge:renameButtonRemappingProfile', (_event, profileId: string, name: string) => (
+    service.renameButtonRemappingProfile(profileId, name)
+  ));
+  ipcMain.handle('bridge:deleteButtonRemappingProfile', (_event, profileId: string) => (
+    service.deleteButtonRemappingProfile(profileId)
+  ));
+  ipcMain.handle('bridge:restoreButtonRemappingDefaults', () => service.restoreButtonRemappingDefaults());
   ipcMain.handle('bridge:getDiagnostics', () => service.getSnapshot().diagnostics);
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
+  ipcMain.handle('window:toggleMaximize', () => {
+    if (!mainWindow || !mainWindow.isMaximizable()) return;
+    if (mainWindow.isMaximized()) {
+      mainWindow.unmaximize();
+    } else {
+      mainWindow.maximize();
+    }
+  });
+  ipcMain.handle('window:isMaximized', () => Boolean(mainWindow?.isMaximized()));
   ipcMain.handle('window:hide', () => mainWindow?.hide());
+  ipcMain.handle('window:openExternal', (_event, url: string) => {
+    if (!isAllowedExternalUrl(url)) {
+      return;
+    }
+    void shell.openExternal(url);
+  });
 }
 
 app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) {
+    return;
+  }
+
   app.setName(APP_NAME);
   ensureWindowsNotificationShortcut();
   Menu.setApplicationMenu(null);
-  bridgeService = new BridgeService(new SettingsStore(app.getPath('userData')));
+  const settingsStore = new SettingsStore(app.getPath('userData'));
+  applyLaunchAtStartup(settingsStore.get().launchAtStartupEnabled);
+  bridgeService = new BridgeService(settingsStore);
   registerIpc(bridgeService);
 
-  mainWindow = createWindow();
-  mainWindow.once('ready-to-show', showWindowCentered);
+  mainWindow = createWindow(settingsStore.get().uiScalePercent);
+  mainWindow.on('maximize', sendWindowMaximizedState);
+  mainWindow.on('unmaximize', sendWindowMaximizedState);
+  mainWindow.once('ready-to-show', () => {
+    if (!shouldStartInTray()) {
+      showWindowCentered();
+    }
+  });
 
   tray = new Tray(await createTrayIcon());
   tray.setToolTip(APP_NAME);
@@ -460,11 +675,30 @@ app.whenReady().then(async () => {
   bridgeService.start();
 });
 
+app.on('second-instance', (_event, argv) => {
+  if (!shouldStartInTray(argv)) {
+    showWindowCentered();
+  }
+});
+
 app.on('window-all-closed', () => {
   // Keep the companion alive as a tray app after the popover is closed.
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (shutdownComplete) {
+    return;
+  }
+  event.preventDefault();
   isQuitting = true;
-  bridgeService?.stop();
+  const service = bridgeService;
+  bridgeService = null;
+  void (async () => {
+    try {
+      await service?.stop();
+    } finally {
+      shutdownComplete = true;
+      app.quit();
+    }
+  })();
 });

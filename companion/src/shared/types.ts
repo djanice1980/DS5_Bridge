@@ -2,6 +2,10 @@ import type {
   BridgeAckPayload,
   AudioDebugStatsPayload,
   BridgeStatusPayload,
+  ButtonRemapMap,
+  ButtonRemapProfile,
+  ControllerProfile,
+  HostAudioStatusPayload,
   BridgePresetId,
   MuteButtonMode,
   MuteKeyboardBehavior,
@@ -9,8 +13,12 @@ import type {
   TriggerTestMode
 } from './protocol';
 
+export type UiScalePercent = 75 | 100 | 125 | 150;
+
 export interface CompanionSettings {
   selectedPresetId: BridgePresetId;
+  uiScalePercent: UiScalePercent;
+  launchAtStartupEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
   hapticsBufferLength: number;
@@ -21,6 +29,8 @@ export interface CompanionSettings {
   triggerTestMode: TriggerTestMode;
   speakerEnabled: boolean;
   speakerVolumePercent: number;
+  micVolumePercent: number;
+  micMuted: boolean;
   lightbarEnabled: boolean;
   lightbarColor: string;
   lightbarBrightnessPercent: number;
@@ -31,11 +41,21 @@ export interface CompanionSettings {
   muteKeyboardBehavior: MuteKeyboardBehavior;
   ledEnabled: boolean;
   idleDisconnectEnabled: boolean;
+  idleDisconnectTimeoutMinutes: number;
   usbSuspendDisconnectEnabled: boolean;
   sleepKeybindEnabled: boolean;
+  speakerVolumeShortcutEnabled: boolean;
   pollingRateMode: PollingRateMode;
   notifyControllerConnection: boolean;
   notifyLowBattery: boolean;
+  hostEncodedAudioEnabled: boolean;
+  duplexMicEnabled: boolean;
+  controllerPowerSavingEnabled: boolean;
+  selectedControllerProfileId: string;
+  controllerProfiles: ControllerProfile[];
+  selectedButtonRemappingProfileId: string;
+  buttonRemappingProfiles: ButtonRemapProfile[];
+  buttonRemappingDraft: ButtonRemapMap;
 }
 
 export interface HidDeviceSummary {
@@ -69,6 +89,7 @@ export interface BridgeDiagnostics {
   audioDebugLogLines: string[];
   audioDebugDroppedCount: number;
   audioDebugStats: AudioDebugStatsPayload | null;
+  hostAudioStatus: HostAudioStatusPayload | null;
 }
 
 export interface BridgeSnapshot {

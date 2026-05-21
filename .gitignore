@@ -7,3 +7,5 @@ companion/node_modules
 companion/dist
 companion/dist-main
 companion/artifacts
+companion/native/**/bin
+companion/native/**/obj
