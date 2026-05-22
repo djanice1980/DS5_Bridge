@@ -23,4 +23,19 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('Disable Host Encoding?');
     expect(appSource).toContain('Turning it off may cause audio stuttering.');
   });
+
+  it('requires explicit confirmation and a disconnected controller before emergency device repair', () => {
+    const openFunction = extractFunction('openDeviceCleanupConfirm');
+    const runFunction = extractFunction('runWindowsDeviceCleanup');
+
+    expect(appSource).toContain('IconTool');
+    expect(openFunction).toContain('setDeviceCleanupConfirmVisible(true)');
+    expect(runFunction).toContain('controllerConnected');
+    expect(runFunction).toContain('repairWindowsDeviceCache');
+    expect(appSource).toContain('Emergency Device Repair');
+    expect(appSource).toContain('Only run this if you are running into persistent odd controller');
+    expect(appSource).toContain('Disconnect the controller from the bridge');
+    expect(appSource).toContain('Controller identity based profiles');
+    expect(appSource).toContain('paired directly to Windows over Bluetooth may need to be paired again');
+  });
 });

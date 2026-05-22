@@ -53,6 +53,13 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "../tools/windows",
+        "to": "tools/windows",
+        "filter": [
+          "clean-ds5bridge-devices.ps1"
+        ]
       }
     ],
     "asar": true,

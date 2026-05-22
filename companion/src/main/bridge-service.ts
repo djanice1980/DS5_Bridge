@@ -1,4 +1,8 @@
+import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import HID from 'node-hid';
 import {
   ACK_RESULT,
@@ -45,7 +49,8 @@ import type {
   BridgeSnapshot,
   CompanionSettings,
   HidDeviceSummary,
-  UiScalePercent
+  UiScalePercent,
+  WindowsDeviceCleanupResult
 } from '../shared/types';
 import {
   HostAudioEngine,
@@ -75,6 +80,9 @@ const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const SONY_VENDOR_ID = 0x054c;
 const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
+const WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH = path.join('tools', 'windows', 'clean-ds5bridge-devices.ps1');
+const POWERSHELL_ERROR_OUTPUT_MAX_CHARS = 8192;
+const CLEANUP_LOG_EXCERPT_MAX_CHARS = 3000;
 type DiscoveredHidDevice = HidDeviceSummary;
 type BridgeDiagnosticsWithoutAudioLog = Omit<
   BridgeDiagnostics,
@@ -437,6 +445,133 @@ function delay(milliseconds: number): Promise<void> {
   });
 }
 
+function quotePowerShellString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function quoteWindowsCommandArgument(value: string): string {
+  if (!/[\s"]/.test(value)) {
+    return value;
+  }
+  return `"${value.replace(/(\\*)"/g, '$1$1\\"').replace(/\\+$/g, '$&$&')}"`;
+}
+
+function createWindowsDeviceCleanupLogPath(): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return path.join(tmpdir(), `ds5-bridge-device-cleanup-${process.pid}-${stamp}.log`);
+}
+
+function createWindowsDeviceCleanupRunnerPath(): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return path.join(tmpdir(), `ds5-bridge-device-cleanup-runner-${process.pid}-${stamp}.ps1`);
+}
+
+function readCleanupLogExcerpt(logPath: string): string {
+  try {
+    if (!existsSync(logPath)) {
+      return '';
+    }
+    const text = readFileSync(logPath, 'utf8').trim();
+    if (text.length <= CLEANUP_LOG_EXCERPT_MAX_CHARS) {
+      return text;
+    }
+    return text.slice(-CLEANUP_LOG_EXCERPT_MAX_CHARS);
+  } catch {
+    return '';
+  }
+}
+
+function buildWindowsDeviceCleanupRunnerScript(scriptPath: string, logPath: string): string {
+  const quotedScriptPath = quotePowerShellString(scriptPath);
+  const quotedLogPath = quotePowerShellString(logPath);
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$logPath = ${quotedLogPath}`,
+    `$scriptPath = ${quotedScriptPath}`,
+    'try {',
+    "  \"DS5 Bridge emergency cleanup started: $(Get-Date -Format o)\" | Out-File -LiteralPath $logPath -Encoding UTF8",
+    '  & $scriptPath -Apply -IncludeBluetooth -RepeatUntilClean -Force -Confirm:$false *>&1 | Tee-Object -FilePath $logPath -Append',
+    '  $exitCode = if ($null -eq $global:LASTEXITCODE) { 0 } else { $global:LASTEXITCODE }',
+    "  \"DS5 Bridge emergency cleanup exited: $exitCode\" | Out-File -LiteralPath $logPath -Encoding UTF8 -Append",
+    '  exit $exitCode',
+    '} catch {',
+    '  $message = if ($_.Exception) { $_.Exception.Message } else { $_ | Out-String }',
+    "  \"ERROR: $message\" | Out-File -LiteralPath $logPath -Encoding UTF8 -Append",
+    '  $_ | Out-String | Out-File -LiteralPath $logPath -Encoding UTF8 -Append',
+    '  exit 1',
+    '}'
+  ].join('\r\n');
+}
+
+function resolveWindowsDeviceCleanupScriptPath(): string {
+  const packagedCandidate = process.resourcesPath
+    ? path.join(process.resourcesPath, WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH)
+    : null;
+  const candidates = [
+    packagedCandidate,
+    path.resolve(process.cwd(), WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH),
+    path.resolve(process.cwd(), '..', WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH),
+    path.resolve(__dirname, '..', '..', '..', WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH),
+    path.resolve(__dirname, '..', '..', '..', '..', WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH)
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  const scriptPath = candidates.find((candidate) => existsSync(candidate));
+  if (!scriptPath) {
+    throw new Error('Windows device cleanup script is missing.');
+  }
+  return scriptPath;
+}
+
+async function runElevatedWindowsDeviceCleanup(scriptPath: string, logPath: string): Promise<void> {
+  const runnerPath = createWindowsDeviceCleanupRunnerPath();
+  writeFileSync(runnerPath, buildWindowsDeviceCleanupRunnerScript(scriptPath, logPath), 'utf8');
+  const cleanupArguments = [
+    '-NoProfile',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    runnerPath
+  ].map(quoteWindowsCommandArgument).join(' ');
+  const command = [
+    "$ErrorActionPreference = 'Stop';",
+    `$process = Start-Process -FilePath ${quotePowerShellString('powershell.exe')} -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ArgumentList ${quotePowerShellString(cleanupArguments)};`,
+    'exit $process.ExitCode'
+  ].join(' ');
+
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      command
+    ], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let output = '';
+    const appendOutput = (chunk: Buffer) => {
+      output += chunk.toString('utf8');
+      if (output.length > POWERSHELL_ERROR_OUTPUT_MAX_CHARS) {
+        output = output.slice(-POWERSHELL_ERROR_OUTPUT_MAX_CHARS);
+      }
+    };
+    child.stdout.on('data', appendOutput);
+    child.stderr.on('data', appendOutput);
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const logExcerpt = readCleanupLogExcerpt(logPath);
+      const details = logExcerpt || output.trim();
+      const suffix = details ? `\n\n${details}` : ` See log: ${logPath}. Runner: ${runnerPath}`;
+      reject(new Error(`Windows device cleanup failed.${suffix}`));
+    });
+  });
+}
+
 export class BridgeService extends EventEmitter {
   private device: HID.HID | null = null;
   private devicePath: string | null = null;
@@ -575,6 +710,25 @@ export class BridgeService extends EventEmitter {
 
   listDevices(): Promise<HidDeviceSummary[]> {
     return this.hidDiscovery.listDevices();
+  }
+
+  async repairWindowsDeviceCache(): Promise<WindowsDeviceCleanupResult> {
+    if (this.snapshot.status?.controllerConnected) {
+      throw new Error('Disconnect the controller from the bridge before running emergency device repair.');
+    }
+    if (process.platform !== 'win32') {
+      throw new Error('Windows device repair is only available on Windows.');
+    }
+
+    const scriptPath = resolveWindowsDeviceCleanupScriptPath();
+    const logPath = createWindowsDeviceCleanupLogPath();
+    await runElevatedWindowsDeviceCleanup(scriptPath, logPath);
+    return {
+      scriptPath,
+      logPath,
+      includedBluetooth: true,
+      message: 'Emergency device repair completed. Reconnect the bridge after Windows settles; pair DualSense controllers to Windows again if you use them directly over Bluetooth.'
+    };
   }
 
   pausePollingFor(milliseconds: number): void {

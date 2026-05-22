@@ -736,6 +736,55 @@ button {
   width: min(440px, calc(100vw - 48px));
 }
 
+.device-cleanup-modal {
+  width: min(520px, calc(100vw - 48px));
+}
+
+.device-cleanup-copy {
+  display: grid;
+  gap: 10px;
+  margin: 8px 2px 4px;
+}
+
+.device-cleanup-copy p {
+  margin: 0;
+  color: #eef4ff;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.device-cleanup-copy ul {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding-left: 18px;
+  color: #c1cadd;
+  font-size: 13px;
+  line-height: 1.42;
+}
+
+.device-cleanup-alert {
+  border: 1px solid rgba(142, 164, 194, 0.22);
+  border-radius: var(--control-radius);
+  padding: 9px 10px;
+  color: #dce7f7;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 13px;
+  line-height: 1.38;
+}
+
+.device-cleanup-alert.good {
+  border-color: rgba(99, 224, 112, 0.26);
+  color: #dfffe4;
+  background: rgba(58, 165, 82, 0.12);
+}
+
+.device-cleanup-alert.bad {
+  border-color: rgba(255, 107, 107, 0.28);
+  color: #ffe5e5;
+  background: rgba(190, 54, 54, 0.12);
+}
+
 .remap-profile-name-field {
   display: grid;
   gap: 10px;
@@ -3516,9 +3565,17 @@ button.feature-icon {
   gap: 14px;
 }
 
+.system-page .profile-controls {
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+}
+
+.profile-controls .heading-icon-action,
 .profile-controls .heading-action {
   height: 38px;
   min-height: 38px;
+}
+
+.profile-controls .heading-action {
   white-space: nowrap;
 }
 
@@ -4053,6 +4110,7 @@ select:disabled {
 
 .button-row button,
 .heading-action,
+.heading-icon-action,
 .modifier-grid button {
   min-width: 0;
   min-height: 38px;
@@ -4069,9 +4127,27 @@ select:disabled {
 
 .button-row button:hover,
 .heading-action:hover,
+.heading-icon-action:hover,
 .modifier-grid button:hover {
   border-color: rgba(40, 124, 255, 0.52);
   background: rgba(40, 124, 255, 0.14);
+}
+
+.heading-icon-action {
+  width: 38px;
+  padding: 0;
+}
+
+.emergency-repair-button {
+  color: #ff7b8f;
+  border-color: rgba(255, 90, 112, 0.48);
+  background: rgba(190, 54, 54, 0.12);
+}
+
+.emergency-repair-button:hover {
+  color: #ffd7dd;
+  border-color: rgba(255, 90, 112, 0.72);
+  background: rgba(190, 54, 54, 0.2);
 }
 
 .heading-action {

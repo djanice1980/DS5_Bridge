@@ -52,8 +52,10 @@
 #define DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2 0x04
 #define DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES 0x00
 #define DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER 0x30
+#define DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE 0x10
 #define DS_OUTPUT_HEADPHONE_VOLUME_MAX 0x7f
 #define DS_OUTPUT_SPEAKER_VOLUME_MAX 0x64
+#define DS_OUTPUT_MIC_VOLUME_MAX 0x40
 #define DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x02
 #define DS_OUTPUT_LIGHTBAR_SETUP_LIGHT_OUT 0x02
 #define DS_PLAYER_LED_1_INSTANT 0x24
@@ -89,6 +91,7 @@
 #define OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET 6
 #define OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET 7
 #define OUTPUT_PAYLOAD_MUTE_LED_OFFSET 8
+#define OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET 9
 #define OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET 36
 #define OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET 37
 #define OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET 38
@@ -645,7 +648,6 @@ void bt_set_mute_led(bool enabled) {
 }
 
 void bt_set_microphone_state(uint8_t volume_percent, bool muted) {
-    (void)muted;
     companion_mic_volume_percent = volume_percent > 100 ? 100 : volume_percent;
 
     if (hid_interrupt_cid == 0) {
@@ -655,7 +657,11 @@ void bt_set_microphone_state(uint8_t volume_percent, bool muted) {
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE;
-    report[3 + OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = static_cast<uint8_t>((companion_mic_volume_percent * 51 + 50) / 100);
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE;
+    report[3 + OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = muted
+        ? 0
+        : static_cast<uint8_t>((companion_mic_volume_percent * DS_OUTPUT_MIC_VOLUME_MAX + 50) / 100);
+    report[3 + OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] = muted ? DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE : 0;
     bt_write(report, sizeof(report));
 }
 
@@ -1774,7 +1780,15 @@ bool bt_sanitize_host_mic_ownership_payload(uint8_t *payload, uint16_t len) {
     const uint8_t original_flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
     const uint8_t original_flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
     const uint8_t next_flag0 = original_flag0 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE);
-    const uint8_t next_flag1 = original_flag1 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE);
+    uint8_t next_flag1 = original_flag1 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE);
+    const bool original_power_save_control =
+        (original_flag1 & DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE) != 0;
+    const uint8_t next_power_save_control = original_power_save_control
+        ? static_cast<uint8_t>(payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] & ~DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE)
+        : payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET];
+    if (original_power_save_control && next_power_save_control == 0) {
+        next_flag1 &= static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE);
+    }
 
     if (payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] != next_flag0) {
         payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = next_flag0;
@@ -1790,6 +1804,10 @@ bool bt_sanitize_host_mic_ownership_payload(uint8_t *payload, uint16_t len) {
     }
     if ((original_flag1 & DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE) && payload[OUTPUT_PAYLOAD_MUTE_LED_OFFSET] != 0) {
         payload[OUTPUT_PAYLOAD_MUTE_LED_OFFSET] = 0;
+        changed = true;
+    }
+    if (original_power_save_control && payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] != next_power_save_control) {
+        payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] = next_power_save_control;
         changed = true;
     }
 

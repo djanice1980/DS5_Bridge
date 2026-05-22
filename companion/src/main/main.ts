@@ -615,6 +615,7 @@ function registerIpc(service: BridgeService): void {
     service.deleteButtonRemappingProfile(profileId)
   ));
   ipcMain.handle('bridge:restoreButtonRemappingDefaults', () => service.restoreButtonRemappingDefaults());
+  ipcMain.handle('bridge:repairWindowsDeviceCache', () => service.repairWindowsDeviceCache());
   ipcMain.handle('bridge:getDiagnostics', () => service.getSnapshot().diagnostics);
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:toggleMaximize', () => {

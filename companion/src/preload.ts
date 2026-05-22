@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from './shared/protocol';
-import type { BridgeDiagnostics, BridgeSnapshot } from './shared/types';
+import type { BridgeDiagnostics, BridgeSnapshot, WindowsDeviceCleanupResult } from './shared/types';
 
 const api = {
   getStatus: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:getStatus'),
@@ -126,6 +126,9 @@ const api = {
   ),
   restoreButtonRemappingDefaults: (): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:restoreButtonRemappingDefaults')
+  ),
+  repairWindowsDeviceCache: (): Promise<WindowsDeviceCleanupResult> => (
+    ipcRenderer.invoke('bridge:repairWindowsDeviceCache')
   ),
   getDiagnostics: (): Promise<BridgeDiagnostics> => ipcRenderer.invoke('bridge:getDiagnostics'),
   minimizeWindow: (): Promise<void> => ipcRenderer.invoke('window:minimize'),

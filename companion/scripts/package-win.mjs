@@ -14,6 +14,7 @@ const appDir = path.join(outDir, 'resources', 'app');
 const assetDir = path.join('assets', 'controllers');
 const appIcon = path.join(repoDir, assetDir, 'ds5-bridge_app-icon-tile.ico');
 const hostAudioHelperDir = path.join(companionDir, 'native', 'HostAudioHelper', 'bin', 'publish', 'win-x64');
+const windowsCleanupScript = path.join(repoDir, 'tools', 'windows', 'clean-ds5bridge-devices.ps1');
 const appPackage = JSON.parse(fs.readFileSync(path.join(companionDir, 'package.json'), 'utf8'));
 const appAssets = [
   'ds5-bridge_app-icon-tile.ico',
@@ -128,6 +129,7 @@ for (const asset of appAssets) {
   copyRecursive(path.join(repoDir, assetDir, asset), path.join(appDir, assetDir, asset));
 }
 copyRecursive(hostAudioHelperDir, path.join(outDir, 'resources', 'native', 'HostAudioHelper'));
+copyRecursive(windowsCleanupScript, path.join(outDir, 'resources', 'tools', 'windows', 'clean-ds5bridge-devices.ps1'));
 for (const packageName of runtimePackages) {
   copyPackage(packageName);
 }

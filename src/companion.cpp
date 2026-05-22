@@ -1018,6 +1018,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             companion_mic_muted = value == 1;
             audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+            bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;

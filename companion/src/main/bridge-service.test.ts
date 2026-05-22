@@ -428,6 +428,20 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().message).toBe('No bridge detected');
   });
 
+  it('blocks emergency Windows device repair while a controller is connected to the bridge', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    await expect(service.repairWindowsDeviceCache()).rejects.toThrow(
+      'Disconnect the controller from the bridge before running emergency device repair.'
+    );
+  });
+
   it('keeps audio debug diagnostics disabled during normal polling', async () => {
     const fixture = createService();
     tempDirs.push(fixture.tempDir);

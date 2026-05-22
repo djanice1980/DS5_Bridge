@@ -99,3 +99,10 @@ export interface BridgeSnapshot {
   settings: CompanionSettings;
   diagnostics: BridgeDiagnostics;
 }
+
+export interface WindowsDeviceCleanupResult {
+  scriptPath: string;
+  logPath: string;
+  includedBluetooth: boolean;
+  message: string;
+}

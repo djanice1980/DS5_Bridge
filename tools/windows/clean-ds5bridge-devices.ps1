@@ -8,6 +8,7 @@ device identities. This script targets the Sony DualSense/DualSense Edge identit
 helps remove old non-present instances after descriptor testing.
 
 Dry-run is the default. Pass -Apply from an elevated PowerShell session to remove matched devices.
+Pass -Force or -Confirm:$false when running from an emergency repair launcher.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = 'High')]
@@ -15,14 +16,22 @@ param(
     [switch]$Apply,
     [switch]$IncludePresent,
     [switch]$IncludeBluetooth,
-    [switch]$SkipAudioEndpoints
+    [switch]$SkipAudioEndpoints,
+    [switch]$RepeatUntilClean,
+    [switch]$Force
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ($Force) {
+    $ConfirmPreference = 'None'
+}
 
 $sonyDualSenseVidPidPattern = '(?i)VID_054C&(PID_0CE6|PID_0DF2)'
 $dualsenseNamePattern = '(?i)(DualSense|DualSense Edge|Wireless Controller)'
+$maxCleanupPasses = 8
+$removeFailureCount = 0
+$cleanupIncomplete = $false
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -99,55 +108,106 @@ function Write-DeviceTable {
         Format-Table -AutoSize Category, Class, Status, FriendlyName, InstanceId
 }
 
+function Get-TargetDevices {
+    $pnpDevices = Get-PnpDevice
+    $targets = foreach ($device in $pnpDevices) {
+        if (Test-TargetDevice -Device $device) {
+            [pscustomobject]@{
+                Category = Get-DeviceCategory -Device $device
+                Class = $device.Class
+                Status = $device.Status
+                FriendlyName = $device.FriendlyName
+                InstanceId = $device.InstanceId
+            }
+        }
+    }
+
+    return @($targets | Sort-Object InstanceId -Unique)
+}
+
+function Remove-TargetDevices {
+    param(
+        [Parameter(Mandatory = $true)]
+        [array]$Devices
+    )
+
+    foreach ($target in $Devices) {
+        $instanceId = [string]$target.InstanceId
+        if ($PSCmdlet.ShouldProcess($instanceId, 'Remove PnP device instance')) {
+            & pnputil.exe /remove-device "$instanceId"
+            if ($LASTEXITCODE -ne 0) {
+                $script:removeFailureCount += 1
+                Write-Warning "pnputil failed for: $instanceId"
+            }
+        }
+    }
+}
+
 if ($Apply -and -not (Test-IsAdministrator)) {
     throw 'Run PowerShell as Administrator before using -Apply.'
 }
 
-$pnpDevices = Get-PnpDevice
-$targets = foreach ($device in $pnpDevices) {
-    if (Test-TargetDevice -Device $device) {
-        [pscustomobject]@{
-            Category = Get-DeviceCategory -Device $device
-            Class = $device.Class
-            Status = $device.Status
-            FriendlyName = $device.FriendlyName
-            InstanceId = $device.InstanceId
+$pass = 0
+$previousTargetSignature = $null
+while ($true) {
+    $pass += 1
+    $targets = @(Get-TargetDevices)
+
+    if ($targets.Count -eq 0) {
+        if ($pass -eq 1) {
+            Write-Host 'No matching DS5_Bridge/DualSense device instances were found.'
+        } else {
+            Write-Host 'No additional matching DS5_Bridge/DualSense device instances were found.'
         }
+        break
     }
-}
 
-$targets = @($targets | Sort-Object InstanceId -Unique)
+    $targetSignature = (($targets | ForEach-Object { [string]$_.InstanceId }) | Sort-Object) -join "`n"
+    if ($RepeatUntilClean -and $Apply -and $previousTargetSignature -eq $targetSignature) {
+        Write-Warning 'Stopping repeated cleanup because the remaining device list did not change.'
+        $cleanupIncomplete = $true
+        break
+    }
+    $previousTargetSignature = $targetSignature
 
-if ($targets.Count -eq 0) {
-    Write-Host 'No matching DS5_Bridge/DualSense device instances were found.'
-    exit 0
-}
+    if ($RepeatUntilClean -and $Apply) {
+        Write-Host "Cleanup pass $pass."
+    }
+    Write-Host "Matched $($targets.Count) device instance(s)."
+    Write-DeviceTable -Devices $targets
 
-Write-Host "Matched $($targets.Count) device instance(s)."
-Write-DeviceTable -Devices $targets
-
-Write-Host ''
-Write-Host 'Full instance IDs:'
-foreach ($target in ($targets | Sort-Object Category, FriendlyName, InstanceId)) {
-    Write-Host "[$($target.Category)] $($target.InstanceId)"
-}
-
-if (-not $Apply) {
     Write-Host ''
-    Write-Host 'Dry run only. Re-run from an elevated PowerShell session with -Apply to remove these instances.'
-    Write-Host 'Use -IncludePresent only when the bridge/controller is unplugged and you intentionally want to remove live-looking entries.'
-    Write-Host 'Use -IncludeBluetooth to include direct DualSense Bluetooth pairing records.'
-    exit 0
+    Write-Host 'Full instance IDs:'
+    foreach ($target in ($targets | Sort-Object Category, FriendlyName, InstanceId)) {
+        Write-Host "[$($target.Category)] $($target.InstanceId)"
+    }
+
+    if (-not $Apply) {
+        Write-Host ''
+        Write-Host 'Dry run only. Re-run from an elevated PowerShell session with -Apply to remove these instances.'
+        Write-Host 'Use -IncludePresent only when the bridge/controller is unplugged and you intentionally want to remove live-looking entries.'
+        Write-Host 'Use -IncludeBluetooth to include direct DualSense Bluetooth pairing records.'
+        break
+    }
+
+    Write-Host ''
+    Write-Host 'Removing matched device instances with pnputil...'
+    Remove-TargetDevices -Devices $targets
+
+    if (-not $RepeatUntilClean) {
+        break
+    }
+    if ($pass -ge $maxCleanupPasses) {
+        Write-Warning "Stopping repeated cleanup after $maxCleanupPasses pass(es)."
+        $cleanupIncomplete = $true
+        break
+    }
+    Write-Host ''
+    Start-Sleep -Milliseconds 250
 }
 
-Write-Host ''
-Write-Host 'Removing matched device instances with pnputil...'
-foreach ($target in $targets) {
-    $instanceId = [string]$target.InstanceId
-    if ($PSCmdlet.ShouldProcess($instanceId, 'Remove PnP device instance')) {
-        & pnputil.exe /remove-device "$instanceId"
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "pnputil failed for: $instanceId"
-        }
-    }
+if ($cleanupIncomplete -or ($Apply -and -not $RepeatUntilClean -and $removeFailureCount -gt 0)) {
+    exit 1
 }
+
+exit 0

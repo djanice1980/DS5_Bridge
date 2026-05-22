@@ -37,6 +37,7 @@ import {
   IconSparkles as Sparkles,
   IconStethoscope,
   IconTestPipe,
+  IconTool,
   IconTrash as Trash2,
   IconVolume,
   IconVolume as Volume2,
@@ -1366,6 +1367,9 @@ export function App() {
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
   const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
   const [hostEncodingDisableConfirmVisible, setHostEncodingDisableConfirmVisible] = useState(false);
+  const [deviceCleanupConfirmVisible, setDeviceCleanupConfirmVisible] = useState(false);
+  const [deviceCleanupMessage, setDeviceCleanupMessage] = useState<string | null>(null);
+  const [deviceCleanupError, setDeviceCleanupError] = useState<string | null>(null);
   const hapticsEditingRef = useRef(false);
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
@@ -2688,6 +2692,46 @@ export function App() {
     }
     void runAction('host-audio-enabled', () => window.bridge.setHostEncodedAudioEnabled(false));
     closeHostEncodingDisableConfirm();
+  }
+
+  function openDeviceCleanupConfirm() {
+    setDeviceCleanupMessage(null);
+    setDeviceCleanupError(null);
+    setDeviceCleanupConfirmVisible(true);
+  }
+
+  function closeDeviceCleanupConfirm() {
+    if (pendingAction === 'device-cleanup') {
+      return;
+    }
+    setDeviceCleanupConfirmVisible(false);
+  }
+
+  async function runWindowsDeviceCleanup() {
+    if (!snapshot || pendingAction) {
+      return;
+    }
+    setDeviceCleanupMessage(null);
+    if (controllerConnected) {
+      setDeviceCleanupError('Disconnect the controller from the bridge before running emergency repair.');
+      return;
+    }
+
+    setPendingAction('device-cleanup');
+    setDeviceCleanupError(null);
+    try {
+      const result = await window.bridge.repairWindowsDeviceCache();
+      setDeviceCleanupMessage(result.message);
+    } catch (error) {
+      setDeviceCleanupError(error instanceof Error ? error.message : 'Emergency device repair could not run.');
+    } finally {
+      try {
+        applySnapshot(await window.bridge.getStatus());
+      } catch {
+        // Keep the existing snapshot if status refresh fails after the repair process.
+      }
+      setPendingAction(null);
+    }
   }
 
   function toggleAudioEnabled() {
@@ -4490,6 +4534,16 @@ export function App() {
                   <p>Configure bridge behavior and defaults.</p>
                 </div>
                 <div className="profile-controls">
+                  <button
+                    className="heading-icon-action emergency-repair-button"
+                    type="button"
+                    title="Emergency device repair"
+                    aria-label="Emergency device repair"
+                    disabled={pendingAction !== null}
+                    onClick={openDeviceCleanupConfirm}
+                  >
+                    <IconTool size={20} />
+                  </button>
                   <CustomSelect
                     value={selectedControllerProfileId}
                     disabled={!connected || pendingAction !== null}
@@ -4777,6 +4831,87 @@ export function App() {
                 disabled={pendingAction !== null}
               >
                 Disable
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {deviceCleanupConfirmVisible && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeDeviceCleanupConfirm}
+        >
+          <form
+            className="settings-menu bridge-settings-modal device-cleanup-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Emergency device repair"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void runWindowsDeviceCleanup();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                <IconTool size={16} />
+                <span>Emergency Device Repair</span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close emergency device repair dialog"
+                disabled={pendingAction === 'device-cleanup'}
+                onClick={closeDeviceCleanupConfirm}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="device-cleanup-copy">
+              <p>
+                Only run this if you are running into persistent odd controller, rumble, haptics, audio, or Windows device issues.
+              </p>
+              <p>
+                Disconnect the controller from the bridge before running this repair.
+              </p>
+              <ul>
+                <li>Removes stale Windows DualSense, DualSense Edge, DS5 Bridge USB/HID, audio endpoint, and Bluetooth pairing records.</li>
+                <li>Controller identity based profiles in Steam, emulators, or other tools may need to be assigned again.</li>
+                <li>DualSense controllers paired directly to Windows over Bluetooth may need to be paired again.</li>
+              </ul>
+              {controllerConnected && (
+                <div className="device-cleanup-alert bad">
+                  Controller is still connected to the bridge.
+                </div>
+              )}
+              {deviceCleanupError && (
+                <div className="device-cleanup-alert bad">
+                  {deviceCleanupError}
+                </div>
+              )}
+              {deviceCleanupMessage && (
+                <div className="device-cleanup-alert good">
+                  {deviceCleanupMessage}
+                </div>
+              )}
+            </div>
+            <div className="remap-profile-dialog-actions">
+              <button
+                type="button"
+                className="secondary-action"
+                disabled={pendingAction === 'device-cleanup'}
+                onClick={closeDeviceCleanupConfirm}
+              >
+                Close
+              </button>
+              <button
+                type="submit"
+                className="primary-action danger"
+                disabled={pendingAction !== null || controllerConnected}
+              >
+                {pendingAction === 'device-cleanup' ? 'Running...' : 'Run Repair'}
               </button>
             </div>
           </form>
