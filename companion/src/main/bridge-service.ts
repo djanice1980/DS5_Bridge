@@ -23,6 +23,7 @@ import {
   parseAudioDebugReport,
   parseAudioStatsReport,
   parseHostAudioStatusReport,
+  parseTriggerTraceReport,
   parseStatusReport,
   HOST_AUDIO_PACKET_TYPE,
   SHORTCUT_EVENT,
@@ -36,6 +37,7 @@ import type {
   BridgePresetId,
   RemapButtonId,
   HostAudioStatusPayload,
+  TriggerTraceEventPayload,
   BridgeStatusPayload,
   MuteButtonMode,
   MuteKeyboardBehavior,
@@ -67,12 +69,15 @@ const HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS = 5000;
 const HOST_AUDIO_STATUS_READ_INTERVAL_MS = 500;
 const HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS = 5000;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
+const TRIGGER_TRACE_READ_INTERVAL_MS = 250;
 const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = false;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = 'Firmware 1.0.1 update required';
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
+const TRIGGER_TRACE_LOG_LINE_LIMIT = 300;
+const TRIGGER_TRACE_MAX_READS_PER_POLL = 32;
 const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
 const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
 const MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES = 1;
@@ -86,7 +91,13 @@ const CLEANUP_LOG_EXCERPT_MAX_CHARS = 3000;
 type DiscoveredHidDevice = HidDeviceSummary;
 type BridgeDiagnosticsWithoutAudioLog = Omit<
   BridgeDiagnostics,
-  'audioDebugLogPath' | 'audioDebugLogLines' | 'audioDebugDroppedCount' | 'audioDebugStats' | 'hostAudioStatus'
+  | 'audioDebugLogPath'
+  | 'audioDebugLogLines'
+  | 'audioDebugDroppedCount'
+  | 'audioDebugStats'
+  | 'triggerTraceLines'
+  | 'triggerTraceDroppedCount'
+  | 'hostAudioStatus'
 >;
 
 type CommandOptions = {
@@ -182,6 +193,8 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     audioDebugLogLines: [],
     audioDebugDroppedCount: 0,
     audioDebugStats: null,
+    triggerTraceLines: [],
+    triggerTraceDroppedCount: 0,
     hostAudioStatus: null
   };
 }
@@ -439,6 +452,64 @@ function formatAudioStats(stats: AudioDebugStatsPayload): string {
   ].join(' ');
 }
 
+function triggerTraceStageLabel(stage: number): string {
+  switch (stage) {
+    case 1:
+      return 'HOST';
+    case 2:
+      return 'BRIDGE-IN';
+    case 3:
+      return 'BRIDGE-OUT';
+    case 4:
+      return 'BT';
+    case 5:
+      return 'DROP';
+    default:
+      return `stage-${stage}`;
+  }
+}
+
+function outputDecisionLabel(decision: number): string {
+  switch (decision) {
+    case 0:
+      return 'raw';
+    case 1:
+      return 'critical-direct';
+    case 2:
+      return 'audio';
+    case 3:
+      return 'state-only';
+    case 4:
+      return 'critical-flags';
+    case 5:
+      return 'critical-payload';
+    case 6:
+      return 'noop';
+    default:
+      return String(decision);
+  }
+}
+
+function hexBytes(values: number[]): string {
+  return values.map(hexByte).join(' ');
+}
+
+function formatTriggerTraceEvent(event: TriggerTraceEventPayload): string {
+  return [
+    `#${event.sequence}`,
+    `t=${event.timeMs}ms`,
+    triggerTraceStageLabel(event.stage),
+    `report=${hexByte(event.reportId)}`,
+    `len=${limitedByte(event.length)}`,
+    `seq=${hexByte(event.sequenceTag)}`,
+    `flags=${hexByte(event.flag0)}/${hexByte(event.flag1)}/${hexByte(event.flag2)}`,
+    `power=${hexByte(event.motorPower)}`,
+    `decision=${outputDecisionLabel(event.decision)}`,
+    `R=[${hexBytes(event.rightTrigger)}]`,
+    `L=[${hexBytes(event.leftTrigger)}]`
+  ].join(' ');
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
@@ -596,6 +667,9 @@ export class BridgeService extends EventEmitter {
   private audioDebugLogLines: string[] = [];
   private audioDebugDroppedCount = 0;
   private audioDebugStats: AudioDebugStatsPayload | null = null;
+  private triggerTraceLines: string[] = [];
+  private triggerTraceDroppedCount = 0;
+  private triggerTraceSupported: boolean | null = null;
   private hostAudioStatus: HostAudioStatusPayload | null = null;
   private lastAudioStatsSignature: string | null = null;
   private hostAudioCommandActive = false;
@@ -608,6 +682,7 @@ export class BridgeService extends EventEmitter {
   private lastHostAudioStageLogAt = 0;
   private lastHostAudioStatusReadAt = 0;
   private lastAudioDebugReadAt = 0;
+  private lastTriggerTraceReadAt = 0;
   private lastHostAudioActivePollAt = 0;
   private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
@@ -742,6 +817,8 @@ export class BridgeService extends EventEmitter {
       audioDebugLogLines: [...this.audioDebugLogLines],
       audioDebugDroppedCount: this.audioDebugDroppedCount,
       audioDebugStats: this.audioDebugStats ? { ...this.audioDebugStats } : null,
+      triggerTraceLines: [...this.triggerTraceLines],
+      triggerTraceDroppedCount: this.triggerTraceDroppedCount,
       hostAudioStatus: this.hostAudioStatus ? { ...this.hostAudioStatus } : null
     };
   }
@@ -813,6 +890,51 @@ export class BridgeService extends EventEmitter {
     this.lastAudioDebugReadAt = now;
     this.readAudioDebugEvents();
     this.readAudioDebugStats();
+  }
+
+  private appendTriggerTraceLines(lines: string[]): void {
+    if (lines.length === 0) {
+      return;
+    }
+
+    this.triggerTraceLines.push(...lines);
+    if (this.triggerTraceLines.length > TRIGGER_TRACE_LOG_LINE_LIMIT) {
+      this.triggerTraceLines = this.triggerTraceLines.slice(-TRIGGER_TRACE_LOG_LINE_LIMIT);
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      diagnostics: this.withAudioDebugDiagnostics(this.snapshot.diagnostics)
+    };
+  }
+
+  private readTriggerTraceThrottled(force = false): void {
+    if (!this.device) {
+      return;
+    }
+    if (this.triggerTraceSupported === false) {
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - this.lastTriggerTraceReadAt < TRIGGER_TRACE_READ_INTERVAL_MS) {
+      return;
+    }
+    this.lastTriggerTraceReadAt = now;
+
+    try {
+      const lines: string[] = [];
+      for (let readIndex = 0; readIndex < TRIGGER_TRACE_MAX_READS_PER_POLL; readIndex += 1) {
+        const trace = parseTriggerTraceReport(this.device.getFeatureReport(REPORT_ID.TRIGGER_TRACE, REPORT_LENGTH));
+        this.triggerTraceSupported = true;
+        this.triggerTraceDroppedCount = trace.droppedCount;
+        if (trace.events.length === 0) {
+          break;
+        }
+        lines.push(...trace.events.map(formatTriggerTraceEvent));
+      }
+      this.appendTriggerTraceLines(lines);
+    } catch {
+      this.triggerTraceSupported = false;
+    }
   }
 
   private readHostAudioStatus(): void {
@@ -1775,6 +1897,7 @@ export class BridgeService extends EventEmitter {
       return;
     }
 
+    this.readTriggerTraceThrottled();
     if (hostAudioActive) {
       this.readAudioDebugThrottled();
     }
@@ -2095,6 +2218,7 @@ export class BridgeService extends EventEmitter {
     this.devicePath = null;
     this.hostAudioCommandActive = false;
     this.hostAudioStatus = null;
+    this.triggerTraceSupported = null;
     this.controllerPowerSavingActive = null;
     this.hostAudioReportQueue = [];
     this.hostAudioWritePumpActive = false;
@@ -2146,6 +2270,9 @@ export class BridgeService extends EventEmitter {
         audioDebugLogLineCount: this.snapshot.diagnostics.audioDebugLogLines.length,
         audioDebugLogTail: this.snapshot.diagnostics.audioDebugLogLines.at(-1) ?? null,
         audioDebugDroppedCount: this.snapshot.diagnostics.audioDebugDroppedCount,
+        triggerTraceLineCount: this.snapshot.diagnostics.triggerTraceLines.length,
+        triggerTraceTail: this.snapshot.diagnostics.triggerTraceLines.at(-1) ?? null,
+        triggerTraceDroppedCount: this.snapshot.diagnostics.triggerTraceDroppedCount,
         hostAudioStatus: this.snapshot.diagnostics.hostAudioStatus
       }
     });

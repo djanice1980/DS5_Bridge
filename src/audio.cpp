@@ -367,6 +367,24 @@ static void clamp_state_speaker_volume() {
     }
 }
 
+static void clear_trigger_state_for_audio_report(uint8_t *data) {
+    if (data == nullptr) {
+        return;
+    }
+
+    data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
+        data[STATE_PAYLOAD_VALID_FLAG0_OFFSET]
+        & static_cast<uint8_t>(~(STATE_FLAG0_RIGHT_TRIGGER_EFFECT | STATE_FLAG0_LEFT_TRIGGER_EFFECT))
+    );
+    data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
+        data[STATE_PAYLOAD_VALID_FLAG1_OFFSET]
+        & static_cast<uint8_t>(~STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE)
+    );
+    memset(data + STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET, 0, STATE_PAYLOAD_TRIGGER_EFFECT_SIZE);
+    memset(data + STATE_PAYLOAD_TRIGGER_LEFT_OFFSET, 0, STATE_PAYLOAD_TRIGGER_EFFECT_SIZE);
+    data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET] = 0;
+}
+
 void audio_set_state_data(uint8_t const *data, uint8_t len) {
     if (data == nullptr) {
         return;
@@ -541,6 +559,7 @@ static void copy_routed_state_data(uint8_t *destination) {
         destination[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] = 0x00;
         destination[STATE_PAYLOAD_AUDIO_CONTROL_OFFSET] = STATE_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES;
         destination[STATE_PAYLOAD_AUDIO_CONTROL2_OFFSET] = 0x00;
+        clear_trigger_state_for_audio_report(destination);
         return;
     }
 
@@ -552,6 +571,7 @@ static void copy_routed_state_data(uint8_t *destination) {
     destination[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] = STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX;
     destination[STATE_PAYLOAD_AUDIO_CONTROL_OFFSET] = STATE_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER;
     destination[STATE_PAYLOAD_AUDIO_CONTROL2_OFFSET] = STATE_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN;
+    clear_trigger_state_for_audio_report(destination);
 }
 
 static void write_debug_u16(uint8_t *data, uint16_t value) {

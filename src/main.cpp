@@ -245,6 +245,9 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         switch (buffer[0]) {
             case 0x02: {
                 usb_note_hid_output();
+#ifdef ENABLE_COMPANION
+                companion_note_trigger_trace_report(CompanionTriggerTraceHost, buffer, bufsize);
+#endif
                 uint8_t outputData[78]{};
                 outputData[0] = 0x31;
                 outputData[1] = reportSeqCounter << 4;

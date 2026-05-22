@@ -14,7 +14,8 @@ export const REPORT_ID = {
   AUDIO_DEBUG: 0x05,
   AUDIO_STATS: 0x06,
   HOST_AUDIO_STREAM: 0x07,
-  HOST_AUDIO_STATUS: 0x08
+  HOST_AUDIO_STATUS: 0x08,
+  TRIGGER_TRACE: 0x09
 } as const;
 
 export const SHORTCUT_EVENT = {
@@ -49,6 +50,7 @@ export const AUDIO_DEBUG_EVENT = {
 } as const;
 
 export const AUDIO_DEBUG_RECORD_SIZE = 14;
+export const TRIGGER_TRACE_RECORD_SIZE = 38;
 
 export const COMMAND_ID = {
   SET_HAPTICS_GAIN: 0x01,
@@ -331,6 +333,28 @@ export interface AudioDebugStatsPayload {
   criticalStarvingAudioCount: number;
 }
 
+export interface TriggerTraceEventPayload {
+  sequence: number;
+  timeMs: number;
+  stage: number;
+  reportId: number;
+  length: number;
+  sequenceTag: number;
+  flag0: number;
+  flag1: number;
+  flag2: number;
+  motorPower: number;
+  decision: number;
+  rightTrigger: number[];
+  leftTrigger: number[];
+}
+
+export interface TriggerTracePayload {
+  latestSequence: number;
+  droppedCount: number;
+  events: TriggerTraceEventPayload[];
+}
+
 export interface HostAudioStatusPayload {
   mode: HostAudioMode;
   fallbackReason: HostAudioFallbackReason;
@@ -589,6 +613,47 @@ export function parseAudioStatsReport(report: ArrayLike<number>): AudioDebugStat
     audio0x36SentCount: readU32(report, 56),
     criticalStarvingAudioCount: readU32(report, 60)
   };
+}
+
+export function parseTriggerTraceReport(report: ArrayLike<number>): TriggerTracePayload {
+  assertReport(report, REPORT_ID.TRIGGER_TRACE);
+  assertVersion(report);
+
+  const recordCount = report[7];
+  const recordSize = report[8];
+  const latestSequence = readU32(report, 9);
+  const droppedCount = readU16(report, 13);
+  if (recordCount === 0) {
+    return { latestSequence, droppedCount, events: [] };
+  }
+  if (recordSize < TRIGGER_TRACE_RECORD_SIZE) {
+    throw new ProtocolError(`Trigger trace record size ${recordSize} is too small.`, 'bad-trigger-trace-record');
+  }
+
+  const events: TriggerTraceEventPayload[] = [];
+  for (let index = 0; index < recordCount; index += 1) {
+    const offset = 15 + index * recordSize;
+    if (offset + TRIGGER_TRACE_RECORD_SIZE > REPORT_LENGTH) {
+      break;
+    }
+    events.push({
+      sequence: readU16(report, offset),
+      timeMs: readU32(report, offset + 2),
+      stage: report[offset + 6],
+      reportId: report[offset + 7],
+      length: report[offset + 8],
+      sequenceTag: report[offset + 9],
+      flag0: report[offset + 10],
+      flag1: report[offset + 11],
+      flag2: report[offset + 12],
+      motorPower: report[offset + 13],
+      decision: report[offset + 14],
+      rightTrigger: Array.from({ length: 11 }, (_, itemIndex) => report[offset + 15 + itemIndex]),
+      leftTrigger: Array.from({ length: 11 }, (_, itemIndex) => report[offset + 26 + itemIndex])
+    });
+  }
+
+  return { latestSequence, droppedCount, events };
 }
 
 export function parseHostAudioStatusReport(report: ArrayLike<number>): HostAudioStatusPayload {

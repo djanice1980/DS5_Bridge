@@ -23,6 +23,7 @@ import {
   parseAudioDebugReport,
   parseAudioStatsReport,
   parseAckReport,
+  parseTriggerTraceReport,
   parseStatusReport
 } from './protocol';
 
@@ -179,6 +180,54 @@ describe('companion protocol', () => {
       audio0x36EnqueuedCount: 12,
       audio0x36SentCount: 13,
       criticalStarvingAudioCount: 14
+    });
+  });
+
+  it('parses a trigger trace report', () => {
+    const report = baseReport(REPORT_ID.TRIGGER_TRACE);
+    report[7] = 1;
+    report[8] = 38;
+    writeU32(report, 9, 260);
+    writeU16(report, 13, 3);
+
+    const offset = 15;
+    writeU16(report, offset, 260);
+    writeU32(report, offset + 2, 12345);
+    report[offset + 6] = 4;
+    report[offset + 7] = 0x31;
+    report[offset + 8] = 78;
+    report[offset + 9] = 0xa0;
+    report[offset + 10] = 0x0c;
+    report[offset + 11] = 0x04;
+    report[offset + 12] = 0x00;
+    report[offset + 13] = 0x05;
+    report[offset + 14] = 1;
+    for (let index = 0; index < 11; index += 1) {
+      report[offset + 15 + index] = index + 1;
+      report[offset + 26 + index] = index + 21;
+    }
+
+    const trace = parseTriggerTraceReport(report);
+    expect(trace).toEqual({
+      latestSequence: 260,
+      droppedCount: 3,
+      events: [
+        {
+          sequence: 260,
+          timeMs: 12345,
+          stage: 4,
+          reportId: 0x31,
+          length: 78,
+          sequenceTag: 0xa0,
+          flag0: 0x0c,
+          flag1: 0x04,
+          flag2: 0x00,
+          motorPower: 0x05,
+          decision: 1,
+          rightTrigger: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+          leftTrigger: [21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+        }
+      ]
     });
   });
 

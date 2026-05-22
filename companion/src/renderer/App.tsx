@@ -2102,6 +2102,13 @@ export function App() {
     const lines = snapshot?.diagnostics.audioDebugLogLines ?? [];
     return lines.length > 0 ? lines.join('\n') : 'No audio debug events captured yet.';
   }, [diagnosticsVisible, snapshot?.diagnostics.audioDebugLogLines]);
+  const triggerTraceText = useMemo(() => {
+    if (!diagnosticsVisible) {
+      return '';
+    }
+    const lines = snapshot?.diagnostics.triggerTraceLines ?? [];
+    return lines.length > 0 ? lines.join('\n') : 'No trigger trace events captured yet.';
+  }, [diagnosticsVisible, snapshot?.diagnostics.triggerTraceLines]);
 
   async function runAction(label: string, action: () => Promise<BridgeSnapshot>) {
     if (!snapshot || pendingAction) {
@@ -4699,6 +4706,10 @@ export function App() {
                           <dt>Dropped</dt>
                           <dd><span className="diagnostic-number">{snapshot.diagnostics.audioDebugDroppedCount}</span></dd>
                         </div>
+                        <div>
+                          <dt>Trigger Drop</dt>
+                          <dd><span className="diagnostic-number">{snapshot.diagnostics.triggerTraceDroppedCount}</span></dd>
+                        </div>
                         <div className="debug-entry">
                           <dt>Audio Debug</dt>
                           <dd>
@@ -4709,6 +4720,12 @@ export function App() {
                           <dt>Audio Events</dt>
                           <dd>
                             <textarea readOnly value={audioEventLogText} aria-label="Audio event log text" />
+                          </dd>
+                        </div>
+                        <div className="debug-entry">
+                          <dt>Trigger Trace</dt>
+                          <dd>
+                            <textarea readOnly value={triggerTraceText} aria-label="Trigger trace text" />
                           </dd>
                         </div>
                       </dl>

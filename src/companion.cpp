@@ -53,6 +53,10 @@ constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
 constexpr uint8_t kClassicRumbleTestAmplitude = 160;
 constexpr uint32_t kAdaptiveTriggerTestDurationUs = 2500000;
 constexpr uint32_t kGameTriggerUpdateRecentUs = 2000000;
+#if DS5_TRIGGER_TRACE_ENABLED
+constexpr uint8_t kTriggerTraceRecordSize = 38;
+constexpr uint8_t kTriggerTraceRingSize = 96;
+#endif
 constexpr uint8_t kTriggerEffectSize = 11;
 constexpr uint8_t kTriggerEffectRightOffset = 10;
 constexpr uint8_t kTriggerEffectLeftOffset = 21;
@@ -190,6 +194,29 @@ uint16_t host_output_report_count = 0;
 uint8_t host_output_report_len = 0;
 uint8_t host_output_report_id = 0;
 uint8_t host_output_report_first16[16]{};
+#if DS5_TRIGGER_TRACE_ENABLED
+struct TriggerTraceEvent {
+    uint32_t sequence;
+    uint32_t timestamp_ms;
+    uint8_t stage;
+    uint8_t report_id;
+    uint8_t length;
+    uint8_t sequence_tag;
+    uint8_t flag0;
+    uint8_t flag1;
+    uint8_t flag2;
+    uint8_t motor_power;
+    uint8_t decision;
+    uint8_t right_trigger[kTriggerEffectSize];
+    uint8_t left_trigger[kTriggerEffectSize];
+};
+TriggerTraceEvent trigger_trace_ring[kTriggerTraceRingSize]{};
+uint32_t trigger_trace_next_sequence = 1;
+uint32_t trigger_trace_read_sequence = 1;
+uint16_t trigger_trace_dropped_count = 0;
+uint8_t trigger_trace_count = 0;
+uint8_t trigger_trace_head = 0;
+#endif
 uint8_t mute_button_mode = MuteButtonNormal;
 uint8_t mute_keyboard_usage = kDefaultMuteKeyboardUsage;
 uint8_t mute_keyboard_modifiers = 0;
@@ -248,6 +275,97 @@ void write_u32(uint8_t *data, uint32_t value) {
     data[2] = static_cast<uint8_t>((value >> 16) & 0xFF);
     data[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
 }
+
+#if DS5_TRIGGER_TRACE_ENABLED
+bool trigger_payload_from_report(
+    uint8_t const *report,
+    uint16_t len,
+    uint8_t const *&payload,
+    uint16_t &payload_len,
+    uint8_t &report_id,
+    uint8_t &sequence_tag
+) {
+    payload = nullptr;
+    payload_len = 0;
+    report_id = len > 0 && report != nullptr ? report[0] : 0;
+    sequence_tag = 0;
+    if (report == nullptr || len == 0) {
+        return false;
+    }
+
+    if (report_id == 0x02 && len > 1) {
+        payload = report + 1;
+        payload_len = len - 1;
+        return true;
+    }
+    if (report_id == 0x31 && len > 3 && report[2] == 0x10) {
+        sequence_tag = report[1];
+        payload = report + 3;
+        payload_len = len - 3;
+        return true;
+    }
+    if (report_id == 0x36 && len > 13) {
+        sequence_tag = report[1];
+        payload = report + 13;
+        payload_len = len - 13;
+        return true;
+    }
+    return false;
+}
+
+bool decode_trigger_trace_report(uint8_t const *report, uint16_t len, TriggerTraceEvent &event) {
+    uint8_t const *payload = nullptr;
+    uint16_t payload_len = 0;
+    uint8_t report_id = 0;
+    uint8_t sequence_tag = 0;
+    if (!trigger_payload_from_report(report, len, payload, payload_len, report_id, sequence_tag)) {
+        return false;
+    }
+
+    const uint8_t flag0 = payload_len > 0 ? payload[0] : 0;
+    const uint8_t flag1 = payload_len > 1 ? payload[1] : 0;
+    const uint8_t flag2 = payload_len > 38 ? payload[38] : 0;
+    const bool has_right = (flag0 & kTriggerRightEffectFlag) != 0;
+    const bool has_left = (flag0 & kTriggerLeftEffectFlag) != 0;
+    const bool has_power = (flag1 & kTriggerMotorPowerFlag) != 0;
+    if (!has_right && !has_left && !has_power) {
+        return false;
+    }
+
+    event.report_id = report_id;
+    event.length = static_cast<uint8_t>(std::min<uint16_t>(len, 255));
+    event.sequence_tag = sequence_tag;
+    event.flag0 = flag0;
+    event.flag1 = flag1;
+    event.flag2 = flag2;
+    event.motor_power = payload_len > kTriggerEffectPowerOffset ? payload[kTriggerEffectPowerOffset] : 0;
+    memset(event.right_trigger, 0, sizeof(event.right_trigger));
+    memset(event.left_trigger, 0, sizeof(event.left_trigger));
+    if (has_right && payload_len > kTriggerEffectRightOffset + kTriggerEffectSize - 1) {
+        memcpy(event.right_trigger, payload + kTriggerEffectRightOffset, sizeof(event.right_trigger));
+    }
+    if (has_left && payload_len > kTriggerEffectLeftOffset + kTriggerEffectSize - 1) {
+        memcpy(event.left_trigger, payload + kTriggerEffectLeftOffset, sizeof(event.left_trigger));
+    }
+    return true;
+}
+
+void append_trigger_trace_event(TriggerTraceEvent const &event) {
+    trigger_trace_ring[trigger_trace_head] = event;
+    trigger_trace_head = static_cast<uint8_t>((trigger_trace_head + 1) % kTriggerTraceRingSize);
+    if (trigger_trace_count < kTriggerTraceRingSize) {
+        trigger_trace_count++;
+    } else {
+        if (trigger_trace_dropped_count != 0xffff) {
+            trigger_trace_dropped_count++;
+        }
+        const uint32_t oldest_sequence = trigger_trace_next_sequence - trigger_trace_count;
+        if (trigger_trace_read_sequence < oldest_sequence) {
+            trigger_trace_read_sequence = oldest_sequence;
+        }
+    }
+}
+#endif
 
 uint32_t uptime_seconds() {
     return to_ms_since_boot(get_absolute_time()) / 1000;
@@ -947,6 +1065,63 @@ uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+#if DS5_TRIGGER_TRACE_ENABLED
+uint16_t build_trigger_trace(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+    buffer[7] = kTriggerTraceRecordSize;
+
+    critical_section_enter_blocking(&companion_report_cs);
+    const uint32_t latest_sequence = trigger_trace_next_sequence > 1 ? trigger_trace_next_sequence - 1 : 0;
+    write_u32(buffer + 8, latest_sequence);
+    write_u16(buffer + 12, trigger_trace_dropped_count);
+
+    const uint8_t max_records = static_cast<uint8_t>((COMPANION_PAYLOAD_SIZE - 14) / kTriggerTraceRecordSize);
+    const uint32_t oldest_sequence = trigger_trace_next_sequence - trigger_trace_count;
+    if (trigger_trace_read_sequence < oldest_sequence) {
+        trigger_trace_read_sequence = oldest_sequence;
+    }
+    const uint32_t available_records = trigger_trace_next_sequence > trigger_trace_read_sequence
+        ? trigger_trace_next_sequence - trigger_trace_read_sequence
+        : 0;
+    const uint8_t record_count = static_cast<uint8_t>(std::min<uint32_t>(max_records, available_records));
+    buffer[6] = record_count;
+
+    const uint8_t oldest_index = static_cast<uint8_t>(
+        (trigger_trace_head + kTriggerTraceRingSize - trigger_trace_count) % kTriggerTraceRingSize
+    );
+    for (uint8_t i = 0; i < record_count; i++) {
+        const uint32_t sequence = trigger_trace_read_sequence + i;
+        const uint8_t ring_index = static_cast<uint8_t>(
+            (oldest_index + (sequence - oldest_sequence)) % kTriggerTraceRingSize
+        );
+        const TriggerTraceEvent &event = trigger_trace_ring[ring_index];
+        uint8_t *record = buffer + 14 + (i * kTriggerTraceRecordSize);
+        write_u16(record, static_cast<uint16_t>(event.sequence & 0xffff));
+        write_u32(record + 2, event.timestamp_ms);
+        record[6] = event.stage;
+        record[7] = event.report_id;
+        record[8] = event.length;
+        record[9] = event.sequence_tag;
+        record[10] = event.flag0;
+        record[11] = event.flag1;
+        record[12] = event.flag2;
+        record[13] = event.motor_power;
+        record[14] = event.decision;
+        memcpy(record + 15, event.right_trigger, sizeof(event.right_trigger));
+        memcpy(record + 26, event.left_trigger, sizeof(event.left_trigger));
+    }
+
+    trigger_trace_read_sequence += record_count;
+    critical_section_exit(&companion_report_cs);
+    return COMPANION_PAYLOAD_SIZE;
+}
+#endif
+
 void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     uint8_t command_id = 0;
     uint8_t sequence = 0;
@@ -1572,6 +1747,28 @@ void companion_note_host_output_report(uint8_t const *report, uint16_t len) {
     memcpy(host_output_report_first16, next_first16, sizeof(host_output_report_first16));
 }
 
+#if DS5_TRIGGER_TRACE_ENABLED
+void companion_note_trigger_trace_report(
+    uint8_t stage,
+    uint8_t const *report,
+    uint16_t len,
+    uint8_t decision
+) {
+    TriggerTraceEvent event{};
+    if (!decode_trigger_trace_report(report, len, event)) {
+        return;
+    }
+
+    critical_section_enter_blocking(&companion_report_cs);
+    event.sequence = trigger_trace_next_sequence++;
+    event.timestamp_ms = to_ms_since_boot(get_absolute_time());
+    event.stage = stage;
+    event.decision = decision;
+    append_trigger_trace_event(event);
+    critical_section_exit(&companion_report_cs);
+}
+#endif
+
 bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len) {
     if (payload == nullptr) {
         return false;
@@ -1679,6 +1876,10 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_audio_stats(buffer, reqlen);
         case COMPANION_REPORT_HOST_AUDIO_STATUS:
             return build_host_audio_status(buffer, reqlen);
+#if DS5_TRIGGER_TRACE_ENABLED
+        case COMPANION_REPORT_TRIGGER_TRACE:
+            return build_trigger_trace(buffer, reqlen);
+#endif
         default:
             return 0;
     }

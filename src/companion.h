@@ -4,6 +4,10 @@
 #include <cstdint>
 #include "tusb.h"
 
+#ifndef DS5_TRIGGER_TRACE_ENABLED
+#define DS5_TRIGGER_TRACE_ENABLED 0
+#endif
+
 #define COMPANION_HID_INSTANCE 1
 #define KEYBOARD_HID_INSTANCE 2
 #define COMPANION_REPORT_STATUS 0x01
@@ -14,13 +18,38 @@
 #define COMPANION_REPORT_AUDIO_STATS 0x06
 #define COMPANION_REPORT_HOST_AUDIO_STREAM 0x07
 #define COMPANION_REPORT_HOST_AUDIO_STATUS 0x08
+#define COMPANION_REPORT_TRIGGER_TRACE 0x09
 #define COMPANION_PAYLOAD_SIZE 63
+
+enum CompanionTriggerTraceStage : uint8_t {
+    CompanionTriggerTraceHost = 1,
+    CompanionTriggerTraceBridgeIn = 2,
+    CompanionTriggerTraceBridgeOut = 3,
+    CompanionTriggerTraceBt = 4,
+    CompanionTriggerTraceDrop = 5,
+};
 
 void companion_init();
 void companion_loop();
 void companion_process_controller_report(uint8_t *report, uint16_t len);
 void companion_update_controller_report(uint8_t const *report, uint16_t len);
 void companion_note_host_output_report(uint8_t const *report, uint16_t len);
+#if DS5_TRIGGER_TRACE_ENABLED
+void companion_note_trigger_trace_report(
+    uint8_t stage,
+    uint8_t const *report,
+    uint16_t len,
+    uint8_t decision = 0
+);
+#else
+static inline void companion_note_trigger_trace_report(
+    uint8_t,
+    uint8_t const *,
+    uint16_t,
+    uint8_t = 0
+) {
+}
+#endif
 bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len);
 bool companion_lightbar_override_enabled();
 uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen);

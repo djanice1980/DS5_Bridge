@@ -14,6 +14,9 @@
 #include <vector>
 
 #include "audio.h"
+#ifdef ENABLE_COMPANION
+#include "companion.h"
+#endif
 #include "btstack_event.h"
 #include "controller_report.h"
 #include "gap.h"
@@ -1515,6 +1518,15 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             uint8_t status = l2cap_send(hid_interrupt_cid, next_packet.data.data(), next_packet.data.size());
             if (status != 0) {
                 DS5_LOG("[L2CAP] Interrupt Error, Status: 0x%02X\n", status);
+            } else if (!next_packet.data.empty()) {
+#ifdef ENABLE_COMPANION
+                companion_note_trigger_trace_report(
+                    CompanionTriggerTraceBt,
+                    next_packet.data.data() + 1,
+                    static_cast<uint16_t>(next_packet.data.size() - 1),
+                    next_packet.reason
+                );
+#endif
             }
             if (has_more) {
                 l2cap_request_can_send_now_event(hid_interrupt_cid);
@@ -2083,6 +2095,9 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET);
     }
 
+#ifdef ENABLE_COMPANION
+    companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, state_data, sizeof(state_data), OutputReasonStateOnly);
+#endif
     return enqueue_feedback_state_output(state_data, sizeof(state_data), OutputReasonStateOnly);
 }
 
@@ -2226,6 +2241,9 @@ static bool classified_critical_output_is_duplicate(uint8_t *data, uint16_t len)
         && same_output_report_ignoring_sequence(data, last_classified_critical_report, len)
     ) {
         output_counters.normal_0x31_duplicate_drop_count++;
+#ifdef ENABLE_COMPANION
+        companion_note_trigger_trace_report(CompanionTriggerTraceDrop, data, len, OutputReasonCriticalDirect);
+#endif
         return true;
     }
 
@@ -2256,8 +2274,14 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     bt_sanitize_host_mic_ownership(data, len);
     apply_classic_rumble_gain(data, len);
     normalize_classic_rumble_stop_if_needed(data, len);
+#ifdef ENABLE_COMPANION
+    companion_note_trigger_trace_report(CompanionTriggerTraceBridgeIn, data, len, 0);
+#endif
     split_state_from_mixed_output(data, len);
     const uint8_t reason = classify_output_report(data, len);
+#ifdef ENABLE_COMPANION
+    companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, data, len, reason);
+#endif
     if (reason == OutputReasonStateNoop) {
         return true;
     }

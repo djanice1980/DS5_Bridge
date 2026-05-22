@@ -96,6 +96,13 @@ if(ENABLE_AUDIO_DEBUG_REPORTS OR ENABLE_DEBUG_LOGS)
     )
 endif()
 
+option(ENABLE_TRIGGER_TRACE_REPORTS "Enable the companion HID adaptive trigger trace report" OFF)
+if(ENABLE_TRIGGER_TRACE_REPORTS)
+    target_compile_definitions(ds5-bridge PRIVATE
+            DS5_TRIGGER_TRACE_ENABLED=1
+    )
+endif()
+
 pico_set_program_name(ds5-bridge "ds5-bridge")
 pico_set_program_version(ds5-bridge "1.0.1")
 
