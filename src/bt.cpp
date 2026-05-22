@@ -185,6 +185,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet);
 static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason);
+static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_control_packet(uint8_t const *data, uint16_t len, bool coalescible);
 static bool select_next_control_packet_locked(control_packet &packet, uint32_t now);
 static void request_can_send_if_needed(bool should_request_send);
@@ -347,28 +348,18 @@ static uint8_t scale_classic_rumble_byte(uint8_t value) {
     return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
 }
 
-static uint8_t scale_percent_byte(uint8_t value, uint8_t gain_percent) {
-    const uint16_t scaled = static_cast<uint16_t>(value) * gain_percent;
-    return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
-}
-
-static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+bool bt_apply_classic_rumble_gain_payload(uint8_t *payload, uint16_t len) {
+    if (payload == nullptr || len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
         return false;
     }
 
-    uint8_t *payload = data + 3;
-    const uint16_t payload_len = len - 3;
     const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
+    const uint8_t flag2 = len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET ? payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] : 0;
     const bool has_rumble = (flag0 & (
         DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
         | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
     )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
-    if (!has_rumble || payload_len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
+    if (!has_rumble) {
         return false;
     }
 
@@ -380,29 +371,7 @@ static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
         || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
 }
 
-bool bt_apply_haptics_gain_payload(uint8_t *payload, uint16_t len, uint8_t gain_percent) {
-    if (payload == nullptr || len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
-        return false;
-    }
-
-    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t flag2 = len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET ? payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] : 0;
-    const bool has_haptics = (flag0 & DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT) != 0
-        || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
-    if (!has_haptics) {
-        return false;
-    }
-
-    const uint8_t right = payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
-    const uint8_t left = payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
-    const uint8_t clamped_gain = gain_percent > 200 ? 200 : gain_percent;
-    payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_percent_byte(right, clamped_gain);
-    payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_percent_byte(left, clamped_gain);
-    return payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
-        || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
-}
-
-bool bt_apply_haptics_gain(uint8_t *data, uint16_t len, uint8_t gain_percent) {
+static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
     if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
         return false;
     }
@@ -410,7 +379,7 @@ bool bt_apply_haptics_gain(uint8_t *data, uint16_t len, uint8_t gain_percent) {
         return false;
     }
 
-    return bt_apply_haptics_gain_payload(data + 3, len - 3, gain_percent);
+    return bt_apply_classic_rumble_gain_payload(data + 3, len - 3);
 }
 
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
@@ -597,9 +566,6 @@ void bt_replay_adaptive_trigger_effect(
         motor_power,
         motor_power_valid
     );
-    if (audio_host_encoded_active()) {
-        return;
-    }
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
@@ -616,7 +582,7 @@ void bt_replay_adaptive_trigger_effect(
         payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
         payload[OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET] = motor_power;
     }
-    enqueue_state_output(report, sizeof(report), OutputReasonStateOnly);
+    enqueue_feedback_state_output(report, sizeof(report), OutputReasonStateOnly);
 }
 
 void bt_reset_adaptive_triggers() {
@@ -1902,6 +1868,29 @@ static bool output_report_has_state_flags(uint8_t const *data, uint16_t len) {
     return ((flag0 & state_mask0) | (flag1 & state_mask1) | (flag2 & state_mask2)) != 0;
 }
 
+static bool output_report_has_feedback_state_flags(uint8_t const *data, uint16_t len) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    const uint8_t *payload = data + 3;
+    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
+    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
+    const uint8_t feedback_mask0 =
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+        | DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
+        | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT;
+    const uint8_t feedback_mask1 = DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
+    const uint8_t feedback_mask2 = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+
+    return ((flag0 & feedback_mask0) | (flag1 & feedback_mask1) | (flag2 & feedback_mask2)) != 0;
+}
+
 static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
     if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
         return false;
@@ -2004,10 +1993,7 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET);
     }
 
-    if (audio_host_encoded_active()) {
-        return true;
-    }
-    return enqueue_state_output(state_data, sizeof(state_data), OutputReasonStateOnly);
+    return enqueue_feedback_state_output(state_data, sizeof(state_data), OutputReasonStateOnly);
 }
 
 static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_t now, uint8_t reason) {
@@ -2158,6 +2144,16 @@ static bool classified_critical_output_is_duplicate(uint8_t *data, uint16_t len)
     return false;
 }
 
+static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
+    if (output_report_has_feedback_state_flags(data, len) && !audio_recent()) {
+        if (classified_critical_output_is_duplicate(data, len)) {
+            return true;
+        }
+        return enqueue_critical_output(data, len, reason);
+    }
+    return enqueue_state_output(data, len, reason);
+}
+
 void bt_write(uint8_t *data, uint16_t len) {
     enqueue_critical_output(data, len, OutputReasonCriticalDirect);
 }
@@ -2175,7 +2171,7 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     if (reason != OutputReasonStateOnly) {
         if (audio_output_route_protected()) {
             if (output_report_has_state_flags(data, len)) {
-                return enqueue_state_output(data, len, OutputReasonStateOnly);
+                return enqueue_feedback_state_output(data, len, OutputReasonStateOnly);
             }
             return true;
         }
@@ -2184,10 +2180,7 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
         }
         return enqueue_critical_output(data, len, reason);
     }
-    if (audio_host_encoded_active()) {
-        return true;
-    }
-    return enqueue_state_output(data, len, reason);
+    return enqueue_feedback_state_output(data, len, reason);
 }
 
 bool bt_write_audio_stream(uint8_t *data, uint16_t len) {

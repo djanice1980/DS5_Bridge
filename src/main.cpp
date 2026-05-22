@@ -3,7 +3,6 @@
 // Modified for DS5 Bridge companion firmware and app integration.
 //
 
-#include <algorithm>
 #include <cstdio>
 #include "bsp/board_api.h"
 #include "bt.h"
@@ -58,15 +57,6 @@ static void note_usb_input_report(uint8_t const *report, uint16_t len) {
         len,
         len > 7 && report != nullptr ? report[7] : 0
     );
-#endif
-}
-
-static uint8_t companion_haptics_gain_percent() {
-#ifdef ENABLE_COMPANION
-    const float gain = std::clamp(volume[1], 0.0f, 2.0f);
-    return static_cast<uint8_t>(gain * 100.0f + 0.5f);
-#else
-    return 100;
 #endif
 }
 
@@ -307,7 +297,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 );
                 bt_sanitize_host_speaker_amp_ownership_payload(audioStateData, payloadLen);
                 bt_sanitize_host_mic_ownership_payload(audioStateData, payloadLen);
-                bt_apply_haptics_gain_payload(audioStateData, payloadLen, companion_haptics_gain_percent());
+                bt_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
 #else
                 uint8_t audioStateData[sizeof(outputData) - 3]{};
@@ -317,13 +307,14 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 sanitize_dualsense_host_output_payload(audioStateData, payloadLen);
                 bt_sanitize_host_speaker_amp_ownership_payload(audioStateData, payloadLen);
                 bt_sanitize_host_mic_ownership_payload(audioStateData, payloadLen);
-                bt_apply_haptics_gain_payload(audioStateData, payloadLen, companion_haptics_gain_percent());
+                bt_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
 #endif
                 // Keep app-controlled lighting authoritative when override is active.
                 sanitize_dualsense_host_output_payload(outputData + 3, payloadLen, lightbarOverride);
                 bt_sanitize_host_mic_ownership(outputData, sizeof(outputData));
-                bt_apply_haptics_gain(outputData, sizeof(outputData), companion_haptics_gain_percent());
+                // Haptics gain is applied to audio samples. Output report motor
+                // bytes are classic rumble and must follow the rumble setting.
                 bt_write_classified_output(outputData, sizeof(outputData));
                 if (hostClearsLeds && !lightbarOverride) {
                     bt_schedule_lightbar_restore(HOST_LIGHTBAR_RESTORE_DELAY_MS);
