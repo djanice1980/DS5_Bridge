@@ -1075,6 +1075,11 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             bt_set_classic_rumble_gain(static_cast<uint8_t>(value));
+            if (value == 0) {
+                classic_rumble_test_active = false;
+                classic_rumble_test_until_us = 0;
+                bt_set_classic_rumble_output(0, 0);
+            }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
