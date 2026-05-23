@@ -72,7 +72,11 @@ void companion_note_feedback_trace_report(
     uint8_t stage,
     uint8_t const *report,
     uint16_t len,
-    uint8_t decision = 0
+    uint8_t decision = 0,
+    uint8_t detail0 = 0,
+    uint8_t detail1 = 0,
+    uint8_t detail2 = 0,
+    uint8_t detail3 = 0
 );
 void companion_note_feedback_trace_samples(
     uint8_t stage,
@@ -88,6 +92,10 @@ static inline void companion_note_feedback_trace_report(
     uint8_t,
     uint8_t const *,
     uint16_t,
+    uint8_t = 0,
+    uint8_t = 0,
+    uint8_t = 0,
+    uint8_t = 0,
     uint8_t = 0
 ) {
 }

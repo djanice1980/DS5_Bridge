@@ -466,7 +466,12 @@ void fill_feedback_haptic_stats(
     nonzero = static_cast<uint8_t>(std::min<uint16_t>(255, nz));
 }
 
-bool decode_feedback_trace_report(uint8_t const *report, uint16_t len, FeedbackTraceEvent &event) {
+bool decode_feedback_trace_report(
+    uint8_t const *report,
+    uint16_t len,
+    FeedbackTraceEvent &event,
+    bool force = false
+) {
     uint8_t const *payload = nullptr;
     uint16_t payload_len = 0;
     uint8_t report_id = 0;
@@ -495,11 +500,18 @@ bool decode_feedback_trace_report(uint8_t const *report, uint16_t len, FeedbackT
                 event.haptic_nonzero
             );
         }
-        return event.haptic_peak != 0 || event.haptic_nonzero != 0;
+        return force
+            || event.haptic_peak != 0
+            || event.haptic_nonzero != 0
+            || event.flag0 != 0
+            || event.flag1 != 0
+            || event.flag2 != 0
+            || event.motor_right != 0
+            || event.motor_left != 0;
     }
 
     const bool has_rumble = (event.flag0 & 0x03) != 0 || (event.flag2 & 0x04) != 0;
-    if (!has_rumble && event.motor_right == 0 && event.motor_left == 0) {
+    if (!force && !has_rumble && event.motor_right == 0 && event.motor_left == 0) {
         return false;
     }
     return true;
@@ -1992,10 +2004,18 @@ void companion_note_feedback_trace_report(
     uint8_t stage,
     uint8_t const *report,
     uint16_t len,
-    uint8_t decision
+    uint8_t decision,
+    uint8_t detail0,
+    uint8_t detail1,
+    uint8_t detail2,
+    uint8_t detail3
 ) {
     FeedbackTraceEvent event{};
-    if (!decode_feedback_trace_report(report, len, event)) {
+    const bool force_trace = (
+        stage == CompanionFeedbackTraceBridgeOut
+        || stage == CompanionFeedbackTraceDrop
+    ) && ((detail3 & static_cast<uint8_t>(~0x04u)) != 0);
+    if (!decode_feedback_trace_report(report, len, event, force_trace)) {
         return;
     }
 
@@ -2004,6 +2024,10 @@ void companion_note_feedback_trace_report(
     event.timestamp_ms = to_ms_since_boot(get_absolute_time());
     event.stage = stage;
     event.decision = decision;
+    event.detail0 = detail0;
+    event.detail1 = detail1;
+    event.detail2 = detail2;
+    event.detail3 = detail3;
     append_feedback_trace_event(event);
     critical_section_exit(&companion_report_cs);
 }

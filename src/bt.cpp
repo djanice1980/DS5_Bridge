@@ -148,12 +148,36 @@ enum BtAudioDebugKind : uint8_t {
     BtAudioDebugControlSuppressed = 4,
 };
 
+enum OutputTraceFlag : uint8_t {
+    OutputTraceStatePending = 0x01,
+    OutputTraceAudioProtected = 0x02,
+    OutputTraceAudioRecent = 0x04,
+    OutputTraceHostAudioActive = 0x08,
+    OutputTraceUsbSpeakerActive = 0x10,
+    OutputTraceClassicRumbleActive = 0x20,
+    OutputTraceSelectedAudio = 0x40,
+    OutputTraceSelectedNonAudio = 0x80,
+};
+
+enum OutputTraceTransform : uint8_t {
+    OutputTraceTransformStrippedZeroRumble = 0x01,
+    OutputTraceTransformSplitState = 0x02,
+    OutputTraceTransformAudioProtected = 0x04,
+    OutputTraceTransformClassicRumble = 0x08,
+    OutputTraceTransformFeedbackState = 0x10,
+    OutputTraceTransformState = 0x20,
+};
+
 struct output_packet {
     vector<uint8_t> data;
     uint32_t enqueue_time_us;
     uint8_t packet_class;
     uint8_t report_id;
     uint8_t reason;
+    uint8_t trace_detail0;
+    uint8_t trace_detail1;
+    uint8_t trace_detail2;
+    uint8_t trace_detail3;
 };
 
 struct control_packet {
@@ -200,6 +224,7 @@ static bool headset_audio_send_window_closed_locked(uint32_t now);
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control);
 static void init_state_report(uint8_t *report);
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
+static bool audio_output_route_protected();
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
@@ -323,6 +348,67 @@ static uint32_t packet_age_us(uint32_t now, uint32_t enqueue_time_us) {
     return static_cast<uint32_t>(now - enqueue_time_us);
 }
 
+static uint8_t clamp_output_trace_u8(uint32_t value) {
+    return static_cast<uint8_t>(value > 255 ? 255 : value);
+}
+
+static uint8_t output_trace_route_flags_locked() {
+    uint8_t flags = state_pending ? OutputTraceStatePending : 0;
+    if (audio_output_route_protected()) {
+        flags |= OutputTraceAudioProtected;
+    }
+    if (audio_recent()) {
+        flags |= OutputTraceAudioRecent;
+    }
+    if (audio_host_encoded_active()) {
+        flags |= OutputTraceHostAudioActive;
+    }
+    if (usb_speaker_streaming_active()) {
+        flags |= OutputTraceUsbSpeakerActive;
+    }
+    if (classic_rumble_output_active) {
+        flags |= OutputTraceClassicRumbleActive;
+    }
+    return flags;
+}
+
+static uint8_t output_trace_selected_flag(uint8_t packet_class) {
+    return packet_class == OutputPacketAudio ? OutputTraceSelectedAudio : OutputTraceSelectedNonAudio;
+}
+
+static void set_output_trace_details_locked(
+    output_packet &packet,
+    uint32_t now,
+    uint8_t critical_depth,
+    uint8_t audio_depth,
+    uint8_t route_flags
+) {
+    packet.trace_detail0 = critical_depth;
+    packet.trace_detail1 = audio_depth;
+    packet.trace_detail2 = route_flags | output_trace_selected_flag(packet.packet_class);
+    packet.trace_detail3 = clamp_output_trace_u8(packet_age_us(now, packet.enqueue_time_us) / 1000);
+}
+
+static void output_trace_queue_details_locked(
+    uint8_t &critical_depth,
+    uint8_t &audio_depth,
+    uint8_t &route_flags
+) {
+    critical_depth = clamp_output_trace_u8(static_cast<uint32_t>(critical_queue.size()));
+    audio_depth = clamp_output_trace_u8(static_cast<uint32_t>(audio_queue.size()));
+    route_flags = output_trace_route_flags_locked();
+}
+
+static void output_trace_queue_details(
+    uint8_t &critical_depth,
+    uint8_t &audio_depth,
+    uint8_t &route_flags
+) {
+    critical_section_enter_blocking(&queue_lock);
+    output_trace_queue_details_locked(critical_depth, audio_depth, route_flags);
+    critical_section_exit(&queue_lock);
+}
+
 void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
 }
@@ -371,27 +457,11 @@ bool bt_apply_classic_rumble_gain_payload(uint8_t *payload, uint16_t len) {
         return false;
     }
 
-    // Match hid-playstation's modern compatible-rumble mode: haptics select
-    // plus v2 compatible vibration, not legacy and v2 at the same time.
-    if (len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
-            (flag0 | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT)
-            & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION)
-        );
-        payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(
-            flag2 | DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2
-        );
-    } else {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = flag0 | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT;
-    }
-
     const uint8_t right = payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
     const uint8_t left = payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
     payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
     payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
-    return payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] != flag0
-        || (len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET && payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] != flag2)
-        || payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
+    return payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
         || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
 }
 
@@ -429,8 +499,10 @@ static bool normalize_classic_rumble_stop_if_needed(uint8_t *data, uint16_t len)
     }
 
     uint8_t *payload = data + 3;
-    payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT;
-    payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+    );
+    payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = 0;
     return true;
 }
 
@@ -464,8 +536,9 @@ void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
-    report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT;
-    report[3 + OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+    );
     report[3 + OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
     report[3 + OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
     classic_rumble_output_active = (
@@ -1242,6 +1315,11 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         return false;
     }
 
+    uint8_t trace_critical_depth = 0;
+    uint8_t trace_audio_depth = 0;
+    uint8_t trace_route_flags = 0;
+    output_trace_queue_details_locked(trace_critical_depth, trace_audio_depth, trace_route_flags);
+
     const bool audio_available = !audio_queue.empty();
     const uint32_t audio_age_us = audio_available
         ? packet_age_us(now, audio_queue.front().enqueue_time_us)
@@ -1292,6 +1370,13 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         return false;
     }
 
+    set_output_trace_details_locked(
+        packet,
+        now,
+        trace_critical_depth,
+        trace_audio_depth,
+        trace_route_flags
+    );
     note_output_packet_sent(packet, now);
     update_queue_depth_counters_locked();
     return true;
@@ -1530,7 +1615,11 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     CompanionFeedbackTraceBt,
                     next_packet.data.data() + 1,
                     static_cast<uint16_t>(next_packet.data.size() - 1),
-                    next_packet.reason
+                    next_packet.reason,
+                    next_packet.trace_detail0,
+                    next_packet.trace_detail1,
+                    next_packet.trace_detail2,
+                    next_packet.trace_detail3
                 );
 #endif
             }
@@ -2156,8 +2245,21 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
     }
 
 #ifdef ENABLE_COMPANION
+    uint8_t trace_critical_depth = 0;
+    uint8_t trace_audio_depth = 0;
+    uint8_t trace_route_flags = 0;
+    output_trace_queue_details(trace_critical_depth, trace_audio_depth, trace_route_flags);
     companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, state_data, sizeof(state_data), OutputReasonStateOnly);
-    companion_note_feedback_trace_report(CompanionFeedbackTraceBridgeOut, state_data, sizeof(state_data), OutputReasonStateOnly);
+    companion_note_feedback_trace_report(
+        CompanionFeedbackTraceBridgeOut,
+        state_data,
+        sizeof(state_data),
+        OutputReasonStateOnly,
+        trace_critical_depth,
+        trace_audio_depth,
+        trace_route_flags,
+        OutputTraceTransformSplitState | OutputTraceTransformState
+    );
 #endif
     return enqueue_feedback_state_output(state_data, sizeof(state_data), OutputReasonStateOnly);
 }
@@ -2303,8 +2405,21 @@ static bool classified_critical_output_is_duplicate(uint8_t *data, uint16_t len)
     ) {
         output_counters.normal_0x31_duplicate_drop_count++;
 #ifdef ENABLE_COMPANION
+        uint8_t trace_critical_depth = 0;
+        uint8_t trace_audio_depth = 0;
+        uint8_t trace_route_flags = 0;
+        output_trace_queue_details(trace_critical_depth, trace_audio_depth, trace_route_flags);
         companion_note_trigger_trace_report(CompanionTriggerTraceDrop, data, len, OutputReasonCriticalDirect);
-        companion_note_feedback_trace_report(CompanionFeedbackTraceDrop, data, len, OutputReasonCriticalDirect);
+        companion_note_feedback_trace_report(
+            CompanionFeedbackTraceDrop,
+            data,
+            len,
+            OutputReasonCriticalDirect,
+            trace_critical_depth,
+            trace_audio_depth,
+            trace_route_flags,
+            output_report_is_classic_rumble_transition(data, len) ? OutputTraceTransformClassicRumble : 0
+        );
 #endif
         return true;
     }
@@ -2339,16 +2454,57 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     bt_sanitize_host_mic_ownership(data, len);
     apply_classic_rumble_gain(data, len);
     normalize_classic_rumble_stop_if_needed(data, len);
+    uint8_t trace_critical_depth = 0;
+    uint8_t trace_audio_depth = 0;
+    uint8_t trace_route_flags = 0;
+    output_trace_queue_details(trace_critical_depth, trace_audio_depth, trace_route_flags);
 #ifdef ENABLE_COMPANION
     companion_note_trigger_trace_report(CompanionTriggerTraceBridgeIn, data, len, 0);
-    companion_note_feedback_trace_report(CompanionFeedbackTraceBridgeIn, data, len, 0);
+    companion_note_feedback_trace_report(
+        CompanionFeedbackTraceBridgeIn,
+        data,
+        len,
+        0,
+        trace_critical_depth,
+        trace_audio_depth,
+        trace_route_flags,
+        0
+    );
 #endif
-    strip_redundant_zero_rumble_during_audio(data, len);
-    split_state_from_mixed_output(data, len);
+    const bool stripped_zero_rumble = strip_redundant_zero_rumble_during_audio(data, len);
+    const bool split_state = split_state_from_mixed_output(data, len);
     const uint8_t reason = classify_output_report(data, len);
+    uint8_t trace_transform_flags = 0;
+    if (stripped_zero_rumble) {
+        trace_transform_flags |= OutputTraceTransformStrippedZeroRumble;
+    }
+    if (split_state) {
+        trace_transform_flags |= OutputTraceTransformSplitState;
+    }
+    if (audio_output_route_protected()) {
+        trace_transform_flags |= OutputTraceTransformAudioProtected;
+    }
+    if (output_report_is_classic_rumble_transition(data, len)) {
+        trace_transform_flags |= OutputTraceTransformClassicRumble;
+    }
+    if (output_report_has_feedback_state_flags(data, len)) {
+        trace_transform_flags |= OutputTraceTransformFeedbackState;
+    }
+    if (output_report_has_state_flags(data, len)) {
+        trace_transform_flags |= OutputTraceTransformState;
+    }
 #ifdef ENABLE_COMPANION
     companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, data, len, reason);
-    companion_note_feedback_trace_report(CompanionFeedbackTraceBridgeOut, data, len, reason);
+    companion_note_feedback_trace_report(
+        CompanionFeedbackTraceBridgeOut,
+        data,
+        len,
+        reason,
+        trace_critical_depth,
+        trace_audio_depth,
+        trace_route_flags,
+        trace_transform_flags
+    );
 #endif
     if (reason == OutputReasonStateNoop) {
         return true;
@@ -2375,16 +2531,27 @@ bool bt_write_audio_stream(uint8_t *data, uint16_t len) {
     }
 
     bool should_request_send = false;
+    uint8_t trace_critical_depth = 0;
+    uint8_t trace_audio_depth = 0;
+    uint8_t trace_route_flags = 0;
     critical_section_enter_blocking(&queue_lock);
     should_request_send = !output_pending_locked();
     while (audio_queue.size() >= AUDIO_SEND_QUEUE_MAX_DEPTH) {
 #ifdef ENABLE_COMPANION
         if (!audio_queue.front().data.empty()) {
+            uint8_t drop_critical_depth = 0;
+            uint8_t drop_audio_depth = 0;
+            uint8_t drop_route_flags = 0;
+            output_trace_queue_details_locked(drop_critical_depth, drop_audio_depth, drop_route_flags);
             companion_note_feedback_trace_report(
                 CompanionFeedbackTraceAudioDrop,
                 audio_queue.front().data.data() + 1,
                 static_cast<uint16_t>(audio_queue.front().data.size() - 1),
-                OutputReasonAudioStream
+                OutputReasonAudioStream,
+                drop_critical_depth,
+                drop_audio_depth,
+                drop_route_flags | OutputTraceSelectedAudio,
+                clamp_output_trace_u8(packet_age_us(time_us_32(), audio_queue.front().enqueue_time_us) / 1000)
             );
         }
 #endif
@@ -2394,13 +2561,18 @@ bool bt_write_audio_stream(uint8_t *data, uint16_t len) {
     audio_queue.push(std::move(packet));
     output_counters.audio_0x36_enqueued_count++;
     update_queue_depth_counters_locked();
+    output_trace_queue_details_locked(trace_critical_depth, trace_audio_depth, trace_route_flags);
     critical_section_exit(&queue_lock);
 #ifdef ENABLE_COMPANION
     companion_note_feedback_trace_report(
         CompanionFeedbackTraceAudioEnqueue,
         data,
         len,
-        OutputReasonAudioStream
+        OutputReasonAudioStream,
+        trace_critical_depth,
+        trace_audio_depth,
+        trace_route_flags,
+        0
     );
 #endif
     request_can_send_if_needed(should_request_send);

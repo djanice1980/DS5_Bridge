@@ -546,6 +546,74 @@ function feedbackTraceStageLabel(stage: number): string {
   }
 }
 
+function outputTraceRouteLabels(flags: number): string {
+  const labels: string[] = [];
+  if ((flags & 0x01) !== 0) {
+    labels.push('state-pending');
+  }
+  if ((flags & 0x02) !== 0) {
+    labels.push('protected');
+  }
+  if ((flags & 0x04) !== 0) {
+    labels.push('audio-recent');
+  }
+  if ((flags & 0x08) !== 0) {
+    labels.push('host-audio');
+  }
+  if ((flags & 0x10) !== 0) {
+    labels.push('usb-speaker');
+  }
+  if ((flags & 0x20) !== 0) {
+    labels.push('classic-active');
+  }
+  if ((flags & 0x40) !== 0) {
+    labels.push('send-audio');
+  }
+  if ((flags & 0x80) !== 0) {
+    labels.push('send-output');
+  }
+  return labels.length === 0 ? '-' : labels.join(',');
+}
+
+function outputTraceTransformLabels(flags: number): string {
+  const labels: string[] = [];
+  if ((flags & 0x01) !== 0) {
+    labels.push('strip-zero-rumble');
+  }
+  if ((flags & 0x02) !== 0) {
+    labels.push('split-state');
+  }
+  if ((flags & 0x04) !== 0) {
+    labels.push('protected');
+  }
+  if ((flags & 0x08) !== 0) {
+    labels.push('classic-rumble');
+  }
+  if ((flags & 0x10) !== 0) {
+    labels.push('feedback-state');
+  }
+  if ((flags & 0x20) !== 0) {
+    labels.push('state');
+  }
+  return labels.length === 0 ? '-' : labels.join(',');
+}
+
+function feedbackTraceDetailFields(event: FeedbackTraceEventPayload): string[] {
+  const fields = [`detail=${event.detail0}/${event.detail1}/${event.detail2}/${event.detail3}`];
+  if (![2, 3, 4, 5, 8, 9].includes(event.stage)) {
+    return fields;
+  }
+
+  fields.push(`q=C${event.detail0}/A${event.detail1}`);
+  fields.push(`route=${outputTraceRouteLabels(event.detail2)}`);
+  if (event.stage === 3 || event.stage === 5) {
+    fields.push(`xf=${outputTraceTransformLabels(event.detail3)}`);
+  } else if (event.stage === 4 || event.stage === 9) {
+    fields.push(`age=${event.detail3}ms`);
+  }
+  return fields;
+}
+
 function formatFeedbackTraceEvent(event: FeedbackTraceEventPayload): string {
   return [
     `#${event.sequence}`,
@@ -558,7 +626,7 @@ function formatFeedbackTraceEvent(event: FeedbackTraceEventPayload): string {
     `motors=R${hexByte(event.motorRight)} L${hexByte(event.motorLeft)}`,
     `haptic=peak${event.hapticPeak} mean${event.hapticMean} nz${event.hapticNonZero}`,
     `decision=${outputDecisionLabel(event.decision)}`,
-    `detail=${event.detail0}/${event.detail1}/${event.detail2}/${event.detail3}`
+    ...feedbackTraceDetailFields(event)
   ].join(' ');
 }
 
