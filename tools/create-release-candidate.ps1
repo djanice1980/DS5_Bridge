@@ -38,6 +38,13 @@ function Invoke-Step([string] $Name, [scriptblock] $Action) {
   & $Action
 }
 
+function Invoke-Native([string] $Name, [scriptblock] $Action) {
+  & $Action
+  if ($LASTEXITCODE -ne 0) {
+    throw "$Name failed with exit code $LASTEXITCODE"
+  }
+}
+
 function Copy-Directory([string] $Source, [string] $Destination) {
   if (Test-Path -LiteralPath $Destination) {
     Remove-Item -LiteralPath $Destination -Recurse -Force
@@ -132,10 +139,29 @@ if ($ValidateOnly) {
 $buildStartedAt = Get-Date
 
 if (-not $SkipBuild) {
+  Invoke-Step 'Configure firmware release build' {
+    Push-Location $repoRoot
+    try {
+      Invoke-Native 'Firmware configure' {
+        cmake -S $repoRoot -B $firmwareBuildDir `
+          "-DCMAKE_BUILD_TYPE=$Configuration" `
+          "-DENABLE_COMPANION=ON" `
+          "-DENABLE_DEBUG_LOGS=OFF" `
+          "-DENABLE_AUDIO_DEBUG_REPORTS=OFF" `
+          "-DENABLE_TRIGGER_TRACE_REPORTS=OFF" `
+          "-DENABLE_FEEDBACK_TRACE_REPORTS=OFF"
+      }
+    } finally {
+      Pop-Location
+    }
+  }
+
   Invoke-Step 'Build firmware UF2' {
     Push-Location $repoRoot
     try {
-      cmake --build $firmwareBuildDir --target ds5-bridge --config $Configuration
+      Invoke-Native 'Firmware build' {
+        cmake --build $firmwareBuildDir --target ds5-bridge --config $Configuration
+      }
     } finally {
       Pop-Location
     }
@@ -144,7 +170,9 @@ if (-not $SkipBuild) {
   Invoke-Step 'Build portable companion package' {
     Push-Location $companionRoot
     try {
-      npm run package:win
+      Invoke-Native 'Portable companion package' {
+        npm run package:win
+      }
     } finally {
       Pop-Location
     }
@@ -153,7 +181,9 @@ if (-not $SkipBuild) {
   Invoke-Step 'Build companion installer' {
     Push-Location $companionRoot
     try {
-      npm run installer:win
+      Invoke-Native 'Companion installer' {
+        npm run installer:win
+      }
     } finally {
       Pop-Location
     }
