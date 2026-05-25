@@ -1031,6 +1031,63 @@ describe('BridgeService', () => {
     expect(snapshot.settings.adaptiveTriggersEnabled).toBe(false);
   });
 
+  it('re-enables haptics when a positive gain is applied from an off state', async () => {
+    const service = serviceFixture({
+      hapticsEnabled: false,
+      hapticsGainPercent: 0
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x85 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setHapticsGain(100);
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-1)?.[9]).toBe(100);
+    expect(snapshot.settings.hapticsEnabled).toBe(true);
+    expect(snapshot.settings.hapticsGainPercent).toBe(100);
+  });
+
+  it('sends a positive haptics gain when moving up from an enabled zero state', async () => {
+    const service = serviceFixture({
+      hapticsEnabled: true,
+      hapticsGainPercent: 0
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x85 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setHapticsGain(100);
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-1)?.[9]).toBe(100);
+    expect(snapshot.settings.hapticsEnabled).toBe(true);
+    expect(snapshot.settings.hapticsGainPercent).toBe(100);
+  });
+
+  it('preserves an explicit zero haptics gain when toggling the feature on', async () => {
+    const service = serviceFixture({
+      hapticsEnabled: false,
+      hapticsGainPercent: 0
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x85 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setHapticsEnabled(true);
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-1)?.[9]).toBe(0);
+    expect(snapshot.settings.hapticsEnabled).toBe(true);
+    expect(snapshot.settings.hapticsGainPercent).toBe(0);
+  });
+
   it('applies quiet preset as persisted app settings plus zeroed runtime features', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();

@@ -1197,16 +1197,27 @@ export class BridgeService extends EventEmitter {
 
   async setHapticsGain(percent: number): Promise<BridgeSnapshot> {
     const value = Math.max(0, Math.min(200, Math.round(percent)));
-    const nextSettings = { ...this.settingsStore.get(), hapticsGainPercent: value };
+    const currentSettings = this.settingsStore.get();
+    const enableFromPositiveGain = value > 0 && !currentSettings.hapticsEnabled;
+    const nextSettings = {
+      ...currentSettings,
+      hapticsGainPercent: value,
+      hapticsEnabled: enableFromPositiveGain ? true : currentSettings.hapticsEnabled
+    };
     const effectiveValue = this.effectiveHapticsGain(nextSettings);
     await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_GAIN, effectiveValue, customSettingUpdate({
-      hapticsGainPercent: value
+      hapticsGainPercent: value,
+      ...(enableFromPositiveGain ? { hapticsEnabled: true } : {})
     }));
     return this.getSnapshot();
   }
 
   async setHapticsEnabled(enabled: boolean): Promise<BridgeSnapshot> {
-    const settings = { ...this.settingsStore.get(), hapticsEnabled: enabled };
+    const currentSettings = this.settingsStore.get();
+    const settings = {
+      ...currentSettings,
+      hapticsEnabled: enabled
+    };
     await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_GAIN, this.effectiveHapticsGain(settings), customSettingUpdate({
       hapticsEnabled: enabled
     }));
