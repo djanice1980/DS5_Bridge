@@ -74,6 +74,7 @@
 #define HOST_MIC_USB_PACKET_BYTES (48 * HOST_MIC_USB_CHANNELS * sizeof(int16_t))
 #define HOST_MIC_USB_PREFILL_BYTES (10 * HOST_MIC_USB_PACKET_BYTES)
 #define HOST_MIC_USB_FILL_MAX_CHUNKS 6
+#define HOST_MIC_USB_FILL_MAX_CHUNKS_WITH_RAW_PCM 1
 #define HOST_MIC_CORE1_BURST_LIMIT 2
 #define HOST_MIC_PLAYOUT_START_DEPTH 3
 #define HOST_MIC_OPUS_FRAME_INTERVAL_US 10000
@@ -2022,8 +2023,11 @@ static void process_mic_usb_output() {
         mic_usb_playout_started = true;
     }
 
+    const uint8_t max_chunks = host_raw_pcm_return_active()
+        ? HOST_MIC_USB_FILL_MAX_CHUNKS_WITH_RAW_PCM
+        : HOST_MIC_USB_FILL_MAX_CHUNKS;
     uint8_t chunks_written = 0;
-    while (chunks_written < HOST_MIC_USB_FILL_MAX_CHUNKS) {
+    while (chunks_written < max_chunks) {
         const uint16_t fifo_level = ep_in_fifo != nullptr ? tu_fifo_count(ep_in_fifo) : 0;
         if (fifo_level >= HOST_MIC_USB_PREFILL_BYTES) {
             return;
@@ -2147,10 +2151,10 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
 
 void audio_loop() {
     const uint32_t now = time_us_32();
-    process_mic_usb_output();
     audio_host_poll();
 
     if (!bt_is_controller_connected()) {
+        clear_mic_queues();
         discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         if (speaker_route_active || last_audio_us != 0) {
             audio_handle_controller_disconnect();
@@ -2162,6 +2166,7 @@ void audio_loop() {
     }
 
     if (quiet_mode_enabled) {
+        clear_mic_queues();
         discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         if (speaker_route_active) {
             bt_set_speaker_output_enabled(false);
@@ -2174,12 +2179,14 @@ void audio_loop() {
     if (host_runtime.requested && host_start_grace_active(time_us_32())) {
         (void)prime_host_audio_route_if_needed();
         process_host_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        process_mic_usb_output();
         return;
     }
 
     if (host_runtime.mode == AudioRuntimeHostEncodedActive) {
         (void)prime_host_audio_route_if_needed();
         process_host_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        process_mic_usb_output();
         return;
     }
 
