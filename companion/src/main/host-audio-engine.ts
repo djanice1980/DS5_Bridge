@@ -12,6 +12,7 @@ export type HostAudioFramePayload = {
 export type HostAudioStartFailureReason =
   | 'device-in-use'
   | 'device-invalidated'
+  | 'unsupported-format'
   | 'start-timeout'
   | 'helper-exit';
 
@@ -283,6 +284,9 @@ function parseCaptureUnavailableReason(line: string): HostAudioStartFailureReaso
   if (line.includes('reason=device-invalidated')) {
     return 'device-invalidated';
   }
+  if (line.includes('reason=unsupported-format')) {
+    return 'unsupported-format';
+  }
   return 'helper-exit';
 }
 
@@ -292,6 +296,8 @@ function hostAudioStartFailureMessage(reason: HostAudioStartFailureReason): stri
       return 'DualSense audio endpoint is in exclusive use by another application.';
     case 'device-invalidated':
       return 'DualSense audio endpoint changed while host audio was starting.';
+    case 'unsupported-format':
+      return 'DualSense raw PCM capture endpoint format is not usable by Windows. Re-enumerate or clean stale DualSense audio devices.';
     case 'start-timeout':
       return `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`;
     case 'helper-exit':

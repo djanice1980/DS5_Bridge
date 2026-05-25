@@ -48,6 +48,7 @@ static class AudioConstants
     public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
     public const int AudclntDeviceInvalidated = unchecked((int)0x88890004);
+    public const int AudclntUnsupportedFormat = unchecked((int)0x88890008);
     public const int AudclntDeviceInUse = unchecked((int)0x8889000A);
 }
 
@@ -223,28 +224,37 @@ sealed class HostAudioHelper : IDisposable
         }
 
         TryOpenCompanionHid();
-        var device = options.Source == HostAudioSource.RawPcmCapture
-            ? EndpointManager.SelectCaptureEndpoint(enumerator, options.DeviceName)
-            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
-        capture = options.Source == HostAudioSource.RawPcmCapture
-            ? new WasapiCapture(device, false, AudioConstants.WasapiBufferMilliseconds)
-            : new WasapiLoopbackCapture(device);
-        SetWasapiBufferMilliseconds(capture, AudioConstants.WasapiBufferMilliseconds);
-        capture.DataAvailable += OnDataAvailable;
-        capture.RecordingStopped += (_, eventArgs) =>
-        {
-            WriteWasapiStopFailure(eventArgs.Exception);
-            stopped.Set();
-        };
-
-        Console.Error.WriteLine(
-            $"status: host-capture-format source={options.SourceArgument} device='{device.FriendlyName}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding}");
+        string deviceName = options.DeviceName ?? options.SourceArgument;
         try
         {
+            var device = options.Source == HostAudioSource.RawPcmCapture
+                ? EndpointManager.SelectCaptureEndpoint(enumerator, options.DeviceName)
+                : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
+            deviceName = device.FriendlyName;
+            capture = options.Source == HostAudioSource.RawPcmCapture
+                ? new WasapiCapture(device, false, AudioConstants.WasapiBufferMilliseconds)
+                : new WasapiLoopbackCapture(device);
+            SetWasapiBufferMilliseconds(capture, AudioConstants.WasapiBufferMilliseconds);
+            capture.DataAvailable += OnDataAvailable;
+            capture.RecordingStopped += (_, eventArgs) =>
+            {
+                WriteWasapiStopFailure(eventArgs.Exception);
+                stopped.Set();
+            };
+
+            Console.Error.WriteLine(
+                $"status: host-capture-format source={options.SourceArgument} device='{deviceName}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding}");
             capture.StartRecording();
         }
-        catch (COMException error) when (WriteWasapiStartFailure(error, device.FriendlyName))
+        catch (COMException error) when (WriteWasapiStartFailure(error, deviceName))
         {
+            stopped.Set();
+            return;
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(
+                $"status: capture-unavailable reason=helper-exit error='{EscapeStatusValue(error.GetType().Name + ": " + error.Message)}' device='{EscapeStatusValue(deviceName)}'");
             stopped.Set();
             return;
         }
@@ -349,6 +359,7 @@ sealed class HostAudioHelper : IDisposable
         {
             AudioConstants.AudclntDeviceInUse => "device-in-use",
             AudioConstants.AudclntDeviceInvalidated => "device-invalidated",
+            AudioConstants.AudclntUnsupportedFormat => "unsupported-format",
             _ => null
         };
     }
@@ -356,6 +367,11 @@ sealed class HostAudioHelper : IDisposable
     private static string FormatHResult(int hresult)
     {
         return $"0x{unchecked((uint)hresult):X8}";
+    }
+
+    private static string EscapeStatusValue(string value)
+    {
+        return value.Replace("\\", "\\\\").Replace("'", "\\'");
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs eventArgs)

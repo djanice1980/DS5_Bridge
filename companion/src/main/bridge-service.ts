@@ -203,6 +203,8 @@ function hostAudioCaptureIssueMessage(
       return `DualSense audio endpoint is in exclusive use. Host Encoding will retry in ${retrySeconds}s; disable Host Encoding for games that require exclusive DualSense audio.`;
     case 'device-invalidated':
       return `DualSense audio endpoint changed while Host Encoding was starting. Host Encoding will retry in ${retrySeconds}s.`;
+    case 'unsupported-format':
+      return `DualSense raw PCM capture endpoint format is not usable by Windows. Re-enumerate or clean stale DualSense audio devices, then Host Encoding will retry in ${retrySeconds}s.`;
     case 'start-timeout':
     case 'helper-exit':
       return `${fallbackMessage} Host Encoding will retry in ${retrySeconds}s.`;
@@ -210,7 +212,7 @@ function hostAudioCaptureIssueMessage(
 }
 
 function shouldSurfaceHostAudioCaptureIssue(reason: HostAudioStartFailureReason): boolean {
-  return reason === 'device-in-use' || reason === 'device-invalidated';
+  return reason === 'device-in-use' || reason === 'device-invalidated' || reason === 'unsupported-format';
 }
 
 function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {

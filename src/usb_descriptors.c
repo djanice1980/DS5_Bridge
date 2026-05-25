@@ -161,7 +161,7 @@ uint8_t descriptor_configuration[] = {
     0x03, // bDescriptorSubtype: Output Terminal
     0x03, // bTerminalID: 3
     0x01, 0x03, // wTerminalType: Speaker (0x0301)
-    0x04, // bAssocTerminal: 4 (paired with mic input)
+    0x00, // bAssocTerminal: 0 (raw return is not a headset mic pair)
     0x02, // bSourceID: 2 (Feature Unit)
     0x00, // iTerminal: 0
 
@@ -170,8 +170,8 @@ uint8_t descriptor_configuration[] = {
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: Input Terminal
     0x04, // bTerminalID: 4
-    0x02, 0x04, // wTerminalType: Headset (0x0402)
-    0x03, // bAssocTerminal: 3 (paired with speaker)
+    0x03, 0x06, // wTerminalType: Line Connector (0x0603)
+    0x00, // bAssocTerminal: 0
     0x04, // bNrChannels: 4
     0x33, 0x00, // wChannelConfig: L/R Front + L/R Surround (0x0033)
     0x00, // iChannelNames: 0
