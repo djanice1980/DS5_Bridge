@@ -48,6 +48,7 @@ import {
 import kofiBadgeUrl from '../../../assets/brand/support_me_on_kofi_badge_dark.png';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
+import remappingEdgeLayoutImage from '../../../assets/controllers/dualsense-edge-remapping-layout.svg';
 import remappingLayoutImage from '../../../assets/controllers/dualsense-remapping-layout.svg';
 import circleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Circle.svg';
 import createGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Create.svg';
@@ -93,6 +94,12 @@ type ControllerProfileDialogMode = 'save' | 'rename' | 'delete';
 type RemapCalloutLayout = {
   top: number;
   points: string;
+};
+type EdgeRemapControlLayout = {
+  left: number;
+  top: number;
+  anchor: 'top' | 'bottom';
+  linePoints: string;
 };
 type LightbarPaletteCell = {
   color: string;
@@ -248,8 +255,8 @@ const REMAP_BUTTONS: Record<RemapButtonId, RemapButtonDefinition> = {
   lfn: { id: 'lfn', label: 'Left Function Button', textGlyph: 'LFN' },
   rfn: { id: 'rfn', label: 'Right Function Button', textGlyph: 'RFN' }
 };
-const REMAP_LEFT_BUTTON_IDS: StandardRemapButtonId[] = ['l2', 'l1', 'create', 'dpad-up', 'dpad-left', 'dpad-down', 'dpad-right', 'l3'];
-const REMAP_RIGHT_BUTTON_IDS: StandardRemapButtonId[] = ['r2', 'r1', 'options', 'triangle', 'circle', 'cross', 'square', 'r3'];
+const REMAP_LEFT_BUTTON_IDS: StandardRemapButtonId[] = ['l2', 'l1', 'create', 'dpad-up', 'dpad-right', 'dpad-down', 'dpad-left', 'l3'];
+const REMAP_RIGHT_BUTTON_IDS: StandardRemapButtonId[] = ['r2', 'r1', 'options', 'triangle', 'circle', 'cross', 'r3', 'square'];
 const REMAP_STANDARD_BUTTON_IDS: StandardRemapButtonId[] = [
   ...REMAP_LEFT_BUTTON_IDS,
   ...REMAP_RIGHT_BUTTON_IDS
@@ -272,16 +279,14 @@ const REMAP_STICK_CLICK_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> =
   REMAP_BUTTONS[id].label,
   id
 ]);
-const REMAP_SVG_VIEWBOX_WIDTH = 597.47;
-const REMAP_SVG_VIEWBOX_HEIGHT = 429.39;
 const REMAP_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]>> = {
   l2: [[2.4, 3.17], [117.91, 3.17], [171.1, 93.49]],
   l1: [[2.4, 63.71], [129.99, 63.71], [161.13, 118.36]],
   create: [[2.4, 124.24], [110.86, 124.24], [134, 163], [186.65, 162.89]],
   'dpad-up': [[2.4, 184.78], [146.83, 184.78]],
-  'dpad-right': [[2.4, 245.32], [126.31, 245.32], [138.09, 221.25]],
+  'dpad-right': [[2.4, 366.39], [106.55, 366.39], [189.13, 221.85]],
   'dpad-down': [[2.4, 305.86], [124.63, 305.86], [162.42, 241.39]],
-  'dpad-left': [[2.4, 366.39], [106.55, 366.39], [189.13, 221.85]],
+  'dpad-left': [[2.4, 245.32], [126.31, 245.32], [138.09, 221.25]],
   l3: [[2.4, 426.93], [143.77, 426.93], [230.4, 275.47]],
   r2: [[595.34, 3.17], [480.78, 3.17], [427.95, 93.94]],
   r1: [[595.34, 63.71], [468.92, 63.71], [437.92, 117.79]],
@@ -289,17 +294,35 @@ const REMAP_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]
   triangle: [[595.34, 184.78], [453.97, 184.78]],
   circle: [[595.34, 245.32], [486.88, 245.32], [473.71, 222.09]],
   cross: [[595.34, 305.86], [472.22, 305.86], [438.56, 248.84]],
-  square: [[595.34, 366.39], [485.42, 366.39], [405.35, 223.46]],
-  r3: [[595.34, 426.93], [453.97, 426.93], [369.45, 275.47]]
+  square: [[595.34, 426.93], [453.97, 426.93], [369.45, 275.47]],
+  r3: [[595.34, 366.39], [485.42, 366.39], [405.35, 223.46]]
+};
+const REMAP_EDGE_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]>> = {
+  l2: [[0.5, 0.5], [116.01, 0.5], [162.08, 90.82]],
+  l1: [[0.5, 61.04], [128.09, 61.04], [162.08, 112.52]],
+  create: [[0.5, 121.57], [108.96, 121.57], [132.1, 160.28], [183.55, 160.28]],
+  'dpad-up': [[0.5, 182.11], [141.23, 182.11]],
+  'dpad-right': [[0.5, 363.72], [104.65, 363.72], [188.5, 216.96]],
+  'dpad-down': [[0.5, 303.19], [122.73, 303.19], [159.9, 239.79]],
+  'dpad-left': [[0.5, 242.65], [124.41, 242.65], [137.98, 216.32]],
+  l3: [[0.5, 424.26], [141.87, 424.26], [226.76, 271.06]],
+  r2: [[593.44, 0.5], [478.88, 0.5], [439.58, 90.82]],
+  r1: [[593.44, 61.04], [467.02, 61.04], [439.58, 112.52]],
+  options: [[593.44, 121.57], [485.6, 121.57], [462.38, 160.22], [414.99, 160.22]],
+  triangle: [[593.44, 182.11], [455.88, 182.11]],
+  circle: [[593.44, 242.65], [484.98, 242.65], [470.67, 217.4]],
+  cross: [[593.44, 303.19], [470.32, 303.19], [436.66, 246.17]],
+  square: [[593.44, 363.72], [498.9, 363.72], [406.86, 218.55]],
+  r3: [[593.44, 424.26], [452.07, 424.26], [370.93, 271.66]]
 };
 const REMAP_CALLOUT_Y: Record<StandardRemapButtonId, number> = {
   l2: 3.17,
   l1: 63.71,
   create: 124.24,
   'dpad-up': 184.78,
-  'dpad-right': 245.32,
+  'dpad-right': 366.39,
   'dpad-down': 305.86,
-  'dpad-left': 366.39,
+  'dpad-left': 245.32,
   l3: 426.93,
   r2: 3.17,
   r1: 63.71,
@@ -307,8 +330,52 @@ const REMAP_CALLOUT_Y: Record<StandardRemapButtonId, number> = {
   triangle: 184.78,
   circle: 245.32,
   cross: 305.86,
-  square: 366.39,
-  r3: 426.93
+  square: 426.93,
+  r3: 366.39
+};
+const REMAP_EDGE_CALLOUT_Y: Record<StandardRemapButtonId, number> = {
+  l2: 0.5,
+  l1: 61.04,
+  create: 121.57,
+  'dpad-up': 182.11,
+  'dpad-right': 363.72,
+  'dpad-down': 303.19,
+  'dpad-left': 242.65,
+  l3: 424.26,
+  r2: 0.5,
+  r1: 61.04,
+  options: 121.57,
+  triangle: 182.11,
+  circle: 242.65,
+  cross: 303.19,
+  square: 363.72,
+  r3: 424.26
+};
+const REMAP_STANDARD_LAYOUT_ASSET = {
+  src: remappingLayoutImage,
+  viewBoxWidth: 597.47,
+  viewBoxHeight: 429.39,
+  calloutPoints: REMAP_CALLOUT_POINTS,
+  calloutY: REMAP_CALLOUT_Y
+};
+const REMAP_EDGE_LAYOUT_ASSET = {
+  src: remappingEdgeLayoutImage,
+  viewBoxWidth: 593.94,
+  viewBoxHeight: 424.76,
+  calloutPoints: REMAP_EDGE_CALLOUT_POINTS,
+  calloutY: REMAP_EDGE_CALLOUT_Y
+};
+const REMAP_EDGE_CONTROL_POINTS: Record<DualSenseEdgeRemapButtonId, { x: number; y: number; anchor: 'top' | 'bottom' }> = {
+  lb: { x: 227.59, y: 33.19, anchor: 'bottom' },
+  rb: { x: 371.02, y: 33.19, anchor: 'bottom' },
+  lfn: { x: 227.5, y: 368.88, anchor: 'top' },
+  rfn: { x: 370.46, y: 368.88, anchor: 'top' }
+};
+const REMAP_EDGE_LINE_POINTS: Record<DualSenseEdgeRemapButtonId, [[number, number], [number, number]]> = {
+  lb: [[227.59, 33.19], [227.42, 105.09]],
+  rb: [[371.02, 33.19], [370.84, 105.09]],
+  lfn: [[227.5, 368.88], [227.68, 296.98]],
+  rfn: [[370.46, 368.88], [370.64, 296.98]]
 };
 const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: TablerIcon }> = [
   { id: 'overview', label: 'Overview', Icon: IconLayoutDashboard },
@@ -1436,6 +1503,7 @@ export function App() {
   const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
   const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
   const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<StandardRemapButtonId, RemapCalloutLayout> | null>(null);
+  const [edgeRemapControlLayout, setEdgeRemapControlLayout] = useState<Record<DualSenseEdgeRemapButtonId, EdgeRemapControlLayout> | null>(null);
   const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
@@ -1508,6 +1576,7 @@ export function App() {
     snapshot?.settings.buttonRemappingProfiles.map((profile) => [profile.name, profile.id]) ?? [['Default', DEFAULT_BUTTON_REMAP_PROFILE_ID]]
   ), [snapshot?.settings.buttonRemappingProfiles]);
   const selectedRemapProfileIsDefault = selectedRemapProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID;
+  const remappingLayoutAsset = showDualSenseEdgeRemapButtons ? REMAP_EDGE_LAYOUT_ASSET : REMAP_STANDARD_LAYOUT_ASSET;
 
   function applySnapshot(next: BridgeSnapshot) {
     setSnapshot(next);
@@ -1665,15 +1734,17 @@ export function App() {
       const artHeight = artRect.height / layoutScaleY;
       const leftTop = toLocalY(leftRect.top);
       const rightTop = toLocalY(rightRect.top);
-      const viewBoxAspect = REMAP_SVG_VIEWBOX_WIDTH / REMAP_SVG_VIEWBOX_HEIGHT;
+      const viewBoxAspect = remappingLayoutAsset.viewBoxWidth / remappingLayoutAsset.viewBoxHeight;
       const renderedSvgHeight = Math.min(artHeight, artWidth / viewBoxAspect);
       const renderedSvgWidth = renderedSvgHeight * viewBoxAspect;
       const renderedSvgTop = artTop + (artHeight - renderedSvgHeight) / 2;
       const renderedSvgLeft = artLeft + (artWidth - renderedSvgWidth) / 2;
       const nextLayout = {} as Record<StandardRemapButtonId, RemapCalloutLayout>;
       const mapSvgPoint = ([x, y]: [number, number]) => (
-        `${renderedSvgLeft + (x / REMAP_SVG_VIEWBOX_WIDTH) * renderedSvgWidth},${renderedSvgTop + (y / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight}`
+        `${renderedSvgLeft + (x / remappingLayoutAsset.viewBoxWidth) * renderedSvgWidth},${renderedSvgTop + (y / remappingLayoutAsset.viewBoxHeight) * renderedSvgHeight}`
       );
+      const mapSvgX = (x: number) => renderedSvgLeft + (x / remappingLayoutAsset.viewBoxWidth) * renderedSvgWidth;
+      const mapSvgY = (y: number) => renderedSvgTop + (y / remappingLayoutAsset.viewBoxHeight) * renderedSvgHeight;
       const remapPillEdgeX = (side: HTMLElement, buttonId: StandardRemapButtonId, edge: 'left' | 'right') => {
         const pill = side.querySelector<HTMLElement>(`[data-remap-button-id="${buttonId}"]`);
         if (!pill) {
@@ -1684,24 +1755,24 @@ export function App() {
       };
 
       for (const buttonId of REMAP_LEFT_BUTTON_IDS) {
-        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - leftTop;
+        const top = renderedSvgTop + (remappingLayoutAsset.calloutY[buttonId] / remappingLayoutAsset.viewBoxHeight) * renderedSvgHeight - leftTop;
         const pillRightX = remapPillEdgeX(leftSideElement, buttonId, 'right');
         nextLayout[buttonId] = {
           top,
           points: [
             `${pillRightX},${leftTop + top}`,
-            ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
+            ...remappingLayoutAsset.calloutPoints[buttonId].map(mapSvgPoint)
           ].join(' ')
         };
       }
       for (const buttonId of REMAP_RIGHT_BUTTON_IDS) {
-        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - rightTop;
+        const top = renderedSvgTop + (remappingLayoutAsset.calloutY[buttonId] / remappingLayoutAsset.viewBoxHeight) * renderedSvgHeight - rightTop;
         const pillLeftX = remapPillEdgeX(rightSideElement, buttonId, 'left');
         nextLayout[buttonId] = {
           top,
           points: [
             `${pillLeftX},${rightTop + top}`,
-            ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
+            ...remappingLayoutAsset.calloutPoints[buttonId].map(mapSvgPoint)
           ].join(' ')
         };
       }
@@ -1715,6 +1786,32 @@ export function App() {
         }
         return nextLayout;
       });
+
+      if (showDualSenseEdgeRemapButtons) {
+        const nextEdgeLayout = {} as Record<DualSenseEdgeRemapButtonId, EdgeRemapControlLayout>;
+        for (const buttonId of REMAP_EDGE_BUTTON_IDS) {
+          const point = REMAP_EDGE_CONTROL_POINTS[buttonId];
+          nextEdgeLayout[buttonId] = {
+            left: mapSvgX(point.x),
+            top: mapSvgY(point.y),
+            anchor: point.anchor,
+            linePoints: REMAP_EDGE_LINE_POINTS[buttonId].map(mapSvgPoint).join(' ')
+          };
+        }
+        setEdgeRemapControlLayout((current) => {
+          if (current && REMAP_EDGE_BUTTON_IDS.every((buttonId) => (
+            Math.abs(current[buttonId].left - nextEdgeLayout[buttonId].left) < 0.5
+            && Math.abs(current[buttonId].top - nextEdgeLayout[buttonId].top) < 0.5
+            && current[buttonId].anchor === nextEdgeLayout[buttonId].anchor
+            && current[buttonId].linePoints === nextEdgeLayout[buttonId].linePoints
+          ))) {
+            return current;
+          }
+          return nextEdgeLayout;
+        });
+      } else {
+        setEdgeRemapControlLayout(null);
+      }
     }
 
     updateRemapCalloutPositions();
@@ -1729,7 +1826,7 @@ export function App() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateRemapCalloutPositions);
     };
-  }, [activeControlTab]);
+  }, [activeControlTab, remappingLayoutAsset, showDualSenseEdgeRemapButtons]);
 
   useEffect(() => {
     if (!connected) {
@@ -4605,80 +4702,63 @@ export function App() {
                         })}
                       </g>
                     )}
+                    {showDualSenseEdgeRemapButtons && edgeRemapControlLayout && (
+                      <g>
+                        {REMAP_EDGE_BUTTON_IDS.map((buttonId) => {
+                          const remapped = remapDraft[buttonId] !== buttonId;
+                          return (
+                            <g key={buttonId} className={hoveredRemapButton === buttonId || remapped ? 'active' : undefined}>
+                              <polyline
+                                className="remapping-callout-underlay"
+                                points={edgeRemapControlLayout[buttonId].linePoints}
+                              />
+                              <polyline
+                                className="remapping-callout-line"
+                                points={edgeRemapControlLayout[buttonId].linePoints}
+                              />
+                            </g>
+                          );
+                        })}
+                      </g>
+                    )}
                   </svg>
                   {showDualSenseEdgeRemapButtons && (
-                    <>
-                      <div className="remapping-edge-group remapping-edge-group-top" aria-label="DualSense Edge back button mappings">
-                        {REMAP_EDGE_TOP_BUTTON_IDS.map((buttonId) => {
-                          const button = REMAP_BUTTONS[buttonId];
-                          const targetOptions = remapTargetOptionsFor(buttonId);
-                          const remapped = remapDraft[buttonId] !== buttonId;
-                          return (
-                            <div
-                              className={`remapping-pill remapping-pill-edge ${remapped ? 'changed' : ''}`}
-                              data-remap-button-id={buttonId}
-                              key={buttonId}
-                              onMouseEnter={() => setHoveredRemapButton(buttonId)}
-                              onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
-                              onFocusCapture={() => setHoveredRemapButton(buttonId)}
-                              onBlurCapture={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
-                            >
-                              <span className="remapping-source">
-                                <RemapSourceGlyph button={button} />
-                              </span>
-                              <span className="remapping-arrow" aria-hidden="true">
-                                <ArrowRight size={15} />
-                              </span>
-                              <CustomSelect
-                                value={remapDraft[buttonId]}
-                                options={targetOptions}
-                                className="remapping-select"
-                                showSelectedCheck={false}
-                                ariaLabel={`${button.label} remap target`}
-                                renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
-                                renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
-                                onChange={(value) => setButtonRemap(buttonId, value)}
-                              />
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <div className="remapping-edge-group remapping-edge-group-bottom" aria-label="DualSense Edge function button mappings">
-                        {REMAP_EDGE_BOTTOM_BUTTON_IDS.map((buttonId) => {
-                          const button = REMAP_BUTTONS[buttonId];
-                          const targetOptions = remapTargetOptionsFor(buttonId);
-                          const remapped = remapDraft[buttonId] !== buttonId;
-                          return (
-                            <div
-                              className={`remapping-pill remapping-pill-edge ${remapped ? 'changed' : ''}`}
-                              data-remap-button-id={buttonId}
-                              key={buttonId}
-                              onMouseEnter={() => setHoveredRemapButton(buttonId)}
-                              onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
-                              onFocusCapture={() => setHoveredRemapButton(buttonId)}
-                              onBlurCapture={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
-                            >
-                              <span className="remapping-source">
-                                <RemapSourceGlyph button={button} />
-                              </span>
-                              <span className="remapping-arrow" aria-hidden="true">
-                                <ArrowRight size={15} />
-                              </span>
-                              <CustomSelect
-                                value={remapDraft[buttonId]}
-                                options={targetOptions}
-                                className="remapping-select"
-                                showSelectedCheck={false}
-                                ariaLabel={`${button.label} remap target`}
-                                renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
-                                renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
-                                onChange={(value) => setButtonRemap(buttonId, value)}
-                              />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </>
+                    <div className="remapping-edge-layer" aria-label="DualSense Edge button mappings">
+                      {REMAP_EDGE_BUTTON_IDS.map((buttonId) => {
+                        const button = REMAP_BUTTONS[buttonId];
+                        const targetOptions = remapTargetOptionsFor(buttonId);
+                        const remapped = remapDraft[buttonId] !== buttonId;
+                        const fallbackPoint = REMAP_EDGE_CONTROL_POINTS[buttonId];
+                        const edgeLayout = edgeRemapControlLayout?.[buttonId];
+                        const anchor = edgeLayout?.anchor ?? fallbackPoint.anchor;
+                        return (
+                          <div
+                            className={`remapping-pill remapping-pill-edge remapping-pill-edge-compact remapping-edge-control remapping-edge-control-${anchor} ${remapped ? 'changed' : ''}`}
+                            data-remap-button-id={buttonId}
+                            key={buttonId}
+                            onMouseEnter={() => setHoveredRemapButton(buttonId)}
+                            onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                            onFocusCapture={() => setHoveredRemapButton(buttonId)}
+                            onBlurCapture={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                            style={{
+                              left: edgeLayout ? `${edgeLayout.left}px` : `${(fallbackPoint.x / remappingLayoutAsset.viewBoxWidth) * 100}%`,
+                              top: edgeLayout ? `${edgeLayout.top}px` : `${(fallbackPoint.y / remappingLayoutAsset.viewBoxHeight) * 100}%`
+                            } as CSSProperties}
+                          >
+                            <CustomSelect
+                              value={remapDraft[buttonId]}
+                              options={targetOptions}
+                              className="remapping-select remapping-edge-select"
+                              showSelectedCheck={false}
+                              ariaLabel={`${button.label} remap target`}
+                              renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                              renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                              onChange={(value) => setButtonRemap(buttonId, value)}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
                   )}
                   <div className="remapping-side remapping-side-left" ref={remappingLeftSideRef} aria-label="Left side button mappings">
                     {REMAP_LEFT_BUTTON_IDS.map((buttonId) => {
@@ -4697,7 +4777,7 @@ export function App() {
                           style={{
                             '--remapping-callout-top': remapCalloutLayout
                               ? `${remapCalloutLayout[buttonId].top}px`
-                              : `${(REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * 100}%`
+                              : `${(remappingLayoutAsset.calloutY[buttonId] / remappingLayoutAsset.viewBoxHeight) * 100}%`
                           } as CSSProperties}
                         >
                           <span className="remapping-source">
@@ -4721,7 +4801,15 @@ export function App() {
                     })}
                   </div>
                   <div className="remapping-controller-stage" aria-hidden="true">
-                    <img ref={remappingArtRef} className="remapping-controller-art" src={remappingLayoutImage} alt="" />
+                    <img
+                      ref={remappingArtRef}
+                      className="remapping-controller-art"
+                      src={remappingLayoutAsset.src}
+                      alt=""
+                      style={{
+                        '--remapping-art-aspect': remappingLayoutAsset.viewBoxWidth / remappingLayoutAsset.viewBoxHeight
+                      } as CSSProperties}
+                    />
                   </div>
                   <div className="remapping-side remapping-side-right" ref={remappingRightSideRef} aria-label="Right side button mappings">
                     {REMAP_RIGHT_BUTTON_IDS.map((buttonId) => {
@@ -4740,7 +4828,7 @@ export function App() {
                           style={{
                             '--remapping-callout-top': remapCalloutLayout
                               ? `${remapCalloutLayout[buttonId].top}px`
-                              : `${(REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * 100}%`
+                              : `${(remappingLayoutAsset.calloutY[buttonId] / remappingLayoutAsset.viewBoxHeight) * 100}%`
                           } as CSSProperties}
                         >
                           <span className="remapping-source">

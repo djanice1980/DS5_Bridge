@@ -2590,31 +2590,57 @@ button.feature-icon {
   z-index: 120;
 }
 
-.remapping-edge-group {
+.remapping-edge-layer {
   position: absolute;
+  inset: 0;
   z-index: 6;
-  left: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  transform: translateX(-50%);
   pointer-events: none;
 }
 
-.remapping-edge-group-top {
-  top: 7%;
-}
-
-.remapping-edge-group-bottom {
-  bottom: 7%;
-}
-
-.remapping-edge-group .remapping-pill {
-  position: static;
-  transform: none;
-  width: 132px;
+.remapping-edge-control {
+  position: absolute;
+  left: 50%;
   pointer-events: auto;
+}
+
+.remapping-edge-control-top {
+  transform: translate(-50%, 0);
+}
+
+.remapping-edge-control-bottom {
+  transform: translate(-50%, -100%);
+}
+
+.remapping-pill-edge-compact {
+  width: 72px;
+  min-height: 32px;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.remapping-pill-edge-compact .remapping-select .custom-select-button {
+  border-left-color: transparent;
+  border-radius: 999px;
+  grid-template-columns: minmax(0, 1fr) 14px;
+  padding: 0 6px 0 7px;
+}
+
+.remapping-pill-edge-compact .remap-glyph-option {
+  justify-content: center;
+  gap: 4px;
+}
+
+.remapping-pill-edge-compact .remap-text-glyph {
+  width: 28px;
+  min-width: 28px;
+  height: 20px;
+  border-radius: 5px;
+  padding: 0;
+}
+
+.remapping-pill-edge-compact .custom-select-button span,
+.remapping-pill-edge-compact .custom-select-menu button span {
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .remapping-source,
@@ -2733,7 +2759,7 @@ button.feature-icon {
 
 .remapping-controller-art {
   position: relative;
-  width: min(100%, calc(var(--remapping-art-height) * 1.391));
+  width: min(100%, calc(var(--remapping-art-height) * var(--remapping-art-aspect, 1.391)));
   height: var(--remapping-art-height);
   object-fit: contain;
   filter:
