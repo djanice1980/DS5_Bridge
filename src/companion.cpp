@@ -291,6 +291,7 @@ bool cached_game_trigger_right_valid = false;
 bool cached_game_trigger_left_valid = false;
 uint8_t cached_game_trigger_motor_power = 0;
 bool cached_game_trigger_motor_power_valid = false;
+bool trigger_power_reset_pending = false;
 uint32_t last_game_trigger_update_us = 0;
 uint8_t companion_mic_volume_percent = 100;
 bool companion_mic_muted = false;
@@ -811,6 +812,7 @@ void clear_cached_game_trigger_effects() {
     cached_game_trigger_left_valid = false;
     cached_game_trigger_motor_power = 0;
     cached_game_trigger_motor_power_valid = false;
+    trigger_power_reset_pending = false;
     last_game_trigger_update_us = 0;
 }
 
@@ -846,14 +848,13 @@ void cache_game_trigger_effects(uint8_t const *payload, uint16_t len) {
         cached_game_trigger_left_valid = true;
     }
 
-    cached_game_trigger_motor_power = (
+    const bool has_motor_power = (
         len > 1
         && len > kTriggerEffectPowerOffset
         && (payload[1] & kTriggerMotorPowerFlag) != 0
-    )
-        ? payload[kTriggerEffectPowerOffset]
-        : 0;
-    cached_game_trigger_motor_power_valid = true;
+    );
+    cached_game_trigger_motor_power = has_motor_power ? payload[kTriggerEffectPowerOffset] : 0;
+    cached_game_trigger_motor_power_valid = has_motor_power;
 }
 
 bool build_scaled_cached_game_trigger_effect(
@@ -908,12 +909,13 @@ bool build_scaled_cached_game_trigger_effect(
         return true;
     }
 
-    // Re-send an explicit zero reduction when returning to 100%, in case an
-    // earlier capped report left the controller with a reduced trigger power.
-    if (!motor_power_valid) {
+    // Re-send an explicit zero reduction only when returning from a capped
+    // intensity. If the game never supplied motor power, preserve that absence
+    // for normal 100% forwarding so bridge output stays closer to direct USB.
+    if (!motor_power_valid && trigger_power_reset_pending) {
         motor_power = 0;
+        motor_power_valid = true;
     }
-    motor_power_valid = true;
     return true;
 }
 
@@ -1525,6 +1527,9 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
+            if (trigger_effect_intensity_percent < 100 && value >= 100) {
+                trigger_power_reset_pending = true;
+            }
             trigger_effect_intensity_percent = static_cast<uint8_t>(value);
             if (adaptive_trigger_test_active) {
                 bt_set_adaptive_trigger_effect(
@@ -1534,6 +1539,9 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 );
             } else {
                 replay_cached_game_trigger_effect();
+            }
+            if (trigger_effect_intensity_percent >= 100) {
+                trigger_power_reset_pending = false;
             }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
