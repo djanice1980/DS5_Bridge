@@ -56,8 +56,10 @@ export class HidDiscoveryClient {
 
     return new Promise<HidDeviceSummary[]>((resolve, reject) => {
       const timeout = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error('HID discovery worker timed out'));
+        if (!this.pending.has(id)) {
+          return;
+        }
+        this.restartWorker(new Error('HID discovery worker timed out'));
       }, DISCOVERY_TIMEOUT_MS);
       this.pending.set(id, { resolve, reject, timeout });
       worker.send(request, (error) => {
@@ -68,9 +70,7 @@ export class HidDiscoveryClient {
         if (!pending) {
           return;
         }
-        clearTimeout(pending.timeout);
-        this.pending.delete(id);
-        pending.reject(error);
+        this.restartWorker(error);
       });
     });
   }
@@ -104,13 +104,28 @@ export class HidDiscoveryClient {
     this.worker.on('message', (message: DiscoveryResponse) => this.handleMessage(message));
     this.worker.once('exit', () => {
       this.worker = null;
-      for (const [id, pending] of this.pending) {
-        clearTimeout(pending.timeout);
-        pending.reject(new Error('HID discovery worker exited'));
-        this.pending.delete(id);
-      }
+      this.rejectPending(new Error('HID discovery worker exited'));
     });
     return this.worker;
+  }
+
+  private rejectPending(error: Error): void {
+    for (const [id, pending] of this.pending) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+      this.pending.delete(id);
+    }
+  }
+
+  private restartWorker(error: Error): void {
+    const worker = this.worker;
+    this.worker = null;
+    this.rejectPending(error);
+    if (worker) {
+      worker.removeAllListeners('message');
+      worker.removeAllListeners('exit');
+      worker.kill();
+    }
   }
 
   private handleMessage(message: DiscoveryResponse): void {

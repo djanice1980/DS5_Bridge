@@ -52,7 +52,7 @@ static class AudioConstants
     public const int HelperEventLogIntervalMilliseconds = 1000;
     public const int WriterPrebufferReports = 3;
     public const int WriterTakeTimeoutMilliseconds = 2;
-    public const int RawPcmCaptureBufferMilliseconds = 30;
+    public const int RawPcmCaptureBufferMilliseconds = 5;
     public const int MaxQueuedPcmChunks = 32;
     public static readonly bool DiagnosticsEnabled = false;
     public const int MicKeepaliveBufferMilliseconds = 10;
