@@ -1166,6 +1166,7 @@ uint16_t build_ack(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+#if DS5_AUDIO_DEBUG_ENABLED
 uint16_t build_audio_debug(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
         return 0;
@@ -1208,6 +1209,7 @@ uint16_t build_audio_stats(uint8_t *buffer, uint16_t reqlen) {
     write_u32(fields + 52, bt_stats.critical_starving_audio_count);
     return COMPANION_PAYLOAD_SIZE;
 }
+#endif
 
 uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
@@ -2200,10 +2202,12 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_status(buffer, reqlen);
         case COMPANION_REPORT_ACK:
             return build_ack(buffer, reqlen);
+#if DS5_AUDIO_DEBUG_ENABLED
         case COMPANION_REPORT_AUDIO_DEBUG:
             return build_audio_debug(buffer, reqlen);
         case COMPANION_REPORT_AUDIO_STATS:
             return build_audio_stats(buffer, reqlen);
+#endif
         case COMPANION_REPORT_HOST_AUDIO_STATUS:
             return build_host_audio_status(buffer, reqlen);
 #if DS5_TRIGGER_TRACE_ENABLED

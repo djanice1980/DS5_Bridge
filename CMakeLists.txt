@@ -93,21 +93,29 @@ if(ENABLE_DEBUG_LOGS)
     )
 endif()
 
-option(ENABLE_AUDIO_DEBUG_REPORTS "Enable the companion HID audio debug ring report" OFF)
-if(ENABLE_AUDIO_DEBUG_REPORTS OR ENABLE_DEBUG_LOGS)
+option(ENABLE_COMPANION_DEBUG "Enable companion debug/logging features (audio debug, trigger trace, feedback trace)" OFF)
+if(ENABLE_COMPANION_DEBUG)
+    option(ENABLE_AUDIO_DEBUG_REPORTS "Enable the companion HID audio debug ring report" ON)
+    option(ENABLE_TRIGGER_TRACE_REPORTS "Enable the companion HID adaptive trigger trace report" ON)
+    option(ENABLE_FEEDBACK_TRACE_REPORTS "Enable the companion HID rumble/haptics feedback trace report" ON)
+else()
+    set(ENABLE_AUDIO_DEBUG_REPORTS OFF)
+    set(ENABLE_TRIGGER_TRACE_REPORTS OFF)
+    set(ENABLE_FEEDBACK_TRACE_REPORTS OFF)
+endif()
+
+if(ENABLE_AUDIO_DEBUG_REPORTS)
     target_compile_definitions(ds5-bridge PRIVATE
-            DS5_ENABLE_AUDIO_DEBUG_REPORTS
+            DS5_AUDIO_DEBUG_ENABLED=1
     )
 endif()
 
-option(ENABLE_TRIGGER_TRACE_REPORTS "Enable the companion HID adaptive trigger trace report" OFF)
 if(ENABLE_TRIGGER_TRACE_REPORTS)
     target_compile_definitions(ds5-bridge PRIVATE
             DS5_TRIGGER_TRACE_ENABLED=1
     )
 endif()
 
-option(ENABLE_FEEDBACK_TRACE_REPORTS "Enable the companion HID rumble/haptics feedback trace report" OFF)
 if(ENABLE_FEEDBACK_TRACE_REPORTS)
     target_compile_definitions(ds5-bridge PRIVATE
             DS5_FEEDBACK_TRACE_ENABLED=1

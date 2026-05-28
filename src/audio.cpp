@@ -293,7 +293,8 @@ static bool host_raw_pcm_return_active() {
 static bool host_mic_path_active() {
     return host_runtime.duplex_requested
         && host_runtime.mode == AudioRuntimeHostEncodedActive
-        && bt_is_controller_connected();
+        && bt_is_controller_connected()
+        && !mic_output_muted;
 }
 
 static void reset_controller_audio_report_counters() {
@@ -1292,8 +1293,12 @@ bool audio_duplex_active() {
 }
 
 void audio_set_mic_output_state(uint8_t volume_percent, bool muted) {
+    const bool was_muted = mic_output_muted;
     mic_output_volume_percent = volume_percent > 100 ? 100 : volume_percent;
     mic_output_muted = muted;
+    if (muted && !was_muted) {
+        clear_mic_queues();
+    }
 }
 
 static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
@@ -2462,9 +2467,9 @@ static void core1_entry() {
     }
 
     while (true) {
+        const bool did_speaker = core1_process_speaker();
         const bool did_mic = core1_process_mic_burst();
         const bool did_mic_plc = core1_process_mic_plc();
-        const bool did_speaker = core1_process_speaker();
         if (!did_speaker && !did_mic && !did_mic_plc) {
             sleep_us(250);
         }
