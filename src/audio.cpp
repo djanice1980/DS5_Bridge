@@ -44,6 +44,7 @@
 #define MAX_HAPTICS_GAIN 5.0f
 #define USB_AUDIO_ACTIVE_THRESHOLD 8
 #define AUDIO_LOOP_MAX_USB_READS 4
+#define HOST_AUDIO_LOOP_MAX_USB_READS 12
 #define AUDIO_DEBUG_RING_SIZE 96
 #define AUDIO_DEBUG_REPORT_HEADER_SIZE 8
 #define AUDIO_DEBUG_RECORD_SIZE 14
@@ -2320,7 +2321,7 @@ void audio_loop() {
     if (host_runtime.requested && host_start_grace_active(time_us_32())) {
         refresh_controller_mic_transport_state();
         (void)prime_host_audio_route_if_needed();
-        process_host_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        process_host_usb_audio_packets(HOST_AUDIO_LOOP_MAX_USB_READS);
         process_mic_usb_output();
         return;
     }
@@ -2328,7 +2329,7 @@ void audio_loop() {
     if (host_runtime.mode == AudioRuntimeHostEncodedActive) {
         refresh_controller_mic_transport_state();
         (void)prime_host_audio_route_if_needed();
-        process_host_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        process_host_usb_audio_packets(HOST_AUDIO_LOOP_MAX_USB_READS);
         process_mic_usb_output();
         return;
     }

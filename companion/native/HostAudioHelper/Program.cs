@@ -569,12 +569,16 @@ sealed class HostAudioHelper : IDisposable
         bulkPcmExpectedSequence = unchecked((ushort)(frame.Sequence + 1));
         bulkPcmLastPayload = ClonePayload(frame.Payload, frame.Payload.Length);
         Interlocked.Increment(ref bulkPcmParsedPackets);
+        if (frame.Silent)
+        {
+            Interlocked.Increment(ref captureSilentPackets);
+        }
         EnqueuePcmChunk(new PcmCaptureChunk(
             frame.Payload,
             frame.Payload.Length,
             format,
             frame.Frames,
-            AudioClientBufferFlags.None));
+            frame.Silent ? AudioClientBufferFlags.Silent : AudioClientBufferFlags.None));
         return insertedPackets;
     }
 

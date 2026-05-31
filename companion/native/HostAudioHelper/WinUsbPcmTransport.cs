@@ -420,7 +420,7 @@ sealed class WinUsbPcmTransport : IDisposable
 
             var payload = new byte[payloadBytes];
             Buffer.BlockCopy(isoBuffer, packetOffset + IsoHeaderBytes, payload, 0, payloadBytes);
-            frames.Add(new BulkPcmFrame(payload, frameCount, sequence, 0));
+            frames.Add(new BulkPcmFrame(payload, frameCount, sequence, 0, isoBuffer[packetOffset + 3] != 0));
         }
 
         return frames;
@@ -486,7 +486,7 @@ sealed class WinUsbPcmTransport : IDisposable
     }
 }
 
-sealed record BulkPcmFrame(byte[] Payload, int Frames, ushort Sequence, uint TimestampUs);
+sealed record BulkPcmFrame(byte[] Payload, int Frames, ushort Sequence, uint TimestampUs, bool Silent = false);
 
 sealed class BulkPcmFrameParser
 {

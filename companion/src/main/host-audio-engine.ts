@@ -327,17 +327,19 @@ function buildHostAudioHelperEnv(): NodeJS.ProcessEnv {
     return env;
   }
 
-  env.DS5_BRIDGE_HOST_AUDIO_DIAGNOSTICS ??= '1';
-  env.DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP ??= path.join(
-    HOST_AUDIO_DIAGNOSTIC_DIR,
-    `ds5-bridge-winusb-pcm-${HOST_AUDIO_DIAGNOSTIC_STAMP}.wav`
-  );
-  env.DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP_SECONDS ??= '20';
-  env.DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP ??= path.join(
-    HOST_AUDIO_DIAGNOSTIC_DIR,
-    `ds5-bridge-host-frames-${HOST_AUDIO_DIAGNOSTIC_STAMP}.bin`
-  );
-  env.DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT ??= '2500';
+  env.DS5_BRIDGE_HOST_AUDIO_DIAGNOSTICS ??= '0';
+  if (env.DS5_BRIDGE_HOST_AUDIO_DUMP === '1') {
+    env.DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP ??= path.join(
+      HOST_AUDIO_DIAGNOSTIC_DIR,
+      `ds5-bridge-winusb-pcm-${HOST_AUDIO_DIAGNOSTIC_STAMP}.wav`
+    );
+    env.DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP_SECONDS ??= '20';
+    env.DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP ??= path.join(
+      HOST_AUDIO_DIAGNOSTIC_DIR,
+      `ds5-bridge-host-frames-${HOST_AUDIO_DIAGNOSTIC_STAMP}.bin`
+    );
+    env.DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT ??= '2500';
+  }
   return env;
 }
 

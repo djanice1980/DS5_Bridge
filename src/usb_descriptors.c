@@ -40,8 +40,9 @@ extern uint8_t usb_hid_polling_interval_ms_value;
 #endif
 
 #define CONFIG_TOTAL_LEN_STANDARD 0x0148
+#define RAW_PCM_RETURN_DESC_LEN 0x0065
 #define VENDOR_PCM_DESC_LEN 0x0010
-#define CONFIG_TOTAL_LEN_COMPANION (0x0181 + VENDOR_PCM_DESC_LEN)
+#define CONFIG_TOTAL_LEN_COMPANION (CONFIG_TOTAL_LEN_STANDARD - RAW_PCM_RETURN_DESC_LEN + 0x0039 + VENDOR_PCM_DESC_LEN)
 #define VENDOR_PCM_INTERFACE_NUMBER HOST_PCM_ISO_INTERFACE_NUMBER
 #define VENDOR_PCM_EP_IN HOST_PCM_ISO_EP_IN
 #define VENDOR_PCM_MS_OS_VENDOR_REQUEST 0x20
@@ -53,6 +54,14 @@ extern uint8_t usb_hid_polling_interval_ms_value;
         + (DS5_FEEDBACK_TRACE_ENABLED ? 0x0008 : 0) \
         + (DS5_AUDIO_DEBUG_ENABLED ? 0x0010 : 0))
 #define KEYBOARD_HID_REPORT_DESC_LEN 0x002D
+
+#ifdef ENABLE_COMPANION
+#define GAMEPAD_INTERFACE_NUMBER 0x03
+#define COMPANION_HID_INTERFACE_NUMBER 0x04
+#define KEYBOARD_HID_INTERFACE_NUMBER 0x05
+#else
+#define GAMEPAD_INTERFACE_NUMBER 0x05
+#endif
 
 //--------------------------------------------------------------------+
 // Device Descriptors
@@ -112,8 +121,8 @@ uint8_t descriptor_configuration[] = {
     0x09, // bLength
     0x02, // bDescriptorType (CONFIGURATION)
 #ifdef ENABLE_COMPANION
-    CONFIG_TOTAL_LEN_COMPANION & 0xFF, (CONFIG_TOTAL_LEN_COMPANION >> 8) & 0xFF, // wTotalLength: 408
-    0x09, // bNumInterfaces: 9
+    CONFIG_TOTAL_LEN_COMPANION & 0xFF, (CONFIG_TOTAL_LEN_COMPANION >> 8) & 0xFF,
+    0x07, // bNumInterfaces: 7
 #else
     CONFIG_TOTAL_LEN_STANDARD & 0xFF, (CONFIG_TOTAL_LEN_STANDARD >> 8) & 0xFF, // wTotalLength: 328
     0x06, // bNumInterfaces: 6
@@ -298,7 +307,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bDelay: 1 frame
     0x01, 0x00, // wFormatTag: PCM (0x0001)
 
-    // Format Type Descriptor (1-channel, 16-bit, 48kHz)
+    // Format Type Descriptor (1-channel, 16-bit mic)
     0x0B, // bLength: 11
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: FORMAT_TYPE
@@ -307,14 +316,17 @@ uint8_t descriptor_configuration[] = {
     0x02, // bSubframeSize: 2
     0x10, // bBitResolution: 16
     0x01, // bSamFreqType: 1
-    0x80, 0xBB, 0x00, // tSamFreq: 48000 Hz
+    CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_TX & 0xFF,
+    (CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_TX >> 8) & 0xFF,
+    (CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_TX >> 16) & 0xFF,
 
     // Endpoint Descriptor (Audio IN: EP2)
     0x09, // bLength
     0x05, // bDescriptorType (ENDPOINT)
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
-    0x62, 0x00, // wMaxPacketSize: 98 bytes
+    CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN & 0xFF,
+    (CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN >> 8) & 0xFF,
     0x01, // bInterval: 1
     0x00, // bRefresh
     0x00, // bSynchAddress
@@ -327,6 +339,7 @@ uint8_t descriptor_configuration[] = {
     0x00, // Lock Delay Units
     0x00, 0x00, // Lock Delay
 
+#ifndef ENABLE_COMPANION
     // --- INTERFACE DESCRIPTOR (3.0): Audio Control (Raw PCM Return) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
@@ -441,9 +454,12 @@ uint8_t descriptor_configuration[] = {
     0x00, 0x00, // Lock Delay
 
     // --- INTERFACE DESCRIPTOR (5.0): HID (DualSense 5 Gamepad + Touchpad) ---
+#else
+    // --- INTERFACE DESCRIPTOR (3.0): HID (DualSense 5 Gamepad + Touchpad) ---
+#endif
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
-    0x05, // bInterfaceNumber: 5
+    GAMEPAD_INTERFACE_NUMBER,
     0x00, // bAlternateSetting: 0
     0x02, // bNumEndpoints: 2 (IN + OUT)
     0x03, // bInterfaceClass: HID
@@ -481,10 +497,10 @@ uint8_t descriptor_configuration[] = {
     0x01, // bInterval: 1 (polling every 4ms -> 1ms)
 
 #ifdef ENABLE_COMPANION
-    // --- INTERFACE DESCRIPTOR (6.0): HID (DS5 Bridge Companion) ---
+    // --- INTERFACE DESCRIPTOR (4.0): HID (DS5 Bridge Companion) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
-    0x06, // bInterfaceNumber: 6
+    COMPANION_HID_INTERFACE_NUMBER,
     0x00, // bAlternateSetting: 0
     0x02, // bNumEndpoints: 2 (IN + OUT)
     0x03, // bInterfaceClass: HID
@@ -517,10 +533,10 @@ uint8_t descriptor_configuration[] = {
     0x40, 0x00, // wMaxPacketSize: 64
     0x01, // bInterval: 1
 
-    // --- INTERFACE DESCRIPTOR (7.0): HID (Bridge Keyboard) ---
+    // --- INTERFACE DESCRIPTOR (5.0): HID (Bridge Keyboard) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
-    0x07, // bInterfaceNumber: 7
+    KEYBOARD_HID_INTERFACE_NUMBER,
     0x00, // bAlternateSetting: 0
     0x01, // bNumEndpoints: 1 (IN)
     0x03, // bInterfaceClass: HID
@@ -545,7 +561,7 @@ uint8_t descriptor_configuration[] = {
     0x08, 0x00, // wMaxPacketSize: 8
     0x01, // bInterval: 1
 
-    // --- INTERFACE DESCRIPTOR (8.0): Vendor Isochronous IN (Lossless PCM Mirror) ---
+    // --- INTERFACE DESCRIPTOR (6.0): Vendor Isochronous IN (Lossless PCM Mirror) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
     VENDOR_PCM_INTERFACE_NUMBER,
@@ -564,6 +580,12 @@ uint8_t descriptor_configuration[] = {
     0x01, // bInterval: 1ms
 #endif
 };
+
+#ifdef ENABLE_COMPANION
+TU_VERIFY_STATIC(sizeof(descriptor_configuration) == CONFIG_TOTAL_LEN_COMPANION, "Incorrect companion config descriptor size");
+#else
+TU_VERIFY_STATIC(sizeof(descriptor_configuration) == CONFIG_TOTAL_LEN_STANDARD, "Incorrect standard config descriptor size");
+#endif
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor

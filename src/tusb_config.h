@@ -91,7 +91,11 @@
 #endif
 
 //------------- CLASS -------------//
+#ifdef ENABLE_COMPANION
+#define CFG_TUD_AUDIO             1
+#else
 #define CFG_TUD_AUDIO             2
+#endif
 #ifdef ENABLE_COMPANION
 #define CFG_TUD_HID               3
 #else
@@ -130,30 +134,42 @@
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_TX              16
 
-// Raw PCM return path (second IN/TX function): mirror speaker stereo back to
-// the Companion without stealing the real mic endpoint. Haptics stay local on
-// the Pico and are merged into host-encoded reports.
+// Legacy Raw PCM return path (second IN/TX function). Companion builds use the
+// private WinUSB isoch PCM transport instead, so this function is omitted there.
+#ifndef ENABLE_COMPANION
 #define CFG_TUD_AUDIO_FUNC_2_N_CHANNELS_TX              2
 #define CFG_TUD_AUDIO_FUNC_2_N_BYTES_PER_SAMPLE_TX      2
 #define CFG_TUD_AUDIO_FUNC_2_RESOLUTION_TX              16
+#endif
 
-// UAC1 Full-Speed endpoint size
-#define CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE            48000
+// UAC1 Full-Speed endpoint size.
+#define CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_RX         48000
+#define CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_TX         48000
+#define CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE            CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_RX
+#ifndef ENABLE_COMPANION
 #define CFG_TUD_AUDIO_FUNC_2_SAMPLE_RATE            48000
-#define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT     TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)
-#define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX)
+#endif
+#define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT     TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_RX, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)
+#define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_TX, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX)
+#ifndef ENABLE_COMPANION
 #define CFG_TUD_AUDIO_FUNC_2_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_2_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_2_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_2_N_CHANNELS_TX)
+#endif
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX          CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX           CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN
+#ifndef ENABLE_COMPANION
 #define CFG_TUD_AUDIO_FUNC_2_EP_OUT_SZ_MAX          0
 #define CFG_TUD_AUDIO_FUNC_2_EP_IN_SZ_MAX           CFG_TUD_AUDIO_FUNC_2_FORMAT_1_EP_SZ_IN
+#endif
 
-#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ       (3 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
+#define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ       (12 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ        (16 * CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX)
+#ifndef ENABLE_COMPANION
 #define CFG_TUD_AUDIO_FUNC_2_EP_OUT_SW_BUF_SZ       0
 #define CFG_TUD_AUDIO_FUNC_2_EP_IN_SW_BUF_SZ        (16 * CFG_TUD_AUDIO_FUNC_2_EP_IN_SZ_MAX)
+#endif
 
-// Enable OUT EP (speaker) and IN EPs (mic + raw PCM return)
+// Enable OUT EP (speaker) and IN EP (mic). The WinUSB PCM path is a custom
+// companion driver, not a TinyUSB audio function.
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT                 1
 #define CFG_TUD_AUDIO_ENABLE_EP_IN                  1
 

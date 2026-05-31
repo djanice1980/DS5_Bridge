@@ -8,6 +8,7 @@
 #include <cstring>
 
 #define HOST_PCM_ISO_QUEUE_DEPTH 64
+#define HOST_PCM_ISO_START_DEPTH 8
 
 struct HostPcmIsoPacket {
     int16_t samples[HOST_PCM_ISO_FRAMES_PER_PACKET * HOST_PCM_ISO_CHANNELS];
@@ -23,6 +24,7 @@ static uint16_t host_pcm_iso_tx_sequence = 0;
 static uint32_t host_pcm_iso_drops = 0;
 static uint8_t host_pcm_iso_ep_in = 0;
 static bool host_pcm_iso_configured = false;
+static bool host_pcm_iso_streaming = false;
 static CFG_TUD_MEM_ALIGN uint8_t host_pcm_iso_tx_buffer[HOST_PCM_ISO_PACKET_BYTES];
 
 static void host_pcm_iso_clear_locked() {
@@ -31,6 +33,7 @@ static void host_pcm_iso_clear_locked() {
     host_pcm_iso_queue_count = 0;
     host_pcm_iso_pending_frames = 0;
     host_pcm_iso_tx_sequence = 0;
+    host_pcm_iso_streaming = false;
 }
 
 static void host_pcm_iso_enqueue_locked(int16_t const *samples) {
@@ -47,7 +50,16 @@ static void host_pcm_iso_enqueue_locked(int16_t const *samples) {
 }
 
 static bool host_pcm_iso_pop_locked(int16_t *destination) {
+    if (!host_pcm_iso_streaming) {
+        if (host_pcm_iso_queue_count < HOST_PCM_ISO_START_DEPTH) {
+            memset(destination, 0, HOST_PCM_ISO_PAYLOAD_BYTES);
+            return false;
+        }
+        host_pcm_iso_streaming = true;
+    }
+
     if (host_pcm_iso_queue_count == 0) {
+        host_pcm_iso_streaming = false;
         memset(destination, 0, HOST_PCM_ISO_PAYLOAD_BYTES);
         return false;
     }

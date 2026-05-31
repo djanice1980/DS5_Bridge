@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define HOST_PCM_ISO_INTERFACE_NUMBER 0x08
+#define HOST_PCM_ISO_INTERFACE_NUMBER 0x06
 #define HOST_PCM_ISO_EP_IN 0x89
 #define HOST_PCM_ISO_CHANNELS 2
 #define HOST_PCM_ISO_BYTES_PER_SAMPLE 2
