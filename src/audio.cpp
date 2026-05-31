@@ -251,6 +251,9 @@ static uint16_t mic_peak_permille = 0;
 static volatile bool mic_usb_playout_started = false;
 static volatile uint8_t mic_output_volume_percent = 100;
 static volatile bool mic_output_muted = false;
+static bool controller_mic_state_valid = false;
+static uint8_t controller_mic_state_volume_percent = 0xff;
+static bool controller_mic_state_muted = true;
 static mic_decode_element mic_usb_pending{};
 static uint16_t mic_usb_pending_offset = 0;
 static uint16_t mic_usb_pending_len = 0;
@@ -310,6 +313,37 @@ static bool host_mic_path_active() {
         && host_runtime.mode == AudioRuntimeHostEncodedActive
         && bt_is_controller_connected()
         && !mic_output_muted;
+}
+
+static bool host_mic_stream_active() {
+    return host_mic_path_active() && usb_mic_streaming_active();
+}
+
+static bool controller_mic_transport_muted() {
+    return quiet_mode_enabled || !host_mic_stream_active();
+}
+
+static void refresh_controller_mic_transport_state(bool force = false) {
+    if (!bt_is_controller_connected()) {
+        controller_mic_state_valid = false;
+        return;
+    }
+
+    const uint8_t volume_percent = mic_output_volume_percent;
+    const bool muted = controller_mic_transport_muted();
+    if (
+        !force
+        && controller_mic_state_valid
+        && controller_mic_state_volume_percent == volume_percent
+        && controller_mic_state_muted == muted
+    ) {
+        return;
+    }
+
+    bt_set_microphone_state(volume_percent, muted);
+    controller_mic_state_valid = true;
+    controller_mic_state_volume_percent = volume_percent;
+    controller_mic_state_muted = muted;
 }
 
 static void reset_controller_audio_report_counters() {
@@ -1279,6 +1313,7 @@ void audio_set_quiet_mode(bool enabled) {
     }
 
     quiet_mode_enabled = enabled;
+    refresh_controller_mic_transport_state(true);
     if (!enabled) {
         return;
     }
@@ -1326,6 +1361,7 @@ void audio_host_set_requested(bool enabled) {
             host_runtime.fallback_reason = AudioFallbackNone;
         }
     }
+    refresh_controller_mic_transport_state(true);
 }
 
 void audio_host_note_heartbeat() {
@@ -1357,6 +1393,7 @@ void audio_host_start_stream() {
         clear_partial_audio_state();
         schedule_host_route_primer();
     }
+    refresh_controller_mic_transport_state(true);
 }
 
 void audio_host_stop_stream(AudioFallbackReason reason) {
@@ -1366,6 +1403,7 @@ void audio_host_stop_stream(AudioFallbackReason reason) {
     host_pcm_iso_reset_stream();
     clear_host_reassembly();
     enter_fallback(reason);
+    refresh_controller_mic_transport_state(true);
 }
 
 void audio_host_set_duplex_requested(bool enabled) {
@@ -1374,10 +1412,11 @@ void audio_host_set_duplex_requested(bool enabled) {
     if (changed && !enabled) {
         clear_mic_queues();
     }
+    refresh_controller_mic_transport_state(true);
 }
 
 bool audio_duplex_active() {
-    return host_mic_path_active();
+    return host_mic_stream_active();
 }
 
 void audio_set_mic_output_state(uint8_t volume_percent, bool muted) {
@@ -1387,6 +1426,7 @@ void audio_set_mic_output_state(uint8_t volume_percent, bool muted) {
     if (muted && !was_muted) {
         clear_mic_queues();
     }
+    refresh_controller_mic_transport_state(true);
 }
 
 static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
@@ -1657,7 +1697,7 @@ void audio_get_host_status(audio_host_status *status) {
     status->mic_last_decoded_samples = mic_last_decoded_samples;
     status->mic_last_written_bytes = mic_last_written_bytes;
     status->mic_peak_permille = mic_peak_permille;
-    status->mic_usb_streaming = host_mic_path_active() && usb_mic_streaming_active();
+    status->mic_usb_streaming = host_mic_stream_active();
 }
 
 void audio_set_haptics_buffer_length(uint8_t length) {
@@ -2101,7 +2141,7 @@ static void process_idle_speaker_silence_preroll(uint32_t now) {
 }
 
 static void process_mic_usb_output() {
-    if (!host_mic_path_active() || !usb_mic_streaming_active()) {
+    if (!host_mic_stream_active()) {
         if (mic_usb_playout_started || mic_usb_pending_len != 0) {
             tud_audio_n_clear_ep_in_ff(0);
         }
@@ -2201,7 +2241,7 @@ static void process_mic_usb_output() {
 }
 
 void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
-    if (!host_mic_path_active()) {
+    if (!host_mic_stream_active()) {
         return;
     }
     if (data == nullptr || len < HOST_MIC_OPUS_SIZE) {
@@ -2253,6 +2293,7 @@ void audio_loop() {
     audio_host_poll();
 
     if (!bt_is_controller_connected()) {
+        controller_mic_state_valid = false;
         clear_mic_queues();
         discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         if (speaker_route_active || last_audio_us != 0) {
@@ -2265,6 +2306,7 @@ void audio_loop() {
     }
 
     if (quiet_mode_enabled) {
+        refresh_controller_mic_transport_state();
         clear_mic_queues();
         discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         if (speaker_route_active) {
@@ -2276,6 +2318,7 @@ void audio_loop() {
     }
 
     if (host_runtime.requested && host_start_grace_active(time_us_32())) {
+        refresh_controller_mic_transport_state();
         (void)prime_host_audio_route_if_needed();
         process_host_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         process_mic_usb_output();
@@ -2283,6 +2326,7 @@ void audio_loop() {
     }
 
     if (host_runtime.mode == AudioRuntimeHostEncodedActive) {
+        refresh_controller_mic_transport_state();
         (void)prime_host_audio_route_if_needed();
         process_host_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         process_mic_usb_output();
@@ -2418,8 +2462,8 @@ static bool core1_process_mic() {
 static bool core1_process_mic_plc() {
     if (
         mic_decoder == nullptr
+        || !host_mic_stream_active()
         || !mic_usb_playout_started
-        || !usb_mic_streaming_active()
         || queue_get_level(&mic_decode_fifo) >= HOST_MIC_PLC_TARGET_DEPTH
         || !queue_is_empty(&mic_fifo)
     ) {
@@ -2470,7 +2514,7 @@ static bool core1_process_mic_plc() {
 }
 
 static bool core1_process_mic_burst() {
-    if (!host_mic_path_active()) {
+    if (!host_mic_stream_active()) {
         return false;
     }
     bool did_mic = false;

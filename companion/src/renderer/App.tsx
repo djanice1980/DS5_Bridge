@@ -1976,6 +1976,8 @@ export function App() {
       : 'idle';
   const duplexMicLabel = hostAudioStatus?.duplexActive
     ? 'Duplex Active'
+    : duplexMicEnabled && hostAudioActive
+      ? 'Mic Standby'
     : duplexMicEnabled
       ? 'Disabled in Fallback'
       : 'Off';

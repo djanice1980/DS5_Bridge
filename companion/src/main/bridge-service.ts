@@ -81,6 +81,7 @@ const FEEDBACK_TRACE_READ_INTERVAL_MS = 250;
 const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = true;
 const TRIGGER_TRACE_DIAGNOSTICS_ENABLED = false;
 const FEEDBACK_TRACE_DIAGNOSTICS_ENABLED = false;
+const MIC_KEEPALIVE_ENABLED = process.env.DS5_BRIDGE_MIC_KEEPALIVE === '1';
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;
@@ -1436,6 +1437,7 @@ export class BridgeService extends EventEmitter {
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       micMuted: enabled
     }));
+    await this.updateMicKeepaliveEngine(Boolean(this.snapshot.status?.controllerConnected));
     this.emitSnapshot();
     return this.getSnapshot();
   }
@@ -2157,7 +2159,13 @@ export class BridgeService extends EventEmitter {
     try {
       const settings = this.settingsStore.get();
       const hostAudioActive = settings.hostEncodedAudioEnabled && this.hostAudioCommandActive;
-      if (!controllerConnected || !hostAudioActive || !settings.duplexMicEnabled) {
+      if (
+        !MIC_KEEPALIVE_ENABLED
+        || !controllerConnected
+        || !hostAudioActive
+        || !settings.duplexMicEnabled
+        || settings.micMuted
+      ) {
         await this.micKeepaliveEngine.stop();
         return;
       }

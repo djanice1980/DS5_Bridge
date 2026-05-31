@@ -633,7 +633,6 @@ void restore_defaults() {
     companion_mic_volume_percent = 100;
     companion_mic_muted = false;
     audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
-    bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
     reset_button_remap();
     bt_set_mute_led(false);
     lightbar_override_enabled = false;
@@ -1429,7 +1428,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             companion_mic_volume_percent = static_cast<uint8_t>(value);
             audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
-            bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -1441,7 +1439,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             companion_mic_muted = value == 1;
             audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
-            bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
