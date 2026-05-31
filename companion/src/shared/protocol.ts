@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 2;
+export const PROTOCOL_MINOR = 3;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -417,6 +417,8 @@ export interface HostAudioStatusPayload {
   micDecodeFail: number;
   micUsbWriteSuccess: number;
   micUsbWriteShort: number;
+  micUsbConcealCount: number;
+  micPlcCount: number;
   micLastDecodedSamples: number;
   micLastWrittenBytes: number;
   micPeakPermille: number;
@@ -504,6 +506,10 @@ function hostAudioFallbackReason(value: number): HostAudioFallbackReason {
 
 function nullableAge(value: number): number | null {
   return value === 0xffffffff ? null : value;
+}
+
+function nullableAge16(value: number): number | null {
+  return value === 0xffff ? null : value;
 }
 
 export function pollingRateModeValue(mode: PollingRateMode): number {
@@ -744,36 +750,82 @@ export function parseFeedbackTraceReport(report: ArrayLike<number>): FeedbackTra
 
 export function parseHostAudioStatusReport(report: ArrayLike<number>): HostAudioStatusPayload {
   assertReport(report, REPORT_ID.HOST_AUDIO_STATUS);
-  assertVersion(report);
+  const protocolMajor = report[5];
+  const protocolMinor = report[6];
+  if (protocolMajor !== PROTOCOL_MAJOR || protocolMinor < 2 || protocolMinor > PROTOCOL_MINOR) {
+    throw new ProtocolError(
+      `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}, received ${protocolMajor}.${protocolMinor}.`,
+      'bad-version'
+    );
+  }
+
+  if (protocolMinor < 3) {
+    return {
+      mode: hostAudioMode(report[7]),
+      fallbackReason: hostAudioFallbackReason(report[8]),
+      hostRequested: report[9] === 1,
+      heartbeatHealthy: report[10] === 1,
+      streamActive: report[11] === 1,
+      streamHealthy: report[12] === 1,
+      duplexRequested: report[13] === 1,
+      duplexActive: (report[14] & 0x01) !== 0,
+      headsetPlugged: (report[14] & 0x02) !== 0,
+      headsetAudioRoute: (report[14] & 0x04) !== 0,
+      controllerStateReady: (report[14] & 0x08) !== 0,
+      streamGeneration: readU16(report, 15),
+      heartbeatAgeMs: nullableAge(readU32(report, 17)),
+      frameAgeMs: nullableAge(readU32(report, 21)),
+      hostFramesReceived: readU32(report, 25),
+      hostFramesDropped: readU32(report, 29),
+      micPacketsReceived: readU32(report, 33),
+      micPacketsDropped: readU32(report, 37),
+      micDecodeSuccess: readU32(report, 41),
+      micDecodeFail: readU32(report, 45),
+      micUsbWriteSuccess: readU32(report, 49),
+      micUsbWriteShort: readU32(report, 53),
+      micUsbConcealCount: 0,
+      micPlcCount: 0,
+      micLastDecodedSamples: readU16(report, 57),
+      micLastWrittenBytes: readU16(report, 59),
+      micPeakPermille: readU16(report, 61),
+      micUsbStreaming: report[63] === 1,
+      protocolVersion: `${protocolMajor}.${protocolMinor}`
+    };
+  }
+
+  const primaryFlags = report[9];
+  const routeFlags = report[10];
 
   return {
     mode: hostAudioMode(report[7]),
     fallbackReason: hostAudioFallbackReason(report[8]),
-    hostRequested: report[9] === 1,
-    heartbeatHealthy: report[10] === 1,
-    streamActive: report[11] === 1,
-    streamHealthy: report[12] === 1,
-    duplexRequested: report[13] === 1,
-    duplexActive: (report[14] & 0x01) !== 0,
-    headsetPlugged: (report[14] & 0x02) !== 0,
-    headsetAudioRoute: (report[14] & 0x04) !== 0,
-    controllerStateReady: (report[14] & 0x08) !== 0,
-    streamGeneration: readU16(report, 15),
-    heartbeatAgeMs: nullableAge(readU32(report, 17)),
-    frameAgeMs: nullableAge(readU32(report, 21)),
-    hostFramesReceived: readU32(report, 25),
-    hostFramesDropped: readU32(report, 29),
-    micPacketsReceived: readU32(report, 33),
-    micPacketsDropped: readU32(report, 37),
-    micDecodeSuccess: readU32(report, 41),
-    micDecodeFail: readU32(report, 45),
-    micUsbWriteSuccess: readU32(report, 49),
-    micUsbWriteShort: readU32(report, 53),
+    hostRequested: (primaryFlags & 0x01) !== 0,
+    heartbeatHealthy: (primaryFlags & 0x02) !== 0,
+    streamActive: (primaryFlags & 0x04) !== 0,
+    streamHealthy: (primaryFlags & 0x08) !== 0,
+    duplexRequested: (primaryFlags & 0x10) !== 0,
+    duplexActive: (primaryFlags & 0x20) !== 0,
+    controllerStateReady: (primaryFlags & 0x40) !== 0,
+    headsetPlugged: (routeFlags & 0x01) !== 0,
+    headsetAudioRoute: (routeFlags & 0x02) !== 0,
+    streamGeneration: readU16(report, 11),
+    heartbeatAgeMs: nullableAge16(readU16(report, 13)),
+    frameAgeMs: nullableAge16(readU16(report, 15)),
+    hostFramesReceived: readU32(report, 17),
+    hostFramesDropped: readU32(report, 21),
+    micPacketsReceived: readU32(report, 25),
+    micPacketsDropped: readU32(report, 29),
+    micDecodeSuccess: readU32(report, 33),
+    micDecodeFail: readU32(report, 37),
+    micUsbWriteSuccess: readU32(report, 41),
+    micUsbWriteShort: readU32(report, 45),
+    micUsbConcealCount: readU32(report, 49),
+    micPlcCount: readU32(report, 53),
     micLastDecodedSamples: readU16(report, 57),
     micLastWrittenBytes: readU16(report, 59),
     micPeakPermille: readU16(report, 61),
-    micUsbStreaming: report[63] === 1,
-    protocolVersion: `${report[5]}.${report[6]}`
+    micUsbStreaming: (primaryFlags & 0x80) !== 0,
+    protocolVersion: `${protocolMajor}.${protocolMinor}`
   };
 }
 

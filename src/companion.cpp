@@ -15,7 +15,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 2;
+constexpr uint8_t kProtocolMinor = 3;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 1;
 constexpr uint8_t kFirmwarePatch = 0;
@@ -322,6 +322,13 @@ void write_u32(uint8_t *data, uint32_t value) {
     data[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
     data[2] = static_cast<uint8_t>((value >> 16) & 0xFF);
     data[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
+}
+
+uint16_t status_age_to_u16(uint32_t value) {
+    if (value == 0xffffffffu) {
+        return 0xffffu;
+    }
+    return value > 0xfffeu ? 0xfffeu : static_cast<uint16_t>(value);
 }
 
 #if DS5_TRIGGER_TRACE_ENABLED
@@ -1222,30 +1229,32 @@ uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
     audio_get_host_status(&status);
     buffer[6] = status.mode;
     buffer[7] = status.fallback_reason;
-    buffer[8] = status.host_requested ? 1 : 0;
-    buffer[9] = status.heartbeat_healthy ? 1 : 0;
-    buffer[10] = status.stream_active ? 1 : 0;
-    buffer[11] = status.stream_healthy ? 1 : 0;
-    buffer[12] = status.duplex_requested ? 1 : 0;
-    buffer[13] = (status.duplex_active ? 0x01 : 0x00)
-        | (status.headset_plugged ? 0x02 : 0x00)
-        | (status.headset_audio_route ? 0x04 : 0x00)
-        | (status.controller_state_ready ? 0x08 : 0x00);
-    write_u16(buffer + 14, status.stream_generation);
-    write_u32(buffer + 16, status.heartbeat_age_ms);
-    write_u32(buffer + 20, status.frame_age_ms);
-    write_u32(buffer + 24, status.host_frames_received);
-    write_u32(buffer + 28, status.host_frames_dropped);
-    write_u32(buffer + 32, status.mic_packets_received);
-    write_u32(buffer + 36, status.mic_packets_dropped);
-    write_u32(buffer + 40, status.mic_decode_success);
-    write_u32(buffer + 44, status.mic_decode_fail);
-    write_u32(buffer + 48, status.mic_usb_write_success);
-    write_u32(buffer + 52, status.mic_usb_write_short);
+    buffer[8] = (status.host_requested ? 0x01 : 0x00)
+        | (status.heartbeat_healthy ? 0x02 : 0x00)
+        | (status.stream_active ? 0x04 : 0x00)
+        | (status.stream_healthy ? 0x08 : 0x00)
+        | (status.duplex_requested ? 0x10 : 0x00)
+        | (status.duplex_active ? 0x20 : 0x00)
+        | (status.controller_state_ready ? 0x40 : 0x00)
+        | (status.mic_usb_streaming ? 0x80 : 0x00);
+    buffer[9] = (status.headset_plugged ? 0x01 : 0x00)
+        | (status.headset_audio_route ? 0x02 : 0x00);
+    write_u16(buffer + 10, status.stream_generation);
+    write_u16(buffer + 12, status_age_to_u16(status.heartbeat_age_ms));
+    write_u16(buffer + 14, status_age_to_u16(status.frame_age_ms));
+    write_u32(buffer + 16, status.host_frames_received);
+    write_u32(buffer + 20, status.host_frames_dropped);
+    write_u32(buffer + 24, status.mic_packets_received);
+    write_u32(buffer + 28, status.mic_packets_dropped);
+    write_u32(buffer + 32, status.mic_decode_success);
+    write_u32(buffer + 36, status.mic_decode_fail);
+    write_u32(buffer + 40, status.mic_usb_write_success);
+    write_u32(buffer + 44, status.mic_usb_write_short);
+    write_u32(buffer + 48, status.mic_usb_conceal_count);
+    write_u32(buffer + 52, status.mic_plc_count);
     write_u16(buffer + 56, status.mic_last_decoded_samples);
     write_u16(buffer + 58, status.mic_last_written_bytes);
     write_u16(buffer + 60, status.mic_peak_permille);
-    buffer[62] = status.mic_usb_streaming ? 1 : 0;
     return COMPANION_PAYLOAD_SIZE;
 }
 

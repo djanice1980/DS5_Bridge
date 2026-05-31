@@ -2304,6 +2304,8 @@ export function App() {
         `micDecodeFail=${host.micDecodeFail}`,
         `micUsbWriteSuccess=${host.micUsbWriteSuccess}`,
         `micUsbWriteShort=${host.micUsbWriteShort}`,
+        `micUsbConcealCount=${host.micUsbConcealCount}`,
+        `micPlcCount=${host.micPlcCount}`,
         `micLastDecodedSamples=${host.micLastDecodedSamples}`,
         `micLastWrittenBytes=${host.micLastWrittenBytes}`,
         `micPeakPermille=${host.micPeakPermille}`,

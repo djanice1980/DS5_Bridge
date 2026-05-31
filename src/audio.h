@@ -50,6 +50,8 @@ struct audio_host_status {
     uint32_t mic_decode_fail;
     uint32_t mic_usb_write_success;
     uint32_t mic_usb_write_short;
+    uint32_t mic_usb_conceal_count;
+    uint32_t mic_plc_count;
     uint16_t mic_last_decoded_samples;
     uint16_t mic_last_written_bytes;
     uint16_t mic_peak_permille;

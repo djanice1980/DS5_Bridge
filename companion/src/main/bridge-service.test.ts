@@ -324,6 +324,8 @@ function hostAudioStatusReport(overrides: Partial<{
   headsetPlugged: boolean;
   headsetAudioRoute: boolean;
   streamGeneration: number;
+  micUsbConcealCount: number;
+  micPlcCount: number;
 }> = {}): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.HOST_AUDIO_STATUS;
@@ -331,16 +333,18 @@ function hostAudioStatusReport(overrides: Partial<{
   writeVersion(report);
   report[7] = overrides.mode ?? 0;
   report[8] = overrides.fallbackReason ?? 1;
-  report[9] = overrides.hostRequested ? 1 : 0;
-  report[10] = overrides.heartbeatHealthy ? 1 : 0;
-  report[11] = overrides.streamActive ? 1 : 0;
-  report[12] = overrides.streamHealthy ? 1 : 0;
-  report[13] = overrides.duplexRequested ? 1 : 0;
-  report[14] = (overrides.duplexActive ? 0x01 : 0x00)
-    | (overrides.headsetPlugged ? 0x02 : 0x00)
-    | (overrides.headsetAudioRoute ? 0x04 : 0x00)
-    | (overrides.controllerStateReady ? 0x08 : 0x00);
-  writeU16(report, 15, overrides.streamGeneration ?? 0);
+  report[9] = (overrides.hostRequested ? 0x01 : 0x00)
+    | (overrides.heartbeatHealthy ? 0x02 : 0x00)
+    | (overrides.streamActive ? 0x04 : 0x00)
+    | (overrides.streamHealthy ? 0x08 : 0x00)
+    | (overrides.duplexRequested ? 0x10 : 0x00)
+    | (overrides.duplexActive ? 0x20 : 0x00)
+    | (overrides.controllerStateReady ? 0x40 : 0x00);
+  report[10] = (overrides.headsetPlugged ? 0x01 : 0x00)
+    | (overrides.headsetAudioRoute ? 0x02 : 0x00);
+  writeU16(report, 11, overrides.streamGeneration ?? 0);
+  writeU32(report, 49, overrides.micUsbConcealCount ?? 0);
+  writeU32(report, 53, overrides.micPlcCount ?? 0);
   return report;
 }
 

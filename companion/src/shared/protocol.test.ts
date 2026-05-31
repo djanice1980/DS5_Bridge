@@ -24,6 +24,7 @@ import {
   parseAudioStatsReport,
   parseAckReport,
   parseFeedbackTraceReport,
+  parseHostAudioStatusReport,
   parseTriggerTraceReport,
   parseStatusReport
 } from './protocol';
@@ -343,6 +344,55 @@ describe('companion protocol', () => {
     expect(keybindReport[9]).toBe(1);
     expect(sleepReport[7]).toBe(COMMAND_ID.SLEEP_CONTROLLER);
     expect(sleepReport[9]).toBe(0);
+  });
+
+  it('parses host audio mic concealment counters', () => {
+    const report = baseReport(REPORT_ID.HOST_AUDIO_STATUS);
+    report[7] = 1;
+    report[8] = 0;
+    report[9] = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80;
+    report[10] = 0x01 | 0x02;
+    writeU16(report, 11, 42);
+    writeU16(report, 13, 1234);
+    writeU16(report, 15, 56);
+    writeU32(report, 17, 100);
+    writeU32(report, 21, 2);
+    writeU32(report, 25, 22540);
+    writeU32(report, 29, 0);
+    writeU32(report, 33, 22540);
+    writeU32(report, 37, 0);
+    writeU32(report, 41, 225802);
+    writeU32(report, 45, 0);
+    writeU32(report, 49, 402);
+    writeU32(report, 53, 7);
+    writeU16(report, 57, 480);
+    writeU16(report, 59, 96);
+    writeU16(report, 61, 47);
+
+    expect(parseHostAudioStatusReport(report)).toMatchObject({
+      mode: 'host-encoded-active',
+      fallbackReason: 'none',
+      hostRequested: true,
+      heartbeatHealthy: true,
+      streamActive: true,
+      streamHealthy: true,
+      duplexRequested: true,
+      duplexActive: true,
+      controllerStateReady: true,
+      headsetPlugged: true,
+      headsetAudioRoute: true,
+      micUsbStreaming: true,
+      streamGeneration: 42,
+      heartbeatAgeMs: 1234,
+      frameAgeMs: 56,
+      micPacketsReceived: 22540,
+      micUsbWriteSuccess: 225802,
+      micUsbConcealCount: 402,
+      micPlcCount: 7,
+      micLastDecodedSamples: 480,
+      micLastWrittenBytes: 96,
+      micPeakPermille: 47
+    });
   });
 
   it('chunks a synthetic host audio frame for the companion OUT stream', () => {
