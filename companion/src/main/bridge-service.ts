@@ -87,7 +87,8 @@ const MIC_KEEPALIVE_ENABLED = CompanionDebugConfig.micKeepaliveEnabled;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;
-const FIRMWARE_UPDATE_REQUIRED_MESSAGE = 'Firmware 1.0.1 update required';
+const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.0';
+const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const TRIGGER_TRACE_LOG_LINE_LIMIT = 300;
 const TRIGGER_TRACE_MAX_READS_PER_POLL = 32;
@@ -198,7 +199,7 @@ function isSupportedFirmwareVersion(version: string): boolean {
   if (![major, minor, patch].every(Number.isFinite)) {
     return false;
   }
-  return major >= 1;
+  return major > 1 || (major === 1 && (minor > 5 || (minor === 5 && patch >= 0)));
 }
 
 function hostAudioCaptureIssueMessage(
@@ -2344,7 +2345,7 @@ export class BridgeService extends EventEmitter {
           uptimeSeconds: status.uptimeSeconds,
           settingsRevision: status.settingsRevision,
           lastAck: this.snapshot.diagnostics.lastAck,
-          lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to 1.0.1 or newer.`,
+          lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to ${MIN_SUPPORTED_FIRMWARE_VERSION} or newer.`,
           lastPollAt: Date.now(),
           rawDevices
         })

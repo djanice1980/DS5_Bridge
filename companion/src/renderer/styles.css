@@ -2867,40 +2867,44 @@ button.feature-icon {
     0 0 18px rgba(95, 232, 117, 0.13);
 }
 
-.feedback-boost-button {
-  width: 44px;
-  height: 44px;
+.feedback-boost-control {
+  min-height: 38px;
+  padding: 0 7px 0 10px;
+  border: 1px solid rgba(142, 164, 194, 0.2);
+  border-radius: var(--control-radius);
+  background: rgba(4, 10, 17, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+.feedback-boost-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #d7e1f0;
+  line-height: 1;
+}
+
+.feedback-boost-label svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: #1683ff;
+}
+
+.feedback-boost-control:has(.switch.on) .feedback-boost-label {
+  color: #f7f9ff;
+}
+
+.feedback-boost-control:has(.switch.on) .feedback-boost-label svg {
   color: #ffb02e;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-.feedback-boost-button svg {
-  fill: transparent;
-}
-
-.feedback-boost-button.active {
-  color: #ffb02e;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-.feedback-boost-button.active svg {
-  fill: currentColor;
   filter: drop-shadow(0 0 9px rgba(255, 176, 46, 0.42));
-}
-
-.feedback-boost-button:disabled {
-  opacity: 0.62;
 }
 
 .haptics-page .feature-card {
   position: relative;
 }
 
-.haptics-boost-button {
+.haptics-boost-control {
   position: absolute;
   right: var(--card-padding);
   bottom: var(--card-padding);

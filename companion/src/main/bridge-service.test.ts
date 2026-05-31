@@ -223,7 +223,7 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   report[20] = overrides.statusFlags ?? 0xb0;
   writeU32(report, 21, overrides.uptimeSeconds ?? 10);
   report[25] = overrides.firmwareMajor ?? 1;
-  report[26] = overrides.firmwareMinor ?? 0;
+  report[26] = overrides.firmwareMinor ?? 5;
   report[27] = overrides.firmwarePatch ?? 0;
   report[28] = overrides.firmwareFlags ?? 1;
   writeU16(report, 29, overrides.speakerVolumePercent ?? 30);
@@ -508,11 +508,11 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.0.1 update required');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.0 update required');
     expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
   });
 
-  it('requires users to update pre-1.0 bridge firmware', async () => {
+  it('requires users to update pre-1.5 bridge firmware', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ firmwareMajor: 0, firmwareMinor: 5, firmwarePatch: 15 });
@@ -523,9 +523,9 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('incompatible');
-    expect(snapshot.message).toBe('Firmware 1.0.1 update required');
+    expect(snapshot.message).toBe('Firmware 1.5.0 update required');
     expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
-    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.0.1 or newer');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.0 or newer');
     expect(device.sentReports).toEqual([]);
   });
 

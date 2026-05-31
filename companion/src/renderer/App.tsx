@@ -18,6 +18,7 @@ import {
   IconDeviceGamepad2,
   IconDeviceGamepad3,
   IconFlame,
+  IconFlask2,
   IconBrandGithub,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
@@ -153,6 +154,7 @@ type FeatureTipsPanelProps = {
   onSettingsFocusRequest?: (target: SettingsFocusTarget) => void;
   onFeatureFocusRequest?: (target: FeatureFocusTarget) => void;
   hostEncodingTipActionable?: boolean;
+  triggerLabOpen?: boolean;
 };
 type SettingsFocusTarget = 'controller-power-saving' | 'sleep-shortcut' | 'volume-shortcut';
 type NotificationFocusTarget = 'controller-status' | 'low-battery' | 'all';
@@ -811,9 +813,11 @@ function FeatureTipsPanel({
   tab,
   onSettingsFocusRequest,
   onFeatureFocusRequest,
-  hostEncodingTipActionable = false
+  hostEncodingTipActionable = false,
+  triggerLabOpen = false
 }: FeatureTipsPanelProps) {
   const [featureTileSampleActive, setFeatureTileSampleActive] = useState(false);
+  const [triggerLabLinkTipSplit, setTriggerLabLinkTipSplit] = useState(false);
   const tips: Array<{
     key: string;
     icon: ReactNode;
@@ -835,7 +839,14 @@ function FeatureTipsPanel({
     }
   ];
 
-  if (tab === 'audio') {
+  if (tab === 'triggers' && triggerLabOpen) {
+    tips.push({
+      key: 'trigger-lab-override',
+      icon: <IconFlask2 size={16} />,
+      title: 'Lab Override',
+      text: 'Active Lab effects stay applied and ignore incoming game trigger output.'
+    });
+  } else if (tab === 'audio') {
     tips.push({
       key: 'host-encoding',
       icon: <Headphones size={16} />,
@@ -852,7 +863,14 @@ function FeatureTipsPanel({
     });
   }
 
-  if (tab === 'lighting') {
+  if (tab === 'triggers' && triggerLabOpen) {
+    tips.push({
+      key: 'trigger-lab-link',
+      icon: triggerLabLinkTipSplit ? <LinkOffIcon size={16} /> : <LinkIcon size={16} />,
+      title: 'Linked / Split',
+      text: 'When Linked is on, the selected effect mirrors across L2 and R2. Split keeps each trigger separate.'
+    });
+  } else if (tab === 'lighting') {
     tips.push({
       key: 'custom-color',
       icon: <Palette size={16} />,
@@ -908,6 +926,16 @@ function FeatureTipsPanel({
                 type="button"
                 aria-label="Highlight Host Encoding"
                 onClick={() => onFeatureFocusRequest?.('host-encoding')}
+              >
+                {tip.icon}
+              </button>
+            ) : tip.key === 'trigger-lab-link' ? (
+              <button
+                className={`feature-help-icon feature-help-icon-button ${triggerLabLinkTipSplit ? '' : 'active'}`}
+                type="button"
+                aria-pressed={!triggerLabLinkTipSplit}
+                aria-label="Toggle Linked Split tip example"
+                onClick={() => setTriggerLabLinkTipSplit((split) => !split)}
               >
                 {tip.icon}
               </button>
@@ -4826,17 +4854,26 @@ export function App() {
                       );
                     })}
                   </div>
-                  <button
-                    type="button"
-                    className={`feature-icon feedback-boost-button haptics-boost-button ${feedbackBoostEnabled ? 'active' : ''}`}
-                    aria-pressed={feedbackBoostEnabled}
-                    aria-label="Boost feedback gain"
+                  <div
+                    className="inline-switch feedback-boost-control haptics-boost-control"
                     title={feedbackBoostEnabled ? 'Feedback boost: up to 500%' : 'Enable feedback boost up to 500%'}
-                    disabled={!connected || pendingAction !== null}
-                    onClick={toggleFeedbackBoostEnabled}
                   >
-                    <IconFlame size={20} />
-                  </button>
+                    <span className="feedback-boost-label">
+                      <IconFlame size={16} aria-hidden="true" />
+                      Boost
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={feedbackBoostEnabled}
+                      aria-label={feedbackBoostEnabled ? 'Disable feedback boost' : 'Enable feedback boost'}
+                      className={`switch ${feedbackBoostEnabled ? 'on' : ''}`}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={toggleFeedbackBoostEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">
@@ -5369,7 +5406,11 @@ export function App() {
                 </section>
               </div>
               )}
-              <FeatureTipsPanel tab="triggers" onSettingsFocusRequest={focusBridgeSettings} />
+              <FeatureTipsPanel
+                tab="triggers"
+                triggerLabOpen={triggerLabOpen}
+                onSettingsFocusRequest={focusBridgeSettings}
+              />
           </div>
 
           <div
