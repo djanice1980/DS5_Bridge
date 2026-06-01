@@ -201,6 +201,7 @@ constexpr ShortcutBinding kShortcutBindings[] = {
     {ShortcutComboHomeTriangle, ShortcutEventSleepController, ShortcutSettingSleepKeybind, ShortcutTriggerPressed},
 };
 constexpr size_t kShortcutBindingCount = sizeof(kShortcutBindings) / sizeof(kShortcutBindings[0]);
+constexpr uint8_t kShortcutEventQueueDepth = 8;
 
 critical_section_t companion_report_cs;
 uint8_t last_controller_report[63]{};
@@ -275,7 +276,10 @@ bool sleep_keybind_enabled = false;
 bool speaker_volume_shortcut_enabled = false;
 bool shortcut_binding_last_pressed[kShortcutBindingCount]{};
 uint32_t shortcut_binding_last_step_us[kShortcutBindingCount]{};
-uint8_t pending_shortcut_event = 0;
+uint8_t shortcut_event_queue[kShortcutEventQueueDepth]{};
+uint8_t shortcut_event_head = 0;
+uint8_t shortcut_event_tail = 0;
+uint8_t shortcut_event_count = 0;
 bool mute_keyboard_pending = false;
 bool mute_keyboard_pressed = false;
 uint32_t mute_keyboard_release_at_us = 0;
@@ -624,6 +628,38 @@ void set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bright
     }
 }
 
+void clear_shortcut_events() {
+    critical_section_enter_blocking(&companion_report_cs);
+    shortcut_event_head = 0;
+    shortcut_event_tail = 0;
+    shortcut_event_count = 0;
+    critical_section_exit(&companion_report_cs);
+}
+
+uint8_t take_shortcut_event() {
+    uint8_t event = 0;
+    critical_section_enter_blocking(&companion_report_cs);
+    if (shortcut_event_count > 0) {
+        event = shortcut_event_queue[shortcut_event_head];
+        shortcut_event_head = static_cast<uint8_t>((shortcut_event_head + 1) % kShortcutEventQueueDepth);
+        shortcut_event_count--;
+    }
+    critical_section_exit(&companion_report_cs);
+    return event;
+}
+
+void queue_shortcut_event(ShortcutEvent event) {
+    critical_section_enter_blocking(&companion_report_cs);
+    if (shortcut_event_count == kShortcutEventQueueDepth) {
+        shortcut_event_head = static_cast<uint8_t>((shortcut_event_head + 1) % kShortcutEventQueueDepth);
+        shortcut_event_count--;
+    }
+    shortcut_event_queue[shortcut_event_tail] = static_cast<uint8_t>(event);
+    shortcut_event_tail = static_cast<uint8_t>((shortcut_event_tail + 1) % kShortcutEventQueueDepth);
+    shortcut_event_count++;
+    critical_section_exit(&companion_report_cs);
+}
+
 void restore_defaults() {
     volume[0] = DEFAULT_COMPANION_SPEAKER_GAIN;
     volume[1] = 1.0f;
@@ -648,7 +684,7 @@ void restore_defaults() {
     speaker_volume_shortcut_enabled = false;
     std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
     std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
-    pending_shortcut_event = 0;
+    clear_shortcut_events();
     mute_keyboard_pending = false;
     mute_keyboard_pressed = false;
     mute_led_flash_pending = false;
@@ -1338,8 +1374,7 @@ uint16_t build_shortcut_event(uint8_t *buffer, uint16_t reqlen) {
     }
 
     memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
-    buffer[0] = pending_shortcut_event;
-    pending_shortcut_event = 0;
+    buffer[0] = take_shortcut_event();
     return COMPANION_PAYLOAD_SIZE;
 }
 
@@ -1872,7 +1907,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             speaker_volume_shortcut_enabled = value == 1;
             std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
             std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
-            pending_shortcut_event = 0;
+            clear_shortcut_events();
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -2044,7 +2079,7 @@ void process_shortcut_bindings(uint8_t *report) {
                 : (!shortcut_binding_last_pressed[i]
                     || static_cast<uint32_t>(now - shortcut_binding_last_step_us[i]) >= kShortcutRepeatUs);
             if (should_emit) {
-                pending_shortcut_event = binding.event;
+                queue_shortcut_event(binding.event);
                 shortcut_binding_last_step_us[i] = now;
             }
         } else {
