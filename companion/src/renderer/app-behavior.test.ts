@@ -38,4 +38,69 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('Controller identity based profiles');
     expect(appSource).toContain('paired directly to Windows over Bluetooth may need to be paired again');
   });
+
+  it('does not block haptic testing just because audio is active', () => {
+    const start = appSource.indexOf('const testHapticsUnavailable =');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('const hapticsTestReady =', start);
+    const unavailableSource = appSource.slice(start, end);
+
+    expect(unavailableSource).not.toContain('gameStreamActive');
+    expect(unavailableSource).not.toContain('audioRecent');
+    expect(unavailableSource).not.toContain('hostAudioActive');
+    expect(unavailableSource).not.toContain('streamActive');
+  });
+
+  it('does not block rumble testing while game output is active', () => {
+    const start = appSource.indexOf('const testRumbleUnavailable =');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('const hapticsTestReady =', start);
+    const unavailableSource = appSource.slice(start, end);
+
+    expect(unavailableSource).not.toContain('gameStreamActive');
+    expect(unavailableSource).not.toContain('audioRecent');
+    expect(unavailableSource).not.toContain('hostAudioActive');
+    expect(unavailableSource).not.toContain('streamActive');
+  });
+
+  it('keeps haptic test and cooldown labels as real test state', () => {
+    const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('</button>', start);
+    const buttonSource = appSource.slice(start, end);
+
+    expect(buttonSource).not.toContain('Audio Active');
+    expect(buttonSource).toContain('testLocked');
+    expect(buttonSource).toContain('snapshot.status?.testHapticsCooldown');
+  });
+
+  it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
+    const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('</button>', start);
+    const buttonSource = appSource.slice(start, end);
+    const hapticsStart = buttonSource.indexOf(': connected && testLocked');
+    expect(hapticsStart).toBeGreaterThanOrEqual(0);
+    const hapticsButtonSource = buttonSource.slice(hapticsStart);
+
+    expect(hapticsButtonSource).not.toContain('Game Active');
+    expect(hapticsButtonSource).toContain('testLocked');
+    expect(hapticsButtonSource).toContain('Test Haptics');
+  });
+
+  it('keeps the rumble test button actionable instead of relabeling it as game-active', () => {
+    const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('</button>', start);
+    const buttonSource = appSource.slice(start, end);
+    const classicStart = buttonSource.indexOf('{showClassicRumbleControl');
+    expect(classicStart).toBeGreaterThanOrEqual(0);
+    const hapticsStart = buttonSource.indexOf(': connected && testLocked', classicStart);
+    expect(hapticsStart).toBeGreaterThanOrEqual(0);
+    const classicButtonSource = buttonSource.slice(classicStart, hapticsStart);
+
+    expect(classicButtonSource).not.toContain('Game Active');
+    expect(classicButtonSource).toContain('testLocked');
+    expect(classicButtonSource).toContain('Test Rumble');
+  });
 });

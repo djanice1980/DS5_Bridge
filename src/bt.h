@@ -53,10 +53,29 @@ void bt_set_microphone_state(uint8_t volume_percent, bool muted);
 void bt_set_speaker_output_enabled(bool enabled, bool headset_plugged = false, bool force = false);
 void bt_rearm_speaker_output_route(bool headset_plugged);
 void bt_refresh_speaker_output();
-void bt_set_classic_rumble_gain(uint8_t gain_percent);
-uint8_t bt_classic_rumble_gain();
+void bt_set_classic_rumble_gain(uint16_t gain_percent);
+uint16_t bt_classic_rumble_gain();
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left);
 void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uint8_t target = 0);
+void bt_set_custom_adaptive_trigger_effect(
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent,
+    uint8_t target = 0
+);
+void bt_set_custom_adaptive_trigger_effects(
+    uint8_t right_mode,
+    uint8_t right_start_percent,
+    uint8_t right_wall_percent,
+    uint8_t right_force_percent,
+    bool right_active,
+    uint8_t left_mode,
+    uint8_t left_start_percent,
+    uint8_t left_wall_percent,
+    uint8_t left_force_percent,
+    bool left_active
+);
 void bt_replay_adaptive_trigger_effect(
     uint8_t const *right_trigger,
     bool right_valid,
@@ -69,6 +88,7 @@ void bt_reset_adaptive_triggers();
 void bt_schedule_lightbar_restore(uint32_t delay_ms);
 void bt_lightbar_loop();
 void bt_signal_strength_loop();
+void bt_inquiry_loop();
 void bt_connection_recovery_loop();
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();

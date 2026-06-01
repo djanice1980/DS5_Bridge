@@ -7,10 +7,7 @@
 #define DS5_BRIDGE_AUDIO_H
 
 #include <cstdint>
-
-#ifndef DS5_AUDIO_DEBUG_ENABLED
-#define DS5_AUDIO_DEBUG_ENABLED 0
-#endif
+#include "debug_config.h"
 
 enum AudioRuntimeMode : uint8_t {
     AudioRuntimeFallbackPicoLocal = 0,
@@ -50,6 +47,8 @@ struct audio_host_status {
     uint32_t mic_decode_fail;
     uint32_t mic_usb_write_success;
     uint32_t mic_usb_write_short;
+    uint32_t mic_usb_conceal_count;
+    uint32_t mic_plc_count;
     uint16_t mic_last_decoded_samples;
     uint16_t mic_last_written_bytes;
     uint16_t mic_peak_permille;

@@ -47,16 +47,17 @@ describe('SettingsStore', () => {
       settings: {
         speakerVolumePercent: 100,
         micVolumePercent: 100,
-        micMuted: false,
+        micMuted: true,
         hostEncodedAudioEnabled: true,
-        duplexMicEnabled: true,
+        duplexMicEnabled: false,
+        feedbackBoostEnabled: false,
         lightbarColor: '#0000ff'
       }
     });
     expect(settings.hostEncodedAudioEnabled).toBe(true);
-    expect(settings.duplexMicEnabled).toBe(true);
+    expect(settings.duplexMicEnabled).toBe(false);
     expect(settings.micVolumePercent).toBe(100);
-    expect(settings.micMuted).toBe(false);
+    expect(settings.micMuted).toBe(true);
     expect(settings.lightbarColor).toBe('#0000ff');
   });
 
@@ -64,12 +65,15 @@ describe('SettingsStore', () => {
     const userDataPath = tempUserDataPath();
     writeFileSync(path.join(userDataPath, 'settings.json'), JSON.stringify({
       selectedControllerProfileId: 'profile-personalized',
+      duplexMicEnabled: true,
+      micMuted: false,
       controllerProfiles: [{
         id: 'profile-personalized',
         name: 'Personalized',
         settings: {
           speakerVolumePercent: 30,
-          micMuted: true,
+          micMuted: false,
+          duplexMicEnabled: true,
           hostEncodedAudioEnabled: false
         }
       }]
@@ -82,8 +86,11 @@ describe('SettingsStore', () => {
     expect(settings.controllerProfiles.find((profile) => profile.id === 'profile-personalized')?.settings).toMatchObject({
       speakerVolumePercent: 30,
       micMuted: true,
+      duplexMicEnabled: false,
       hostEncodedAudioEnabled: false
     });
+    expect(settings.micMuted).toBe(true);
+    expect(settings.duplexMicEnabled).toBe(false);
     expect(settings.controllerProfiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.settings.speakerVolumePercent).toBe(100);
   });
 
@@ -113,6 +120,31 @@ describe('SettingsStore', () => {
     const restartedSettings = new SettingsStore(userDataPath).get();
     expect(restartedSettings.selectedControllerProfileId).toBe('custom');
     expect(restartedSettings.speakerVolumePercent).toBe(35);
+  });
+
+  it('persists boosted feedback gains in controller profiles', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.update({
+      feedbackBoostEnabled: true,
+      hapticsGainPercent: 500,
+      classicRumbleGainPercent: 480
+    });
+
+    expect(updated.feedbackBoostEnabled).toBe(true);
+    expect(updated.hapticsGainPercent).toBe(500);
+    expect(updated.classicRumbleGainPercent).toBe(480);
+    expect(updated.controllerProfiles.find((profile) => profile.id === 'custom')?.settings).toMatchObject({
+      feedbackBoostEnabled: true,
+      hapticsGainPercent: 500,
+      classicRumbleGainPercent: 480
+    });
+
+    const restartedSettings = new SettingsStore(userDataPath).get();
+    expect(restartedSettings.feedbackBoostEnabled).toBe(true);
+    expect(restartedSettings.hapticsGainPercent).toBe(500);
+    expect(restartedSettings.classicRumbleGainPercent).toBe(480);
   });
 
   it('saves, renames, updates, and deletes custom controller profiles while protecting default', () => {
@@ -162,6 +194,91 @@ describe('SettingsStore', () => {
     });
     expect(restored.speakerVolumePercent).toBe(100);
     expect(persistedSettings(userDataPath).selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
+  });
+
+  it('returns defensive copies so callers cannot mutate in-memory settings', () => {
+    const store = new SettingsStore(tempUserDataPath());
+
+    const firstRead = store.get();
+    firstRead.controllerProfiles[0]!.settings.speakerVolumePercent = 1;
+    firstRead.buttonRemappingProfiles[0]!.mappings.cross = 'circle';
+    firstRead.buttonRemappingDraft.cross = 'circle';
+
+    const secondRead = store.get();
+    expect(secondRead.controllerProfiles[0]!.settings.speakerVolumePercent).toBe(100);
+    expect(secondRead.buttonRemappingProfiles[0]!.mappings.cross).toBe('cross');
+    expect(secondRead.buttonRemappingDraft.cross).toBe('cross');
+
+    const updated = store.update({ speakerVolumePercent: 35 });
+    updated.controllerProfiles.find((profile) => profile.id === 'custom')!.settings.speakerVolumePercent = 2;
+    updated.buttonRemappingDraft.square = 'triangle';
+
+    const afterMutation = store.get();
+    expect(afterMutation.speakerVolumePercent).toBe(35);
+    expect(afterMutation.controllerProfiles.find((profile) => profile.id === 'custom')?.settings.speakerVolumePercent).toBe(35);
+    expect(afterMutation.buttonRemappingDraft.square).toBe('square');
+  });
+
+  it('deduplicates persisted custom profiles while preserving the selected winner', () => {
+    const userDataPath = tempUserDataPath();
+    writeFileSync(path.join(userDataPath, 'settings.json'), JSON.stringify({
+      selectedControllerProfileId: 'profile-dupe',
+      controllerProfiles: [{
+        id: 'profile-dupe',
+        name: 'First',
+        settings: {
+          speakerVolumePercent: 25
+        }
+      }, {
+        id: 'profile-dupe',
+        name: 'Second',
+        settings: {
+          speakerVolumePercent: 55,
+          micVolumePercent: 40
+        }
+      }],
+      selectedButtonRemappingProfileId: 'remap-dupe',
+      buttonRemappingProfiles: [{
+        id: 'remap-dupe',
+        name: 'Arcade',
+        mappings: {
+          cross: 'circle'
+        }
+      }, {
+        id: 'remap-dupe',
+        name: 'Southpaw',
+        mappings: {
+          cross: 'square',
+          circle: 'cross'
+        }
+      }]
+    }), 'utf8');
+
+    const settings = new SettingsStore(userDataPath).get();
+
+    expect(settings.controllerProfiles.map((profile) => profile.name)).toEqual(['Default', 'Second']);
+    expect(settings.selectedControllerProfileId).toBe('profile-dupe');
+    expect(settings.controllerProfiles.find((profile) => profile.id === 'profile-dupe')?.settings).toMatchObject({
+      speakerVolumePercent: 55,
+      micVolumePercent: 40
+    });
+    expect(settings.buttonRemappingProfiles.map((profile) => profile.name)).toEqual(['Default', 'Southpaw']);
+    expect(settings.selectedButtonRemappingProfileId).toBe('remap-dupe');
+    expect(settings.buttonRemappingProfiles.find((profile) => profile.id === 'remap-dupe')?.mappings).toMatchObject({
+      cross: 'square',
+      circle: 'cross'
+    });
+  });
+
+  it('recovers from corrupt settings files and can persist fresh settings afterward', () => {
+    const userDataPath = tempUserDataPath();
+    writeFileSync(path.join(userDataPath, 'settings.json'), '{ not json', 'utf8');
+
+    const store = new SettingsStore(userDataPath);
+    expect(store.get().selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
+
+    store.update({ speakerVolumePercent: 45 });
+    expect(persistedSettings(userDataPath).speakerVolumePercent).toBe(45);
   });
 
   it('auto-forks default button remapping changes into a saved custom profile', () => {

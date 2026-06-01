@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 1;
+export const PROTOCOL_MINOR = 5;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -47,7 +47,8 @@ export const AUDIO_DEBUG_EVENT = {
   MIC_PACKET: 19,
   USB_EVENT: 20,
   HID_EVENT: 21,
-  BT_EVENT: 22
+  BT_EVENT: 22,
+  CPU_LOAD: 23
 } as const;
 
 export const AUDIO_DEBUG_RECORD_SIZE = 14;
@@ -83,7 +84,9 @@ export const COMMAND_ID = {
   SET_MIC_MUTE: 0x1B,
   SET_IDLE_DISCONNECT_TIMEOUT: 0x1C,
   SET_SPEAKER_VOLUME_SHORTCUT_ENABLED: 0x1D,
-  SET_BUTTON_REMAP: 0x1E
+  SET_BUTTON_REMAP: 0x1E,
+  PREVIEW_ADAPTIVE_TRIGGER_EFFECT: 0x1F,
+  APPLY_ADAPTIVE_TRIGGER_EFFECT: 0x20
 } as const;
 
 export const HOST_AUDIO_PACKET_TYPE = {
@@ -121,6 +124,13 @@ export type MuteButtonMode = 'normal' | 'keyboard' | 'quiet';
 export type MuteKeyboardBehavior = 'tap' | 'hold';
 export type TriggerTestMode = 'feedback' | 'weapon' | 'vibration';
 export type TriggerTestTarget = 'both' | 'l2' | 'r2';
+export interface AdaptiveTriggerPreviewEffect {
+  mode: TriggerTestMode;
+  target: TriggerTestTarget;
+  startPercent: number;
+  wallPercent: number;
+  forcePercent: number;
+}
 export type PollingRateMode = '250' | '500' | '1000';
 export type HostAudioMode = 'fallback-pico-local' | 'host-encoded-active';
 export type HostAudioFallbackReason =
@@ -158,7 +168,11 @@ export const REMAP_BUTTON_IDS = [
   'circle',
   'cross',
   'square',
-  'r3'
+  'r3',
+  'lb',
+  'rb',
+  'lfn',
+  'rfn'
 ] as const;
 export type RemapButtonId = typeof REMAP_BUTTON_IDS[number];
 export type ButtonRemapMap = Record<RemapButtonId, RemapButtonId>;
@@ -171,6 +185,7 @@ export interface ButtonRemapProfile {
 export interface ControllerProfileSettings {
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
+  feedbackBoostEnabled: boolean;
   classicRumbleEnabled: boolean;
   classicRumbleGainPercent: number;
   adaptiveTriggersEnabled: boolean;
@@ -228,7 +243,10 @@ export function remapButtonIdValue(buttonId: RemapButtonId): number {
 }
 
 export function buildButtonRemapPayload(mapping: ButtonRemapMap): number[] {
-  return REMAP_BUTTON_IDS.map((buttonId) => remapButtonIdValue(mapping[buttonId]));
+  return REMAP_BUTTON_IDS.map((buttonId) => {
+    const target = mapping[buttonId];
+    return remapButtonIdValue(isRemapButtonId(target) ? target : buttonId);
+  });
 }
 export const MUTE_KEYBOARD_HOLD_FLAG = 0x80;
 export const MUTE_KEYBOARD_MODIFIER_MASK = 0x0f;
@@ -408,6 +426,8 @@ export interface HostAudioStatusPayload {
   micDecodeFail: number;
   micUsbWriteSuccess: number;
   micUsbWriteShort: number;
+  micUsbConcealCount: number;
+  micPlcCount: number;
   micLastDecodedSamples: number;
   micLastWrittenBytes: number;
   micPeakPermille: number;
@@ -495,6 +515,10 @@ function hostAudioFallbackReason(value: number): HostAudioFallbackReason {
 
 function nullableAge(value: number): number | null {
   return value === 0xffffffff ? null : value;
+}
+
+function nullableAge16(value: number): number | null {
+  return value === 0xffff ? null : value;
 }
 
 export function pollingRateModeValue(mode: PollingRateMode): number {
@@ -735,36 +759,82 @@ export function parseFeedbackTraceReport(report: ArrayLike<number>): FeedbackTra
 
 export function parseHostAudioStatusReport(report: ArrayLike<number>): HostAudioStatusPayload {
   assertReport(report, REPORT_ID.HOST_AUDIO_STATUS);
-  assertVersion(report);
+  const protocolMajor = report[5];
+  const protocolMinor = report[6];
+  if (protocolMajor !== PROTOCOL_MAJOR || protocolMinor < 2 || protocolMinor > PROTOCOL_MINOR) {
+    throw new ProtocolError(
+      `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}, received ${protocolMajor}.${protocolMinor}.`,
+      'bad-version'
+    );
+  }
+
+  if (protocolMinor < 3) {
+    return {
+      mode: hostAudioMode(report[7]),
+      fallbackReason: hostAudioFallbackReason(report[8]),
+      hostRequested: report[9] === 1,
+      heartbeatHealthy: report[10] === 1,
+      streamActive: report[11] === 1,
+      streamHealthy: report[12] === 1,
+      duplexRequested: report[13] === 1,
+      duplexActive: (report[14] & 0x01) !== 0,
+      headsetPlugged: (report[14] & 0x02) !== 0,
+      headsetAudioRoute: (report[14] & 0x04) !== 0,
+      controllerStateReady: (report[14] & 0x08) !== 0,
+      streamGeneration: readU16(report, 15),
+      heartbeatAgeMs: nullableAge(readU32(report, 17)),
+      frameAgeMs: nullableAge(readU32(report, 21)),
+      hostFramesReceived: readU32(report, 25),
+      hostFramesDropped: readU32(report, 29),
+      micPacketsReceived: readU32(report, 33),
+      micPacketsDropped: readU32(report, 37),
+      micDecodeSuccess: readU32(report, 41),
+      micDecodeFail: readU32(report, 45),
+      micUsbWriteSuccess: readU32(report, 49),
+      micUsbWriteShort: readU32(report, 53),
+      micUsbConcealCount: 0,
+      micPlcCount: 0,
+      micLastDecodedSamples: readU16(report, 57),
+      micLastWrittenBytes: readU16(report, 59),
+      micPeakPermille: readU16(report, 61),
+      micUsbStreaming: report[63] === 1,
+      protocolVersion: `${protocolMajor}.${protocolMinor}`
+    };
+  }
+
+  const primaryFlags = report[9];
+  const routeFlags = report[10];
 
   return {
     mode: hostAudioMode(report[7]),
     fallbackReason: hostAudioFallbackReason(report[8]),
-    hostRequested: report[9] === 1,
-    heartbeatHealthy: report[10] === 1,
-    streamActive: report[11] === 1,
-    streamHealthy: report[12] === 1,
-    duplexRequested: report[13] === 1,
-    duplexActive: (report[14] & 0x01) !== 0,
-    headsetPlugged: (report[14] & 0x02) !== 0,
-    headsetAudioRoute: (report[14] & 0x04) !== 0,
-    controllerStateReady: (report[14] & 0x08) !== 0,
-    streamGeneration: readU16(report, 15),
-    heartbeatAgeMs: nullableAge(readU32(report, 17)),
-    frameAgeMs: nullableAge(readU32(report, 21)),
-    hostFramesReceived: readU32(report, 25),
-    hostFramesDropped: readU32(report, 29),
-    micPacketsReceived: readU32(report, 33),
-    micPacketsDropped: readU32(report, 37),
-    micDecodeSuccess: readU32(report, 41),
-    micDecodeFail: readU32(report, 45),
-    micUsbWriteSuccess: readU32(report, 49),
-    micUsbWriteShort: readU32(report, 53),
+    hostRequested: (primaryFlags & 0x01) !== 0,
+    heartbeatHealthy: (primaryFlags & 0x02) !== 0,
+    streamActive: (primaryFlags & 0x04) !== 0,
+    streamHealthy: (primaryFlags & 0x08) !== 0,
+    duplexRequested: (primaryFlags & 0x10) !== 0,
+    duplexActive: (primaryFlags & 0x20) !== 0,
+    controllerStateReady: (primaryFlags & 0x40) !== 0,
+    headsetPlugged: (routeFlags & 0x01) !== 0,
+    headsetAudioRoute: (routeFlags & 0x02) !== 0,
+    streamGeneration: readU16(report, 11),
+    heartbeatAgeMs: nullableAge16(readU16(report, 13)),
+    frameAgeMs: nullableAge16(readU16(report, 15)),
+    hostFramesReceived: readU32(report, 17),
+    hostFramesDropped: readU32(report, 21),
+    micPacketsReceived: readU32(report, 25),
+    micPacketsDropped: readU32(report, 29),
+    micDecodeSuccess: readU32(report, 33),
+    micDecodeFail: readU32(report, 37),
+    micUsbWriteSuccess: readU32(report, 41),
+    micUsbWriteShort: readU32(report, 45),
+    micUsbConcealCount: readU32(report, 49),
+    micPlcCount: readU32(report, 53),
     micLastDecodedSamples: readU16(report, 57),
     micLastWrittenBytes: readU16(report, 59),
     micPeakPermille: readU16(report, 61),
-    micUsbStreaming: report[63] === 1,
-    protocolVersion: `${report[5]}.${report[6]}`
+    micUsbStreaming: (primaryFlags & 0x80) !== 0,
+    protocolVersion: `${protocolMajor}.${protocolMinor}`
   };
 }
 

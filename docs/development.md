@@ -18,6 +18,8 @@ Install these tools before building:
 The firmware CI currently builds with Pico SDK `2.2.0` and TinyUSB `0.20.0`.
 For the closest local match, use the same versions.
 
+For debug presets and runtime diagnostic flags, see `docs/diagnostics.md`.
+
 ## Clone
 
 Initialize the bundled third-party source submodules:

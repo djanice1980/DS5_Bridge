@@ -29,6 +29,7 @@ if ($Force) {
 
 $sonyDualSenseVidPidPattern = '(?i)VID_054C&(PID_0CE6|PID_0DF2)'
 $dualsenseNamePattern = '(?i)(DualSense|DualSense Edge|Wireless Controller)'
+$ds5BridgeNamePattern = '(?i)DS5[ _-]?Bridge'
 $maxCleanupPasses = 8
 $removeFailureCount = 0
 $cleanupIncomplete = $false
@@ -54,6 +55,9 @@ function Get-DeviceCategory {
     if ($Device.Class -eq 'AudioEndpoint') {
         return 'Audio endpoint'
     }
+    if ($Device.Class -eq 'System' -and $friendlyName -match $ds5BridgeNamePattern) {
+        return 'DS5 Bridge system device'
+    }
     if ($instanceId -match $sonyDualSenseVidPidPattern) {
         return 'USB/HID bridge stack'
     }
@@ -73,6 +77,7 @@ function Test-TargetDevice {
     $friendlyName = [string]$Device.FriendlyName
     $isBluetooth = $instanceId -match '(?i)^BTHENUM\\'
     $isAudioEndpoint = $Device.Class -eq 'AudioEndpoint'
+    $isSystemDevice = $Device.Class -eq 'System'
 
     if ($isBluetooth -and -not $IncludeBluetooth) {
         return $false
@@ -88,6 +93,12 @@ function Test-TargetDevice {
         return $true
     }
     if ($isAudioEndpoint -and $friendlyName -match $dualsenseNamePattern) {
+        return $true
+    }
+    if ($isAudioEndpoint -and $friendlyName -match $ds5BridgeNamePattern) {
+        return $true
+    }
+    if ($isSystemDevice -and $friendlyName -match $ds5BridgeNamePattern) {
         return $true
     }
     if ($isBluetooth -and $friendlyName -match $dualsenseNamePattern) {

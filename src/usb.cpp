@@ -14,10 +14,10 @@
 #include "usb.h"
 
 uint8_t mute[2]; // 0: speaker/LED fallback, 1: mic/idle-disconnect fallback
-float volume[2] = {DEFAULT_COMPANION_SPEAKER_GAIN, 1.0f}; // 0: companion speaker gain 0-1, 1: haptics gain 0-2
-uint8_t usb_host_volume_percent[2] = {100, 100};
-uint8_t usb_host_mute[2] = {0, 0};
-uint32_t usb_host_volume_set_count[2] = {0, 0};
+float volume[2] = {DEFAULT_COMPANION_SPEAKER_GAIN, 1.0f}; // 0: companion speaker gain 0-1, 1: haptics gain 0-5
+uint8_t usb_host_volume_percent[3] = {100, 100, 100};
+uint8_t usb_host_mute[3] = {0, 0, 0};
+uint32_t usb_host_volume_set_count[3] = {0, 0, 0};
 float usb_host_speaker_gain = 1.0f;
 static uint32_t usb_last_hid_output_us = 0;
 static uint8_t usb_hid_polling_rate = 2;
@@ -26,6 +26,7 @@ static volatile bool usb_suspend_disconnect_requested = false;
 static bool usb_suspend_disconnect = true;
 static volatile bool usb_speaker_streaming = false;
 static volatile bool usb_mic_streaming = false;
+static volatile bool usb_line_streaming = false;
 static bool usb_reconnect_requested = false;
 static bool usb_reconnect_connect_pending = false;
 static uint32_t usb_reconnect_at_us = 0;
@@ -41,6 +42,7 @@ uint8_t usb_hid_polling_interval_ms_value = 1;
 
 #define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
 #define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
+#define UAC1_ENTITY_LINE_FEATURE_UNIT   0x08
 #define HID_OUTPUT_ACTIVE_US            500000
 #define USB_RECONNECT_DELAY_US          250000
 #define USB_RECONNECT_HOLD_US           150000
@@ -59,8 +61,9 @@ struct UsbAudioVolumeRange {
     int16_t res;
 };
 
-static constexpr UsbAudioVolumeRange kUsbAudioVolumeRanges[2] = {
+static constexpr UsbAudioVolumeRange kUsbAudioVolumeRanges[3] = {
     {-100 * 256, 0, 1 * 256},
+    {0, 48 * 256, 0x007a},
     {0, 48 * 256, 0x007a},
 };
 
@@ -89,16 +92,17 @@ static void usb_reset_audio_class_state() {
     usb_last_hid_output_us = 0;
     usb_speaker_streaming = false;
     usb_mic_streaming = false;
-    usb_host_volume_percent[0] = 100;
-    usb_host_volume_percent[1] = 100;
-    usb_host_mute[0] = 0;
-    usb_host_mute[1] = 0;
-    usb_host_volume_set_count[0] = 0;
-    usb_host_volume_set_count[1] = 0;
+    usb_line_streaming = false;
+    for (uint8_t i = 0; i < 3; i++) {
+        usb_host_volume_percent[i] = 100;
+        usb_host_mute[i] = 0;
+        usb_host_volume_set_count[i] = 0;
+    }
     usb_host_speaker_gain = 1.0f;
     if (tud_inited()) {
         tud_audio_clear_ep_out_ff();
-        tud_audio_clear_ep_in_ff();
+        tud_audio_n_clear_ep_in_ff(0);
+        tud_audio_n_clear_ep_in_ff(1);
     }
 }
 
@@ -183,6 +187,10 @@ bool usb_mic_streaming_active() {
     return usb_mic_streaming;
 }
 
+bool usb_line_streaming_active() {
+    return usb_line_streaming;
+}
+
 void usb_handle_controller_transport_disconnect() {
     usb_reconnect_requested = false;
     usb_reconnect_connect_pending = false;
@@ -227,13 +235,15 @@ extern "C" bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t cons
         usb_speaker_streaming = alt != 0;
     } else if (itf == 2) {
         usb_mic_streaming = alt != 0;
+    } else if (itf == 4) {
+        usb_line_streaming = alt != 0;
     }
     audio_debug_note_usb_event(
         UsbAudioDebugSetInterface,
         itf,
         alt,
         usb_speaker_streaming ? 1 : 0,
-        usb_mic_streaming ? 1 : 0
+        static_cast<uint8_t>((usb_mic_streaming ? 1 : 0) | (usb_line_streaming ? 2 : 0))
     );
 
     return true;
@@ -298,7 +308,7 @@ void usb_pm_poll() {
 }
 
 static UsbAudioVolumeRange const &usb_volume_range(uint8_t index) {
-    return kUsbAudioVolumeRanges[index == 0 ? 0 : 1];
+    return kUsbAudioVolumeRanges[index < 3 ? index : 1];
 }
 
 static int16_t usb_volume_units_from_buffer(uint8_t index, uint8_t const *buffer) {
@@ -337,7 +347,17 @@ static float usb_volume_units_to_gain(uint8_t index, uint8_t const *buffer) {
 }
 
 static float current_host_volume_percent(uint8_t index) {
-    return usb_host_volume_percent[index == 0 ? 0 : 1];
+    return usb_host_volume_percent[index < 3 ? index : 1];
+}
+
+static uint8_t usb_audio_control_index_for_entity(uint8_t entityID) {
+    if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
+        return 0;
+    }
+    if (entityID == UAC1_ENTITY_LINE_FEATURE_UNIT) {
+        return 2;
+    }
+    return 1;
 }
 
 //--------------------------------------------------------------------+
@@ -351,7 +371,7 @@ static float current_host_volume_percent(uint8_t index) {
 static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint8_t *pBuff) {
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
-    uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
+    uint8_t index = usb_audio_control_index_for_entity(entityID);
     audio_debug_note_usb_event(
         UsbAudioDebugSetEntity,
         entityID,
@@ -361,7 +381,11 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
     );
 
     // If request is for our speaker feature unit
-    if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
+    if (
+        entityID == UAC1_ENTITY_SPK_FEATURE_UNIT
+        || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT
+        || entityID == UAC1_ENTITY_LINE_FEATURE_UNIT
+    ) {
         switch (ctrlSel) {
             case AUDIO10_FU_CTRL_MUTE:
                 switch (p_request->bRequest) {
@@ -412,7 +436,7 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
 static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const *p_request) {
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
-    uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
+    uint8_t index = usb_audio_control_index_for_entity(entityID);
     audio_debug_note_usb_event(
         UsbAudioDebugGetEntity,
         entityID,
@@ -422,7 +446,11 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
     );
 
     // If request is for our speaker feature unit
-    if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
+    if (
+        entityID == UAC1_ENTITY_SPK_FEATURE_UNIT
+        || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT
+        || entityID == UAC1_ENTITY_LINE_FEATURE_UNIT
+    ) {
         switch (ctrlSel) {
             case AUDIO10_FU_CTRL_MUTE:
                 // Audio control mute cur parameter block consists of only one byte - we thus can send it right away

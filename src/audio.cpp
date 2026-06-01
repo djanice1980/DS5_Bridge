@@ -5,6 +5,12 @@
 
 #include "audio.h"
 #include "bt.h"
+#include "controller_packet_compositor.h"
+#include "controller_output_state.h"
+#include "dualsense_output.h"
+#include "haptics_test_signal.h"
+#include "host_audio_runtime.h"
+#include "host_pcm_iso.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
 #endif
@@ -35,46 +41,12 @@
 #define TEST_HAPTICS_PACKET_INTERVAL_US 10666
 #define TEST_HAPTICS_COOLDOWN_US 500000
 #define TEST_HAPTICS_BASE_AMPLITUDE 72
+#define TEST_HAPTICS_PREROLL_PACKET_COUNT 3
 #define TEST_HAPTICS_NEUTRAL_PACKET_COUNT 5
+#define MAX_HAPTICS_GAIN 5.0f
 #define USB_AUDIO_ACTIVE_THRESHOLD 8
 #define AUDIO_LOOP_MAX_USB_READS 4
-#define STATE_FLAG1_LIGHTBAR_CONTROL_ENABLE 0x04
-#define STATE_FLAG1_RELEASE_LEDS 0x08
-#define STATE_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE 0x10
-#define STATE_FLAG0_COMPATIBLE_VIBRATION 0x01
-#define STATE_FLAG0_HAPTICS_SELECT 0x02
-#define STATE_FLAG0_SPEAKER_VOLUME_ENABLE 0x20
-#define STATE_FLAG0_AUDIO_CONTROL_ENABLE 0x80
-#define STATE_FLAG1_AUDIO_CONTROL2_ENABLE 0x80
-#define STATE_FLAG0_RIGHT_TRIGGER_EFFECT 0x04
-#define STATE_FLAG0_LEFT_TRIGGER_EFFECT 0x08
-#define STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE 0x40
-#define STATE_FLAG2_COMPATIBLE_VIBRATION2 0x04
-#define STATE_PAYLOAD_VALID_FLAG0_OFFSET 0
-#define STATE_PAYLOAD_VALID_FLAG1_OFFSET 1
-#define STATE_PAYLOAD_MOTOR_RIGHT_OFFSET 2
-#define STATE_PAYLOAD_MOTOR_LEFT_OFFSET 3
-#define STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET 10
-#define STATE_PAYLOAD_TRIGGER_LEFT_OFFSET 21
-#define STATE_PAYLOAD_TRIGGER_EFFECT_SIZE 11
-#define STATE_PAYLOAD_TRIGGER_POWER_OFFSET 36
-#define STATE_PAYLOAD_HEADPHONE_VOLUME_OFFSET 4
-#define STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET 5
-#define STATE_PAYLOAD_AUDIO_CONTROL_OFFSET 7
-#define STATE_PAYLOAD_AUDIO_CONTROL2_OFFSET 37
-#define STATE_PAYLOAD_VALID_FLAG2_OFFSET 38
-#define STATE_PAYLOAD_LED_BRIGHTNESS_OFFSET 42
-#define STATE_PAYLOAD_PLAYER_LEDS_OFFSET 43
-#define STATE_PAYLOAD_LIGHTBAR_RED_OFFSET 44
-#define STATE_PAYLOAD_LIGHTBAR_GREEN_OFFSET 45
-#define STATE_PAYLOAD_LIGHTBAR_BLUE_OFFSET 46
-#define STATE_PAYLOAD_HEADPHONE_VOLUME_MAX 0x7f
-#define STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX 0x64
-#define STATE_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES 0x00
-#define STATE_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER 0x30
-#define STATE_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x02
-#define STATE_LIGHTBAR_SETUP_CONTROL_MASK 0x03
-#define STATE_PLAYER_LED_1_INSTANT 0x24
+#define HOST_AUDIO_LOOP_MAX_USB_READS 12
 #define AUDIO_DEBUG_RING_SIZE 96
 #define AUDIO_DEBUG_REPORT_HEADER_SIZE 8
 #define AUDIO_DEBUG_RECORD_SIZE 14
@@ -93,18 +65,29 @@
 #define HOST_FRAME_REASSEMBLY_SIZE 448
 #define HOST_AUDIO_REPORT_SIZE REPORT_SIZE
 #define HOST_AUDIO_COMPACT_REPORT_SIZE (SAMPLE_SIZE + 200)
+#define HOST_FAST_DUPLICATE_IGNORE_US 50000
+#define HOST_RAW_PCM_RETURN_FRAMES 48
+#define HOST_RAW_PCM_RETURN_CHANNELS 2
+#define HOST_RAW_PCM_RETURN_PACKET_BYTES (HOST_RAW_PCM_RETURN_FRAMES * INPUT_CHANNELS * sizeof(int16_t))
+#define HOST_RAW_PCM_RETURN_LINE_BYTES (HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS * sizeof(int16_t))
+#define HOST_USB_HAPTIC_LATCH_US 50000
+#define HAPTIC_DOWNSAMPLE_FRAMES 16
 #define HOST_MIC_OPUS_SIZE 71
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
-#define HOST_MIC_USB_CHANNELS 1
-#define HOST_MIC_QUEUE_DEPTH 8
+#define HOST_MIC_USB_CHANNELS CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX
+#define HOST_RAW_PCM_AUDIO_FUNC_ID 1
+#define HOST_MIC_QUEUE_DEPTH 24
 #define HOST_MIC_USB_PACKET_BYTES (48 * HOST_MIC_USB_CHANNELS * sizeof(int16_t))
-#define HOST_MIC_USB_PREFILL_BYTES (10 * HOST_MIC_USB_PACKET_BYTES)
+#define HOST_MIC_USB_PREFILL_BYTES (64 * HOST_MIC_USB_PACKET_BYTES)
 #define HOST_MIC_USB_FILL_MAX_CHUNKS 6
+#define HOST_MIC_USB_FILL_MAX_CHUNKS_WITH_RAW_PCM 4
 #define HOST_MIC_CORE1_BURST_LIMIT 2
-#define HOST_MIC_PLAYOUT_START_DEPTH 3
+#define HOST_MIC_PLAYOUT_START_DEPTH 12
 #define HOST_MIC_OPUS_FRAME_INTERVAL_US 10000
-#define HOST_MIC_PLC_TARGET_DEPTH 2
+#define HOST_MIC_PLC_TARGET_DEPTH 1
+#define HOST_MIC_PLC_RESERVOIR_BYTES (40 * HOST_MIC_USB_PACKET_BYTES)
+#define HOST_MIC_PLC_EMPTY_GRACE_US 30000
 using std::clamp;
 using std::max;
 
@@ -131,6 +114,7 @@ enum AudioDebugEventCode : uint8_t {
     AudioDebugUsbEvent = 20,
     AudioDebugHidEvent = 21,
     AudioDebugBtEvent = 22,
+    AudioDebugCpuLoad = 23,
 };
 
 enum HostAudioPacketType : uint8_t {
@@ -190,7 +174,6 @@ struct audio_debug_event {
     uint8_t arg4;
 };
 
-static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
 static bool plug_headset = false;
@@ -201,6 +184,7 @@ static bool speaker_route_active = false;
 static bool speaker_route_headset = false;
 static bool host_route_primer_toggle_pending = false;
 static bool test_haptics_active = false;
+static uint8_t test_haptics_preroll_packets_remaining = 0;
 static uint8_t test_haptics_packets_remaining = 0;
 static uint8_t test_haptics_neutral_packets_remaining = 0;
 static uint32_t test_haptics_last_packet_us = 0;
@@ -218,6 +202,9 @@ static uint8_t audio_debug_count = 0;
 static uint8_t audio_debug_head = 0;
 static uint8_t audio_debug_packet_log_budget = 0;
 static audio_debug_stats audio_stats{};
+static volatile uint32_t audio_loop_runtime_max_us = 0;
+static volatile uint32_t audio_loop_gap_max_us = 0;
+static uint32_t audio_loop_last_start_us = 0;
 static uint32_t last_usb_audio_read_us = 0;
 static uint32_t last_usb_discard_debug_us = 0;
 static uint32_t last_hid_output_debug_us = 0;
@@ -241,44 +228,25 @@ struct audio_raw_element {
     uint32_t generation;
 };
 
-static uint8_t state_data[63] = {
-    0xfd, 0xe3, 0x0, 0x0,
-    0x7f, 0x64,
-    0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
-    0x4, 0x0, 0x0, 0x0, 0x1,
-    0x00,
-    0x00, 0x00, 0xff,
-};
-static uint8_t cached_state_right_trigger[STATE_PAYLOAD_TRIGGER_EFFECT_SIZE]{};
-static uint8_t cached_state_left_trigger[STATE_PAYLOAD_TRIGGER_EFFECT_SIZE]{};
-static bool cached_state_right_trigger_valid = false;
-static bool cached_state_left_trigger_valid = false;
-static uint8_t cached_state_trigger_power = 0;
-static bool cached_state_trigger_power_valid = false;
-
 static float audio_buf[512 * 2];
 static uint audio_buf_pos = 0;
 static int8_t audio_haptic_buf[SAMPLE_SIZE];
 static int audio_haptic_buf_pos = 0;
-static volatile bool host_audio_requested = false;
-static volatile bool host_stream_active = false;
-static volatile bool host_duplex_requested = false;
-static volatile uint32_t host_last_heartbeat_us = 0;
-static volatile uint32_t host_stream_started_us = 0;
-static volatile uint32_t host_last_frame_us = 0;
-static volatile uint32_t host_request_started_us = 0;
-static uint16_t host_stream_generation = 0;
-static AudioRuntimeMode audio_runtime_mode = AudioRuntimeFallbackPicoLocal;
-static AudioFallbackReason audio_fallback_reason = AudioFallbackHostDisabled;
+static int32_t audio_haptic_bucket_l = 0;
+static int32_t audio_haptic_bucket_r = 0;
+static uint8_t audio_haptic_bucket_frames = 0;
+static int8_t host_usb_haptic_buf[SAMPLE_SIZE]{};
+static bool host_usb_haptic_pending = false;
+static uint32_t host_usb_haptic_us = 0;
+static HostAudioRuntimeState host_runtime;
 static uint16_t host_reassembly_generation = 0;
 static uint16_t host_reassembly_sequence = 0;
 static uint8_t host_reassembly_chunk_count = 0;
 static uint16_t host_reassembly_received_mask = 0;
 static uint16_t host_reassembly_expected_length = 0;
 static uint16_t host_reassembly_received_bytes = 0;
+static uint16_t host_last_completed_fast_sequence = 0;
+static uint32_t host_last_completed_fast_sequence_us = 0;
 static uint8_t host_reassembly_buffer[HOST_FRAME_REASSEMBLY_SIZE];
 static uint32_t host_frames_received = 0;
 static uint32_t host_frames_dropped = 0;
@@ -289,16 +257,24 @@ static uint32_t mic_decode_success = 0;
 static uint32_t mic_decode_fail = 0;
 static uint32_t mic_usb_write_success = 0;
 static uint32_t mic_usb_write_short = 0;
+static uint32_t mic_plc_count = 0;
 static uint16_t mic_last_decoded_samples = 0;
 static uint16_t mic_last_written_bytes = 0;
 static uint16_t mic_peak_permille = 0;
 static volatile bool mic_usb_playout_started = false;
 static volatile uint8_t mic_output_volume_percent = 100;
 static volatile bool mic_output_muted = false;
+static bool controller_mic_state_valid = false;
+static uint8_t controller_mic_state_volume_percent = 0xff;
+static bool controller_mic_state_muted = true;
 static mic_decode_element mic_usb_pending{};
 static uint16_t mic_usb_pending_offset = 0;
 static uint16_t mic_usb_pending_len = 0;
 static uint32_t mic_next_plc_us = 0;
+static uint32_t mic_usb_conceal_count = 0;
+static uint32_t mic_decode_empty_since_us = 0;
+static volatile uint32_t mic_usb_buffered_bytes = 0;
+static bool mic_usb_fifo_threshold_configured = false;
 
 static void core1_entry();
 static void reset_core1_audio_pipeline(uint32_t generation);
@@ -306,11 +282,20 @@ static void clear_host_reassembly();
 static void clear_mic_queues();
 static void audio_host_poll();
 static void process_mic_usb_output();
+static void process_host_usb_audio_packets(uint8_t max_reads);
+static void discard_usb_audio_packets(uint8_t max_reads);
 static void clear_partial_audio_state();
 static void reset_controller_audio_report_counters();
 static void schedule_host_route_primer();
 static bool prime_host_audio_route_if_needed();
+static bool audio_silence_tail_active(uint32_t now);
 static uint8_t clamp_debug_u8(uint32_t value);
+static bool haptic_block_has_signal(uint8_t const *data);
+static bool copy_latest_host_usb_haptics(uint8_t *destination);
+static void store_latest_host_usb_haptics(int8_t const *data);
+static void clear_latest_host_usb_haptics();
+static bool merge_test_haptics_overlay(int8_t *destination);
+static bool append_averaged_haptic_frame(int16_t left, int16_t right, float gain);
 #if DS5_AUDIO_DEBUG_ENABLED
 static void audio_debug_log_impl(
     AudioDebugEventCode code,
@@ -326,10 +311,60 @@ static void audio_debug_log_impl(
 #endif
 static void copy_routed_state_data(uint8_t *destination);
 
+static constexpr uint32_t CPU_DEBUG_INTERVAL_US = 1000000;
+
+static bool host_raw_pcm_return_requested() {
+    return host_runtime.requested;
+}
+
+static bool host_raw_pcm_return_active() {
+    return host_raw_pcm_return_requested() && usb_line_streaming_active();
+}
+
+static bool host_usb_pcm_return_active() {
+    return host_raw_pcm_return_requested() && host_pcm_iso_mounted();
+}
+
+static bool host_pcm_return_active() {
+    return host_raw_pcm_return_active() || host_usb_pcm_return_active();
+}
+
 static bool host_mic_path_active() {
-    return host_duplex_requested
-        && audio_runtime_mode == AudioRuntimeHostEncodedActive
-        && bt_is_controller_connected();
+    return host_runtime.duplex_requested
+        && host_runtime.mode == AudioRuntimeHostEncodedActive
+        && bt_is_controller_connected()
+        && !mic_output_muted;
+}
+
+static bool host_mic_stream_active() {
+    return host_mic_path_active() && usb_mic_streaming_active();
+}
+
+static bool controller_mic_transport_muted() {
+    return quiet_mode_enabled || !host_mic_stream_active();
+}
+
+static void refresh_controller_mic_transport_state(bool force = false) {
+    if (!bt_is_controller_connected()) {
+        controller_mic_state_valid = false;
+        return;
+    }
+
+    const uint8_t volume_percent = mic_output_volume_percent;
+    const bool muted = controller_mic_transport_muted();
+    if (
+        !force
+        && controller_mic_state_valid
+        && controller_mic_state_volume_percent == volume_percent
+        && controller_mic_state_muted == muted
+    ) {
+        return;
+    }
+
+    bt_set_microphone_state(volume_percent, muted);
+    controller_mic_state_valid = true;
+    controller_mic_state_volume_percent = volume_percent;
+    controller_mic_state_muted = muted;
 }
 
 static void reset_controller_audio_report_counters() {
@@ -369,115 +404,8 @@ static bool prime_host_audio_route_if_needed() {
     return true;
 }
 
-static void clamp_state_speaker_volume() {
-    if (state_data[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] > STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX) {
-        state_data[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] = STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX;
-    }
-}
-
-static void clear_trigger_state_for_audio_report(uint8_t *data) {
-    if (data == nullptr) {
-        return;
-    }
-
-    data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
-        data[STATE_PAYLOAD_VALID_FLAG0_OFFSET]
-        & static_cast<uint8_t>(~(STATE_FLAG0_RIGHT_TRIGGER_EFFECT | STATE_FLAG0_LEFT_TRIGGER_EFFECT))
-    );
-    data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
-        data[STATE_PAYLOAD_VALID_FLAG1_OFFSET]
-        & static_cast<uint8_t>(~STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE)
-    );
-    memset(data + STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET, 0, STATE_PAYLOAD_TRIGGER_EFFECT_SIZE);
-    memset(data + STATE_PAYLOAD_TRIGGER_LEFT_OFFSET, 0, STATE_PAYLOAD_TRIGGER_EFFECT_SIZE);
-    data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET] = 0;
-}
-
-static void clear_zero_rumble_state_for_audio_report(uint8_t *data) {
-    if (data == nullptr) {
-        return;
-    }
-
-    const uint8_t rumble_flag0 = data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & static_cast<uint8_t>(
-        STATE_FLAG0_COMPATIBLE_VIBRATION | STATE_FLAG0_HAPTICS_SELECT
-    );
-    const uint8_t rumble_flag2 = data[STATE_PAYLOAD_VALID_FLAG2_OFFSET] & STATE_FLAG2_COMPATIBLE_VIBRATION2;
-    if ((rumble_flag0 | rumble_flag2) == 0) {
-        return;
-    }
-    if ((data[STATE_PAYLOAD_MOTOR_RIGHT_OFFSET] | data[STATE_PAYLOAD_MOTOR_LEFT_OFFSET]) != 0) {
-        return;
-    }
-
-    data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
-        data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & static_cast<uint8_t>(~rumble_flag0)
-    );
-    data[STATE_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(
-        data[STATE_PAYLOAD_VALID_FLAG2_OFFSET] & static_cast<uint8_t>(~rumble_flag2)
-    );
-}
-
 void audio_set_state_data(uint8_t const *data, uint8_t len) {
-    if (data == nullptr) {
-        return;
-    }
-    const uint8_t copy_len = len > sizeof(state_data) ? sizeof(state_data) : len;
-    memcpy(state_data, data, copy_len);
-    if (copy_len < sizeof(state_data)) {
-        memset(state_data + copy_len, 0, sizeof(state_data) - copy_len);
-    }
-    clear_zero_rumble_state_for_audio_report(state_data);
-
-    if (
-        (state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & STATE_FLAG0_RIGHT_TRIGGER_EFFECT) != 0
-        && copy_len > STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET + STATE_PAYLOAD_TRIGGER_EFFECT_SIZE - 1
-    ) {
-        memcpy(
-            cached_state_right_trigger,
-            state_data + STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET,
-            sizeof(cached_state_right_trigger)
-        );
-        cached_state_right_trigger_valid = true;
-    } else if (cached_state_right_trigger_valid) {
-        state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= STATE_FLAG0_RIGHT_TRIGGER_EFFECT;
-        memcpy(
-            state_data + STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET,
-            cached_state_right_trigger,
-            sizeof(cached_state_right_trigger)
-        );
-    }
-
-    if (
-        (state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & STATE_FLAG0_LEFT_TRIGGER_EFFECT) != 0
-        && copy_len > STATE_PAYLOAD_TRIGGER_LEFT_OFFSET + STATE_PAYLOAD_TRIGGER_EFFECT_SIZE - 1
-    ) {
-        memcpy(
-            cached_state_left_trigger,
-            state_data + STATE_PAYLOAD_TRIGGER_LEFT_OFFSET,
-            sizeof(cached_state_left_trigger)
-        );
-        cached_state_left_trigger_valid = true;
-    } else if (cached_state_left_trigger_valid) {
-        state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= STATE_FLAG0_LEFT_TRIGGER_EFFECT;
-        memcpy(
-            state_data + STATE_PAYLOAD_TRIGGER_LEFT_OFFSET,
-            cached_state_left_trigger,
-            sizeof(cached_state_left_trigger)
-        );
-    }
-
-    if (
-        (state_data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] & STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE) != 0
-        && copy_len > STATE_PAYLOAD_TRIGGER_POWER_OFFSET
-    ) {
-        cached_state_trigger_power = state_data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET];
-        cached_state_trigger_power_valid = true;
-    } else if (cached_state_trigger_power_valid) {
-        state_data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] |= STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE;
-        state_data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET] = cached_state_trigger_power;
-    }
-
-    clamp_state_speaker_volume();
+    controller_output_state_apply_host_payload(data, len);
 }
 
 void audio_set_adaptive_trigger_state(
@@ -488,56 +416,25 @@ void audio_set_adaptive_trigger_state(
     uint8_t motor_power,
     bool motor_power_valid
 ) {
-    if (right_valid && right_trigger != nullptr) {
-        memcpy(cached_state_right_trigger, right_trigger, sizeof(cached_state_right_trigger));
-        cached_state_right_trigger_valid = true;
-        state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= STATE_FLAG0_RIGHT_TRIGGER_EFFECT;
-        memcpy(state_data + STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET, right_trigger, STATE_PAYLOAD_TRIGGER_EFFECT_SIZE);
-    }
-    if (left_valid && left_trigger != nullptr) {
-        memcpy(cached_state_left_trigger, left_trigger, sizeof(cached_state_left_trigger));
-        cached_state_left_trigger_valid = true;
-        state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= STATE_FLAG0_LEFT_TRIGGER_EFFECT;
-        memcpy(state_data + STATE_PAYLOAD_TRIGGER_LEFT_OFFSET, left_trigger, STATE_PAYLOAD_TRIGGER_EFFECT_SIZE);
-    }
-    if (motor_power_valid) {
-        cached_state_trigger_power = motor_power;
-        cached_state_trigger_power_valid = true;
-        state_data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] |= STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE;
-        state_data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET] = motor_power;
-    }
-}
-
-static uint8_t scale_lightbar_channel_for_state(uint8_t channel, uint8_t brightness_percent) {
-    return static_cast<uint8_t>((static_cast<uint16_t>(channel) * brightness_percent + 50) / 100);
+    controller_output_state_set_adaptive_trigger(
+        right_trigger,
+        right_valid,
+        left_trigger,
+        left_valid,
+        motor_power,
+        motor_power_valid
+    );
 }
 
 void audio_set_lightbar_state(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent) {
-    const uint8_t brightness = brightness_percent > 100 ? 100 : brightness_percent;
-    state_data[STATE_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
-        (
-            state_data[STATE_PAYLOAD_VALID_FLAG1_OFFSET]
-            & static_cast<uint8_t>(~STATE_FLAG1_RELEASE_LEDS)
-        )
-        | STATE_FLAG1_LIGHTBAR_CONTROL_ENABLE
-        | STATE_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE
-    );
-    state_data[STATE_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(
-        state_data[STATE_PAYLOAD_VALID_FLAG2_OFFSET]
-        & static_cast<uint8_t>(~STATE_LIGHTBAR_SETUP_CONTROL_MASK)
-    );
-    state_data[STATE_PAYLOAD_LED_BRIGHTNESS_OFFSET] = 0x01;
-    state_data[STATE_PAYLOAD_PLAYER_LEDS_OFFSET] = STATE_PLAYER_LED_1_INSTANT;
-    state_data[STATE_PAYLOAD_LIGHTBAR_RED_OFFSET] = scale_lightbar_channel_for_state(red, brightness);
-    state_data[STATE_PAYLOAD_LIGHTBAR_GREEN_OFFSET] = scale_lightbar_channel_for_state(green, brightness);
-    state_data[STATE_PAYLOAD_LIGHTBAR_BLUE_OFFSET] = scale_lightbar_channel_for_state(blue, brightness);
+    controller_output_state_set_lightbar(red, green, blue, brightness_percent);
 }
 
 void set_headset(bool state) {
     const bool first_report_after_connect = !controller_state_ready;
     controller_state_ready = true;
     if (plug_headset == state) {
-        if (first_report_after_connect && host_audio_requested) {
+        if (first_report_after_connect && host_runtime.requested) {
             schedule_host_route_primer();
         }
         return;
@@ -556,7 +453,7 @@ void set_headset(bool state) {
             1
         );
     }
-    if (host_audio_requested) {
+    if (host_runtime.requested) {
         schedule_host_route_primer();
     }
 }
@@ -573,39 +470,84 @@ static uint8_t clamp_debug_u8(uint32_t value) {
     return value > 255 ? 255 : static_cast<uint8_t>(value);
 }
 
-static void copy_routed_state_data(uint8_t *destination) {
-    if (destination == nullptr) {
-        return;
-    }
+static uint16_t current_haptics_gain_percent() {
+    const float gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
+    return static_cast<uint16_t>(gain * 100.0f + 0.5f);
+}
 
-    memcpy(destination, state_data, sizeof(state_data));
-    clear_zero_rumble_state_for_audio_report(destination);
-    if (plug_headset) {
-        destination[STATE_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
-            (destination[STATE_PAYLOAD_VALID_FLAG0_OFFSET] | STATE_FLAG0_AUDIO_CONTROL_ENABLE)
-            & static_cast<uint8_t>(~STATE_FLAG0_SPEAKER_VOLUME_ENABLE)
-        );
-        destination[STATE_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
-            destination[STATE_PAYLOAD_VALID_FLAG1_OFFSET]
-            & static_cast<uint8_t>(~STATE_FLAG1_AUDIO_CONTROL2_ENABLE)
-        );
-        destination[STATE_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = STATE_PAYLOAD_HEADPHONE_VOLUME_MAX;
-        destination[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] = 0x00;
-        destination[STATE_PAYLOAD_AUDIO_CONTROL_OFFSET] = STATE_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES;
-        destination[STATE_PAYLOAD_AUDIO_CONTROL2_OFFSET] = 0x00;
-        clear_trigger_state_for_audio_report(destination);
-        return;
+static uint8_t percent_debug_u8(uint32_t part, uint32_t total) {
+    if (total == 0) {
+        return 0;
     }
-
-    destination[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= static_cast<uint8_t>(
-        STATE_FLAG0_AUDIO_CONTROL_ENABLE | STATE_FLAG0_SPEAKER_VOLUME_ENABLE
+    const uint32_t percent = static_cast<uint32_t>(
+        (static_cast<uint64_t>(part) * 100u + (total / 2u)) / total
     );
-    destination[STATE_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = STATE_PAYLOAD_HEADPHONE_VOLUME_MAX;
-    destination[STATE_PAYLOAD_VALID_FLAG1_OFFSET] |= STATE_FLAG1_AUDIO_CONTROL2_ENABLE;
-    destination[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] = STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX;
-    destination[STATE_PAYLOAD_AUDIO_CONTROL_OFFSET] = STATE_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER;
-    destination[STATE_PAYLOAD_AUDIO_CONTROL2_OFFSET] = STATE_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN;
-    clear_trigger_state_for_audio_report(destination);
+    return percent > 100 ? 100 : static_cast<uint8_t>(percent);
+}
+
+static uint8_t us_to_100us_debug_u8(uint32_t us) {
+    return clamp_debug_u8((us + 50u) / 100u);
+}
+
+static bool mic_debug_should_log(uint8_t type, uint32_t min_interval_us) {
+#if DS5_AUDIO_DEBUG_ENABLED
+    static uint32_t last_log_us[16]{};
+    const uint8_t index = type < count_of(last_log_us) ? type : static_cast<uint8_t>(count_of(last_log_us) - 1);
+    const uint32_t now = time_us_32();
+    if (last_log_us[index] == 0 || static_cast<uint32_t>(now - last_log_us[index]) >= min_interval_us) {
+        last_log_us[index] = now;
+        return true;
+    }
+#else
+    (void)type;
+    (void)min_interval_us;
+#endif
+    return false;
+}
+
+static void audio_loop_note_start(uint32_t now) {
+    if (audio_loop_last_start_us != 0) {
+        const uint32_t gap_us = static_cast<uint32_t>(now - audio_loop_last_start_us);
+        if (gap_us > audio_loop_gap_max_us) {
+            audio_loop_gap_max_us = gap_us;
+        }
+    }
+    audio_loop_last_start_us = now;
+}
+
+static void audio_loop_note_finish(uint32_t start_us) {
+    const uint32_t runtime_us = static_cast<uint32_t>(time_us_32() - start_us);
+    if (runtime_us > audio_loop_runtime_max_us) {
+        audio_loop_runtime_max_us = runtime_us;
+    }
+}
+
+struct AudioLoopTelemetryScope {
+    explicit AudioLoopTelemetryScope(uint32_t now) : start_us(now) {
+        audio_loop_note_start(now);
+    }
+
+    ~AudioLoopTelemetryScope() {
+        audio_loop_note_finish(start_us);
+    }
+
+    uint32_t start_us;
+};
+
+static uint32_t take_audio_loop_runtime_max_us() {
+    const uint32_t value = audio_loop_runtime_max_us;
+    audio_loop_runtime_max_us = 0;
+    return value;
+}
+
+static uint32_t take_audio_loop_gap_max_us() {
+    const uint32_t value = audio_loop_gap_max_us;
+    audio_loop_gap_max_us = 0;
+    return value;
+}
+
+static void copy_routed_state_data(uint8_t *destination) {
+    controller_packet_copy_audio_snapshot(destination, plug_headset);
 }
 
 static void write_debug_u16(uint8_t *data, uint16_t value) {
@@ -911,6 +853,23 @@ static void clear_host_reassembly() {
     memset(host_reassembly_buffer, 0, sizeof(host_reassembly_buffer));
 }
 
+static void clear_host_reassembly_history() {
+    clear_host_reassembly();
+    host_last_completed_fast_sequence = 0;
+    host_last_completed_fast_sequence_us = 0;
+}
+
+static bool is_recent_completed_fast_fragment(uint16_t sequence, uint32_t now) {
+    return host_last_completed_fast_sequence_us != 0
+        && host_last_completed_fast_sequence == sequence
+        && static_cast<uint32_t>(now - host_last_completed_fast_sequence_us) <= HOST_FAST_DUPLICATE_IGNORE_US;
+}
+
+static void note_completed_fast_frame(uint16_t sequence, uint32_t now) {
+    host_last_completed_fast_sequence = sequence;
+    host_last_completed_fast_sequence_us = now;
+}
+
 static void note_incomplete_host_reassembly(uint8_t reason) {
     if (host_reassembly_received_mask == 0) {
         return;
@@ -931,32 +890,36 @@ static void clear_mic_queues() {
     drain_queue(&mic_fifo);
     drain_queue(&mic_decode_fifo);
     if (usb_mic_streaming_active()) {
-        tud_audio_clear_ep_in_ff();
+        tud_audio_n_clear_ep_in_ff(0);
     }
     mic_usb_playout_started = false;
     mic_usb_pending_offset = 0;
     mic_usb_pending_len = 0;
     mic_next_plc_us = 0;
+    mic_decode_empty_since_us = 0;
+    mic_usb_buffered_bytes = 0;
+    mic_usb_fifo_threshold_configured = false;
 }
 
 static void enter_fallback(AudioFallbackReason reason) {
-    const bool changed = audio_runtime_mode != AudioRuntimeFallbackPicoLocal || audio_fallback_reason != reason;
+    const bool changed = host_runtime.mode != AudioRuntimeFallbackPicoLocal || host_runtime.fallback_reason != reason;
     if (!changed) {
         return;
     }
-    const bool was_host_encoded = audio_runtime_mode == AudioRuntimeHostEncodedActive;
+    const bool was_host_encoded = host_runtime.mode == AudioRuntimeHostEncodedActive;
+    host_pcm_iso_set_enabled(false);
     audio_debug_log(
         AudioDebugHostMode,
         static_cast<uint8_t>(AudioRuntimeFallbackPicoLocal),
         static_cast<uint8_t>(reason),
-        clamp_debug_u8(host_stream_generation),
+        clamp_debug_u8(host_runtime.stream_generation),
         0,
         0
     );
-    audio_runtime_mode = AudioRuntimeFallbackPicoLocal;
-    audio_fallback_reason = reason;
-    host_stream_active = false;
-    host_last_frame_us = 0;
+    host_runtime.mode = AudioRuntimeFallbackPicoLocal;
+    host_runtime.fallback_reason = reason;
+    host_runtime.stream_active = false;
+    host_runtime.last_frame_us = 0;
     if (was_host_encoded) {
         restart_fallback_speaker_fade_in();
     } else {
@@ -971,42 +934,33 @@ static void enter_fallback(AudioFallbackReason reason) {
 }
 
 static bool host_heartbeat_healthy(uint32_t now) {
-    return host_last_heartbeat_us != 0
-        && static_cast<uint32_t>(now - host_last_heartbeat_us) < HOST_HEARTBEAT_TIMEOUT_US;
+    return host_runtime.heartbeat_healthy(now, HOST_HEARTBEAT_TIMEOUT_US);
 }
 
 static bool host_stream_healthy(uint32_t now) {
-    if (!host_stream_active) {
+    if (!host_runtime.stream_active) {
         return false;
     }
     if (host_heartbeat_healthy(now)) {
         return true;
     }
-    if (host_last_frame_us != 0) {
-        return static_cast<uint32_t>(now - host_last_frame_us) < HOST_STREAM_TIMEOUT_US;
+    if (host_runtime.last_frame_us != 0) {
+        return static_cast<uint32_t>(now - host_runtime.last_frame_us) < HOST_STREAM_TIMEOUT_US;
     }
-    return host_stream_started_us != 0
-        && static_cast<uint32_t>(now - host_stream_started_us) < HOST_STREAM_START_GRACE_US;
+    return host_runtime.stream_started_us != 0
+        && static_cast<uint32_t>(now - host_runtime.stream_started_us) < HOST_STREAM_START_GRACE_US;
 }
 
 static bool host_start_grace_active(uint32_t now) {
-    const uint32_t started = host_stream_active ? host_stream_started_us : host_request_started_us;
-    return started != 0 && static_cast<uint32_t>(now - started) < HOST_STREAM_START_GRACE_US;
+    return host_runtime.start_grace_active(now, HOST_STREAM_START_GRACE_US);
 }
 
 static uint32_t host_last_contact_us() {
-    uint32_t contact = host_last_heartbeat_us;
-    if (host_last_frame_us != 0 && (contact == 0 || static_cast<int32_t>(host_last_frame_us - contact) > 0)) {
-        contact = host_last_frame_us;
-    }
-    if (host_stream_started_us != 0 && (contact == 0 || static_cast<int32_t>(host_stream_started_us - contact) > 0)) {
-        contact = host_stream_started_us;
-    }
-    return contact;
+    return host_runtime.last_contact_us();
 }
 
 static bool host_recovery_hold_active(uint32_t now) {
-    if (audio_runtime_mode != AudioRuntimeHostEncodedActive || !host_audio_requested || !host_stream_active) {
+    if (host_runtime.mode != AudioRuntimeHostEncodedActive || !host_runtime.requested || !host_runtime.stream_active) {
         return false;
     }
     const uint32_t contact = host_last_contact_us();
@@ -1015,8 +969,8 @@ static bool host_recovery_hold_active(uint32_t now) {
 
 static void audio_host_poll() {
     const uint32_t now = time_us_32();
-    if (!host_audio_requested) {
-        if (audio_runtime_mode != AudioRuntimeFallbackPicoLocal || audio_fallback_reason != AudioFallbackHostDisabled) {
+    if (!host_runtime.requested) {
+        if (host_runtime.mode != AudioRuntimeFallbackPicoLocal || host_runtime.fallback_reason != AudioFallbackHostDisabled) {
             enter_fallback(AudioFallbackHostDisabled);
         }
         return;
@@ -1024,8 +978,8 @@ static void audio_host_poll() {
 
     if (!host_stream_healthy(now)) {
         if (host_start_grace_active(now)) {
-            if (audio_fallback_reason == AudioFallbackHostDisabled) {
-                audio_fallback_reason = AudioFallbackNone;
+            if (host_runtime.fallback_reason == AudioFallbackHostDisabled) {
+                host_runtime.fallback_reason = AudioFallbackNone;
             }
             return;
         }
@@ -1036,9 +990,9 @@ static void audio_host_poll() {
         return;
     }
 
-    if (audio_runtime_mode != AudioRuntimeHostEncodedActive) {
-        audio_runtime_mode = AudioRuntimeHostEncodedActive;
-        audio_fallback_reason = AudioFallbackNone;
+    if (host_runtime.mode != AudioRuntimeHostEncodedActive) {
+        host_runtime.mode = AudioRuntimeHostEncodedActive;
+        host_runtime.fallback_reason = AudioFallbackNone;
         drain_audio_queues();
         clear_partial_audio_state();
         schedule_host_route_primer();
@@ -1046,7 +1000,7 @@ static void audio_host_poll() {
             AudioDebugHostMode,
             static_cast<uint8_t>(AudioRuntimeHostEncodedActive),
             0,
-            clamp_debug_u8(host_stream_generation),
+            clamp_debug_u8(host_runtime.stream_generation),
             0,
             0
         );
@@ -1056,10 +1010,12 @@ static void audio_host_poll() {
 static void clear_partial_audio_state() {
     audio_buf_pos = 0;
     audio_haptic_buf_pos = 0;
+    audio_haptic_bucket_l = 0;
+    audio_haptic_bucket_r = 0;
+    audio_haptic_bucket_frames = 0;
     audio_silence_tail_logged = false;
     memset(audio_buf, 0, sizeof(audio_buf));
     memset(audio_haptic_buf, 0, sizeof(audio_haptic_buf));
-    resampler.Reset();
 }
 
 static void schedule_speaker_silence_preroll() {
@@ -1070,18 +1026,17 @@ static void schedule_speaker_silence_preroll() {
 
 void audio_handle_controller_disconnect() {
     test_haptics_active = false;
+    test_haptics_preroll_packets_remaining = 0;
     test_haptics_packets_remaining = 0;
     test_haptics_neutral_packets_remaining = 0;
-    cached_state_right_trigger_valid = false;
-    cached_state_left_trigger_valid = false;
-    cached_state_trigger_power = 0;
-    cached_state_trigger_power_valid = false;
+    controller_output_state_reset_cached_triggers();
     plug_headset = false;
     controller_state_ready = false;
     host_route_primer_toggle_pending = false;
     reset_controller_audio_report_counters();
     drain_audio_queues();
     clear_partial_audio_state();
+    clear_latest_host_usb_haptics();
     speaker_silence_preroll_packets_remaining = 0;
     speaker_silence_preroll_last_packet_us = 0;
     speaker_route_active = false;
@@ -1131,7 +1086,11 @@ static void update_persistent_speaker_route() {
     }
 }
 
-static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_speaker) {
+static bool send_audio_haptics_packet(
+    const int8_t *haptic_buf,
+    bool include_speaker,
+    bool merge_test_overlay = true
+) {
     uint8_t pkt[REPORT_SIZE]{};
     pkt[0] = REPORT_ID;
     pkt[1] = reportSeqCounter << 4;
@@ -1147,22 +1106,14 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
     pkt[9] = buffer_length;
     pkt[10] = packetCounter++;
     pkt[11] = 0x10 | (1 << 7);
-    pkt[12] = sizeof(state_data);
+    pkt[12] = ds5::output::kAudioStateSnapshotSize;
     copy_routed_state_data(pkt + 13);
     pkt[76] = 0x12 | (1 << 7);
     pkt[77] = SAMPLE_SIZE;
-    memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
-#ifdef ENABLE_COMPANION
-    companion_note_feedback_trace_samples(
-        CompanionFeedbackTraceLocalAudio,
-        reinterpret_cast<uint8_t const *>(haptic_buf),
-        SAMPLE_SIZE,
-        include_speaker ? 1 : 0,
-        clamp_debug_u8(queue_get_level(&audio_fifo)),
-        opus_debug_level(),
-        clamp_debug_u8(static_cast<uint32_t>(volume[1] * 100.0f))
-    );
-#endif
+    int8_t final_haptics[SAMPLE_SIZE]{};
+    if (haptic_buf != nullptr) {
+        memcpy(final_haptics, haptic_buf, SAMPLE_SIZE);
+    }
 
     if (include_speaker) {
         uint8_t speaker_data[sizeof(opus_buf)]{};
@@ -1210,6 +1161,22 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
         }
     }
 
+    if (merge_test_overlay) {
+        (void)merge_test_haptics_overlay(final_haptics);
+    }
+    memcpy(pkt + 78, final_haptics, SAMPLE_SIZE);
+#ifdef ENABLE_COMPANION
+    companion_note_feedback_trace_samples(
+        CompanionFeedbackTraceLocalAudio,
+        reinterpret_cast<uint8_t const *>(final_haptics),
+        SAMPLE_SIZE,
+        include_speaker ? 1 : 0,
+        clamp_debug_u8(queue_get_level(&audio_fifo)),
+        opus_debug_level(),
+        clamp_debug_u8(static_cast<uint32_t>(volume[1] * 100.0f))
+    );
+#endif
+
     return bt_write_audio_stream(pkt, sizeof(pkt));
 }
 
@@ -1218,7 +1185,7 @@ static void apply_haptics_gain_to_packet(uint8_t *data) {
         return;
     }
 
-    const float gain = clamp(volume[1], 0.0f, 2.0f);
+    const float gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
     if (gain == 1.0f) {
         return;
     }
@@ -1228,6 +1195,167 @@ static void apply_haptics_gain_to_packet(uint8_t *data) {
         const int scaled = static_cast<int>(samples[i] * gain);
         samples[i] = static_cast<int8_t>(clamp(scaled, -128, 127));
     }
+}
+
+static bool haptic_block_has_signal(uint8_t const *data) {
+    if (data == nullptr) {
+        return false;
+    }
+
+    auto const *samples = reinterpret_cast<int8_t const *>(data);
+    for (uint16_t i = 0; i < SAMPLE_SIZE; i++) {
+        if (samples[i] > 1 || samples[i] < -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int8_t quantize_haptic_average(int32_t sample_sum, float gain) {
+    const float clamped_gain = clamp(gain, 0.0f, MAX_HAPTICS_GAIN);
+    const float scaled = static_cast<float>(sample_sum) * 127.0f * clamped_gain
+        / (static_cast<float>(HAPTIC_DOWNSAMPLE_FRAMES) * 32768.0f);
+    return static_cast<int8_t>(clamp(static_cast<int>(scaled), -128, 127));
+}
+
+static bool append_averaged_haptic_frame(int16_t left, int16_t right, float gain) {
+    audio_haptic_bucket_l += left;
+    audio_haptic_bucket_r += right;
+    audio_haptic_bucket_frames++;
+
+    if (audio_haptic_bucket_frames < HAPTIC_DOWNSAMPLE_FRAMES) {
+        return false;
+    }
+
+    audio_haptic_buf[audio_haptic_buf_pos++] = quantize_haptic_average(audio_haptic_bucket_l, gain);
+    audio_haptic_buf[audio_haptic_buf_pos++] = quantize_haptic_average(audio_haptic_bucket_r, gain);
+    audio_haptic_bucket_l = 0;
+    audio_haptic_bucket_r = 0;
+    audio_haptic_bucket_frames = 0;
+
+    if (audio_haptic_buf_pos < SAMPLE_SIZE) {
+        return false;
+    }
+
+    audio_haptic_buf_pos = 0;
+    return true;
+}
+
+static void store_latest_host_usb_haptics(int8_t const *data) {
+    if (data == nullptr) {
+        return;
+    }
+    if (!haptic_block_has_signal(reinterpret_cast<uint8_t const *>(data))) {
+        if (
+            host_usb_haptic_pending
+            && static_cast<uint32_t>(time_us_32() - host_usb_haptic_us) > HOST_USB_HAPTIC_LATCH_US
+        ) {
+            host_usb_haptic_pending = false;
+        }
+        return;
+    }
+
+    memcpy(host_usb_haptic_buf, data, sizeof(host_usb_haptic_buf));
+    host_usb_haptic_pending = true;
+    host_usb_haptic_us = time_us_32();
+}
+
+static bool copy_latest_host_usb_haptics(uint8_t *destination) {
+    if (destination == nullptr || !host_usb_haptic_pending) {
+        return false;
+    }
+    if (static_cast<uint32_t>(time_us_32() - host_usb_haptic_us) > HOST_USB_HAPTIC_LATCH_US) {
+        host_usb_haptic_pending = false;
+        return false;
+    }
+
+    memcpy(destination, host_usb_haptic_buf, sizeof(host_usb_haptic_buf));
+    return true;
+}
+
+static void clear_latest_host_usb_haptics() {
+    host_usb_haptic_pending = false;
+    host_usb_haptic_us = 0;
+    memset(host_usb_haptic_buf, 0, sizeof(host_usb_haptic_buf));
+}
+
+static void mix_haptics_overlay(int8_t *destination, int8_t const *overlay) {
+    if (destination == nullptr || overlay == nullptr) {
+        return;
+    }
+    for (uint16_t index = 0; index < SAMPLE_SIZE; index++) {
+        destination[index] = static_cast<int8_t>(
+            clamp(static_cast<int>(destination[index]) + static_cast<int>(overlay[index]), -128, 127)
+        );
+    }
+}
+
+static bool merge_test_haptics_overlay(int8_t *destination) {
+    if (!test_haptics_active) {
+        return false;
+    }
+    if (!bt_is_controller_connected()) {
+        test_haptics_active = false;
+        test_haptics_preroll_packets_remaining = 0;
+        test_haptics_packets_remaining = 0;
+        test_haptics_neutral_packets_remaining = 0;
+        test_haptics_cooldown_until_us = 0;
+        audio_debug_log(AudioDebugTestHapticsStop, 0, 0, 0, 0, 0);
+        return false;
+    }
+
+    const uint32_t now = time_us_32();
+    if (
+        test_haptics_last_packet_us != 0
+        && static_cast<uint32_t>(now - test_haptics_last_packet_us) < TEST_HAPTICS_PACKET_INTERVAL_US
+    ) {
+        return false;
+    }
+
+    int8_t overlay[SAMPLE_SIZE]{};
+    const bool sent_preroll_packet = test_haptics_preroll_packets_remaining != 0;
+    if (sent_preroll_packet) {
+        test_haptics_preroll_packets_remaining--;
+    } else if (test_haptics_packets_remaining != 0) {
+        const uint8_t packet_index = static_cast<uint8_t>(TEST_HAPTICS_PACKET_COUNT - test_haptics_packets_remaining);
+        haptics_test_signal_fill(
+            overlay,
+            SAMPLE_SIZE,
+            packet_index,
+            TEST_HAPTICS_PACKET_COUNT,
+            TEST_HAPTICS_BASE_AMPLITUDE,
+            current_haptics_gain_percent()
+        );
+    }
+
+    mix_haptics_overlay(destination, overlay);
+    test_haptics_last_packet_us = now;
+    if (sent_preroll_packet) {
+        return true;
+    }
+
+    if (test_haptics_packets_remaining != 0) {
+        test_haptics_packets_remaining--;
+        if (test_haptics_packets_remaining == 0) {
+            test_haptics_neutral_packets_remaining = TEST_HAPTICS_NEUTRAL_PACKET_COUNT;
+        }
+    } else if (test_haptics_neutral_packets_remaining != 0) {
+        test_haptics_neutral_packets_remaining--;
+    }
+
+    if (test_haptics_packets_remaining == 0 && test_haptics_neutral_packets_remaining == 0) {
+        test_haptics_active = false;
+        test_haptics_cooldown_until_us = now + TEST_HAPTICS_COOLDOWN_US;
+        audio_debug_log(
+            AudioDebugTestHapticsStop,
+            1,
+            clamp_debug_u8(queue_get_level(&audio_fifo)),
+            opus_debug_level(),
+            0,
+            0
+        );
+    }
+    return true;
 }
 
 static void build_host_audio_report_header(uint8_t *packet) {
@@ -1243,7 +1371,7 @@ static void build_host_audio_report_header(uint8_t *packet) {
     packet[8] = buffer_length;
     packet[9] = buffer_length;
     packet[11] = 0x10 | (1 << 7);
-    packet[12] = sizeof(state_data);
+    packet[12] = ds5::output::kAudioStateSnapshotSize;
     copy_routed_state_data(packet + 13);
     packet[76] = 0x12 | (1 << 7);
     packet[77] = SAMPLE_SIZE;
@@ -1278,7 +1406,7 @@ static bool write_host_audio_packet(uint8_t *packet, bool count_host_frame) {
     if (count_host_frame) {
         host_frames_received++;
     }
-    host_last_frame_us = time_us_32();
+    host_runtime.last_frame_us = time_us_32();
     return true;
 }
 
@@ -1288,7 +1416,6 @@ bool audio_schedule_test_haptics() {
         && !time_reached(now, test_haptics_cooldown_until_us);
     if (
         quiet_mode_enabled
-        || usb_host_hid_output_recent()
         || test_haptics_active
         || haptics_cooling_down
     ) {
@@ -1296,13 +1423,20 @@ bool audio_schedule_test_haptics() {
     }
     test_haptics_cooldown_until_us = 0;
 
-    drain_audio_queues();
-    clear_partial_audio_state();
-    bt_set_speaker_output_enabled(false);
-    speaker_route_active = false;
-    speaker_route_headset = false;
-    last_audio_us = 0;
+    const bool audio_carrier_active =
+        audio_silence_tail_active(now)
+        || host_runtime.blocks_local_haptics_test(now, HOST_STREAM_TIMEOUT_US, HOST_STREAM_START_GRACE_US);
+    if (!audio_carrier_active) {
+        drain_audio_queues();
+        clear_partial_audio_state();
+        clear_latest_host_usb_haptics();
+        bt_set_speaker_output_enabled(false);
+        speaker_route_active = false;
+        speaker_route_headset = false;
+        last_audio_us = 0;
+    }
     test_haptics_active = true;
+    test_haptics_preroll_packets_remaining = TEST_HAPTICS_PREROLL_PACKET_COUNT;
     test_haptics_packets_remaining = TEST_HAPTICS_PACKET_COUNT;
     test_haptics_neutral_packets_remaining = 0;
     test_haptics_last_packet_us = 0;
@@ -1344,13 +1478,13 @@ bool audio_recent() {
     if (audio_silence_tail_active(now)) {
         return true;
     }
-    return audio_runtime_mode == AudioRuntimeHostEncodedActive
-        && host_last_frame_us != 0
-        && static_cast<uint32_t>(now - host_last_frame_us) < SPEAKER_USB_SILENCE_TAIL_US;
+    return host_runtime.mode == AudioRuntimeHostEncodedActive
+        && host_runtime.last_frame_us != 0
+        && static_cast<uint32_t>(now - host_runtime.last_frame_us) < SPEAKER_USB_SILENCE_TAIL_US;
 }
 
 bool audio_host_encoded_active() {
-    return audio_runtime_mode == AudioRuntimeHostEncodedActive && host_stream_active;
+    return host_runtime.mode == AudioRuntimeHostEncodedActive && host_runtime.stream_active;
 }
 
 bool audio_haptics_ready() {
@@ -1363,11 +1497,13 @@ void audio_set_quiet_mode(bool enabled) {
     }
 
     quiet_mode_enabled = enabled;
+    refresh_controller_mic_transport_state(true);
     if (!enabled) {
         return;
     }
 
     test_haptics_active = false;
+    test_haptics_preroll_packets_remaining = 0;
     test_haptics_packets_remaining = 0;
     test_haptics_neutral_packets_remaining = 0;
     drain_audio_queues();
@@ -1391,83 +1527,97 @@ bool audio_quiet_mode_enabled() {
 }
 
 void audio_host_set_requested(bool enabled) {
-    host_audio_requested = enabled;
+    host_runtime.requested = enabled;
+    host_pcm_iso_set_enabled(enabled);
     if (!enabled) {
-        host_request_started_us = 0;
+        host_runtime.request_started_us = 0;
+        clear_latest_host_usb_haptics();
         set_fallback_speaker_target_gain(1.0f);
         enter_fallback(AudioFallbackHostDisabled);
     } else {
         const uint32_t now = time_us_32();
-        host_request_started_us = now;
-        host_last_heartbeat_us = now;
+        host_runtime.request_started_us = now;
+        host_runtime.last_heartbeat_us = now;
         set_fallback_speaker_target_gain(0.0f);
         if (audio_initialized) {
             drain_audio_queues();
             clear_partial_audio_state();
             speaker_silence_preroll_packets_remaining = 0;
         }
-        if (audio_fallback_reason == AudioFallbackHostDisabled) {
-            audio_fallback_reason = AudioFallbackNone;
+        if (host_runtime.fallback_reason == AudioFallbackHostDisabled) {
+            host_runtime.fallback_reason = AudioFallbackNone;
         }
     }
+    refresh_controller_mic_transport_state(true);
 }
 
 void audio_host_note_heartbeat() {
-    host_last_heartbeat_us = time_us_32();
+    host_runtime.last_heartbeat_us = time_us_32();
 }
 
 void audio_host_start_stream() {
-    host_audio_requested = true;
-    host_stream_active = true;
+    host_runtime.requested = true;
+    host_runtime.stream_active = true;
     set_fallback_speaker_target_gain(0.0f);
-    host_stream_started_us = time_us_32();
-    host_request_started_us = host_stream_started_us;
-    host_last_heartbeat_us = host_stream_started_us;
-    host_last_frame_us = 0;
+    host_pcm_iso_set_enabled(true);
+    host_runtime.stream_started_us = time_us_32();
+    host_runtime.request_started_us = host_runtime.stream_started_us;
+    host_runtime.last_heartbeat_us = host_runtime.stream_started_us;
+    host_runtime.last_frame_us = 0;
     reset_controller_audio_report_counters();
     host_frames_received = 0;
     host_frames_dropped = 0;
+    host_pcm_iso_reset_stream();
     host_startup_drop_frames_remaining = HOST_STARTUP_DROP_FRAMES;
+    clear_latest_host_usb_haptics();
     audio_debug_reset_stats();
     bt_reset_output_debug_stats();
     schedule_host_route_primer();
-    host_stream_generation++;
-    if (host_stream_generation == 0) {
-        host_stream_generation = 1;
-    }
-    clear_host_reassembly();
+    host_runtime.bump_generation();
+    clear_host_reassembly_history();
     if (audio_initialized) {
-        audio_runtime_mode = AudioRuntimeHostEncodedActive;
-        audio_fallback_reason = AudioFallbackNone;
+        host_runtime.mode = AudioRuntimeHostEncodedActive;
+        host_runtime.fallback_reason = AudioFallbackNone;
         drain_audio_queues();
         clear_partial_audio_state();
         schedule_host_route_primer();
     }
+    refresh_controller_mic_transport_state(true);
 }
 
 void audio_host_stop_stream(AudioFallbackReason reason) {
-    host_stream_active = false;
-    host_request_started_us = 0;
-    host_last_frame_us = 0;
-    clear_host_reassembly();
+    host_runtime.stream_active = false;
+    host_runtime.request_started_us = 0;
+    host_runtime.last_frame_us = 0;
+    host_pcm_iso_set_enabled(false);
+    host_pcm_iso_reset_stream();
+    clear_host_reassembly_history();
+    clear_latest_host_usb_haptics();
     enter_fallback(reason);
+    refresh_controller_mic_transport_state(true);
 }
 
 void audio_host_set_duplex_requested(bool enabled) {
-    const bool changed = host_duplex_requested != enabled;
-    host_duplex_requested = enabled;
+    const bool changed = host_runtime.duplex_requested != enabled;
+    host_runtime.duplex_requested = enabled;
     if (changed && !enabled) {
         clear_mic_queues();
     }
+    refresh_controller_mic_transport_state(true);
 }
 
 bool audio_duplex_active() {
-    return host_mic_path_active();
+    return host_mic_stream_active();
 }
 
 void audio_set_mic_output_state(uint8_t volume_percent, bool muted) {
+    const bool was_muted = mic_output_muted;
     mic_output_volume_percent = volume_percent > 100 ? 100 : volume_percent;
     mic_output_muted = muted;
+    if (muted && !was_muted) {
+        clear_mic_queues();
+    }
+    refresh_controller_mic_transport_state(true);
 }
 
 static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
@@ -1489,14 +1639,17 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
             CompanionFeedbackTraceHostAudioRx,
             report,
             SAMPLE_SIZE,
-            static_cast<uint8_t>(audio_runtime_mode),
-            static_cast<uint8_t>(audio_fallback_reason),
-            clamp_debug_u8(host_stream_generation),
+            static_cast<uint8_t>(host_runtime.mode),
+            static_cast<uint8_t>(host_runtime.fallback_reason),
+            clamp_debug_u8(host_runtime.stream_generation),
             clamp_debug_u8(host_frames_dropped)
         );
 #endif
         build_host_audio_report_header(packet);
         memcpy(packet + 78, report, SAMPLE_SIZE);
+        if (!haptic_block_has_signal(packet + 78)) {
+            (void)copy_latest_host_usb_haptics(packet + 78);
+        }
         apply_haptics_gain_to_packet(packet + 78);
         memcpy(packet + 144, report + SAMPLE_SIZE, 200);
     } else if (len == HOST_AUDIO_REPORT_SIZE && report[0] == REPORT_ID) {
@@ -1506,6 +1659,9 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         memcpy(packet, report, sizeof(packet));
         copy_routed_state_data(packet + 13);
         packet[142] = (plug_headset ? 0x16 : 0x13) | (1 << 7);
+        if (!haptic_block_has_signal(packet + 78)) {
+            (void)copy_latest_host_usb_haptics(packet + 78);
+        }
         apply_haptics_gain_to_packet(packet + 78);
     } else {
         host_frames_dropped++;
@@ -1524,23 +1680,24 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
     (void)prime_host_audio_route_if_needed();
     if (host_startup_drop_frames_remaining != 0) {
         host_startup_drop_frames_remaining--;
-        host_frames_dropped++;
-        host_last_frame_us = time_us_32();
+        host_runtime.last_frame_us = time_us_32();
         return true;
     }
 
+    (void)merge_test_haptics_overlay(reinterpret_cast<int8_t *>(packet + 78));
     return write_host_audio_packet(packet, true);
 }
 
 bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
     if (data != nullptr && len >= HostFastPacketPayload && data[HostFastPacketType] == HostAudioFastFrameFragment) {
         audio_host_note_heartbeat();
-        if (!host_audio_requested || !host_stream_active) {
+        if (!host_runtime.requested || !host_runtime.stream_active) {
             host_frames_dropped++;
             return false;
         }
 
         const uint16_t sequence = read_le_u16(data + HostFastPacketSequence);
+        const uint32_t now = time_us_32();
         const uint8_t fragment_index = data[HostFastPacketFragmentIndex];
         const uint8_t fragment_count = data[HostFastPacketFragmentCount];
         const uint8_t payload_length = data[HostFastPacketPayloadLength];
@@ -1555,6 +1712,11 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
             host_frames_dropped++;
             enter_fallback(AudioFallbackInvalidPacket);
             return false;
+        }
+
+        if (is_recent_completed_fast_fragment(sequence, now)) {
+            host_runtime.last_frame_us = now;
+            return true;
         }
 
         if (host_reassembly_sequence != sequence || host_reassembly_chunk_count != fragment_count) {
@@ -1580,7 +1742,7 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
         if (fragment_index + 1 == fragment_count) {
             host_reassembly_expected_length = received_end;
         }
-        host_last_frame_us = time_us_32();
+        host_runtime.last_frame_us = now;
         const uint16_t expected_mask = static_cast<uint16_t>((1u << fragment_count) - 1u);
         if (
             host_reassembly_received_mask != expected_mask
@@ -1591,6 +1753,9 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
         }
 
         const bool submitted = submit_host_audio_report(host_reassembly_buffer, HOST_AUDIO_COMPACT_REPORT_SIZE);
+        if (submitted) {
+            note_completed_fast_frame(sequence, now);
+        }
         clear_host_reassembly();
         return submitted;
     }
@@ -1647,7 +1812,7 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
     }
 
     audio_host_note_heartbeat();
-    if (!host_audio_requested || !host_stream_active || packet_generation != host_stream_generation) {
+    if (!host_runtime.requested || !host_runtime.stream_active || packet_generation != host_runtime.stream_generation) {
         host_frames_dropped++;
         return false;
     }
@@ -1657,7 +1822,7 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
         return false;
     }
 
-    host_last_frame_us = time_us_32();
+    host_runtime.last_frame_us = time_us_32();
     if (
         host_reassembly_generation != packet_generation
         || host_reassembly_sequence != sequence
@@ -1707,20 +1872,20 @@ void audio_get_host_status(audio_host_status *status) {
 
     const uint32_t now = time_us_32();
     memset(status, 0, sizeof(*status));
-    status->mode = static_cast<uint8_t>(audio_runtime_mode);
-    status->fallback_reason = static_cast<uint8_t>(audio_fallback_reason);
-    status->host_requested = host_audio_requested;
+    status->mode = static_cast<uint8_t>(host_runtime.mode);
+    status->fallback_reason = static_cast<uint8_t>(host_runtime.fallback_reason);
+    status->host_requested = host_runtime.requested;
     status->heartbeat_healthy = host_heartbeat_healthy(now);
-    status->stream_active = host_stream_active;
+    status->stream_active = host_runtime.stream_active;
     status->stream_healthy = host_stream_healthy(now);
-    status->duplex_requested = host_duplex_requested;
+    status->duplex_requested = host_runtime.duplex_requested;
     status->duplex_active = audio_duplex_active();
     status->controller_state_ready = controller_state_ready;
     status->headset_plugged = plug_headset;
     status->headset_audio_route = speaker_route_active && speaker_route_headset;
-    status->stream_generation = host_stream_generation;
-    status->heartbeat_age_ms = host_last_heartbeat_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_last_heartbeat_us) / 1000u;
-    status->frame_age_ms = host_last_frame_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_last_frame_us) / 1000u;
+    status->stream_generation = host_runtime.stream_generation;
+    status->heartbeat_age_ms = host_runtime.last_heartbeat_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_runtime.last_heartbeat_us) / 1000u;
+    status->frame_age_ms = host_runtime.last_frame_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_runtime.last_frame_us) / 1000u;
     status->host_frames_received = host_frames_received;
     status->host_frames_dropped = host_frames_dropped;
     status->mic_packets_received = mic_packets_received;
@@ -1729,10 +1894,12 @@ void audio_get_host_status(audio_host_status *status) {
     status->mic_decode_fail = mic_decode_fail;
     status->mic_usb_write_success = mic_usb_write_success;
     status->mic_usb_write_short = mic_usb_write_short;
+    status->mic_usb_conceal_count = mic_usb_conceal_count;
+    status->mic_plc_count = mic_plc_count;
     status->mic_last_decoded_samples = mic_last_decoded_samples;
     status->mic_last_written_bytes = mic_last_written_bytes;
     status->mic_peak_permille = mic_peak_permille;
-    status->mic_usb_streaming = host_mic_path_active() && usb_mic_streaming_active();
+    status->mic_usb_streaming = host_mic_stream_active();
 }
 
 void audio_set_haptics_buffer_length(uint8_t length) {
@@ -1822,59 +1989,15 @@ void audio_test_haptics_loop() {
     if (!test_haptics_active) {
         return;
     }
-    if (!bt_is_controller_connected()) {
-        test_haptics_active = false;
-        test_haptics_packets_remaining = 0;
-        test_haptics_neutral_packets_remaining = 0;
-        test_haptics_cooldown_until_us = 0;
-        audio_debug_log(AudioDebugTestHapticsStop, 0, 0, 0, 0, 0);
-        return;
-    }
 
     const uint32_t now = time_us_32();
-    if (
-        test_haptics_last_packet_us != 0
-        && static_cast<uint32_t>(now - test_haptics_last_packet_us) < TEST_HAPTICS_PACKET_INTERVAL_US
-    ) {
+    if (host_runtime.blocks_local_haptics_test(now, HOST_STREAM_TIMEOUT_US, HOST_STREAM_START_GRACE_US)) {
         return;
     }
 
     int8_t haptic_buf[SAMPLE_SIZE]{};
-    if (test_haptics_packets_remaining != 0) {
-        const bool positive_phase = (test_haptics_packets_remaining & 1) != 0;
-        const int amplitude = clamp(
-            static_cast<int>(TEST_HAPTICS_BASE_AMPLITUDE * clamp(volume[1], 0.0f, 2.0f)),
-            0,
-            127
-        );
-        for (int i = 0; i < SAMPLE_SIZE; i += 2) {
-            haptic_buf[i] = positive_phase ? amplitude : -amplitude;
-            haptic_buf[i + 1] = positive_phase ? -amplitude : amplitude;
-        }
-    }
-
-    send_audio_haptics_packet(haptic_buf, false);
-    test_haptics_last_packet_us = now;
-    if (test_haptics_packets_remaining != 0) {
-        test_haptics_packets_remaining--;
-        if (test_haptics_packets_remaining == 0) {
-            test_haptics_neutral_packets_remaining = TEST_HAPTICS_NEUTRAL_PACKET_COUNT;
-        }
-    } else if (test_haptics_neutral_packets_remaining != 0) {
-        test_haptics_neutral_packets_remaining--;
-    }
-
-    if (test_haptics_packets_remaining == 0 && test_haptics_neutral_packets_remaining == 0) {
-        test_haptics_active = false;
-        test_haptics_cooldown_until_us = now + TEST_HAPTICS_COOLDOWN_US;
-        audio_debug_log(
-            AudioDebugTestHapticsStop,
-            1,
-            clamp_debug_u8(queue_get_level(&audio_fifo)),
-            opus_debug_level(),
-            0,
-            0
-        );
+    if (merge_test_haptics_overlay(haptic_buf)) {
+        send_audio_haptics_packet(haptic_buf, false, false);
     }
 }
 
@@ -1956,12 +2079,9 @@ static bool process_usb_audio_packet() {
         last_audio_us = time_us_32();
     }
 
-    // 2. Extract ch3/ch4 from 4-channel audio as float resampler input.
-    WDL_ResampleSample *in_buf;
-    int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
-
     const float speaker_gain = usb_host_mute[0] ? 0.0f : clamp(volume[0], 0.0f, 1.0f) * usb_host_speaker_gain;
-    for (int i = 0; i < nframes; i++) {
+    const float haptic_gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
+    for (int i = 0; i < frames; i++) {
         const float transition_gain = next_fallback_speaker_gain();
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * speaker_gain * transition_gain;
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * speaker_gain * transition_gain;
@@ -1993,28 +2113,88 @@ static bool process_usb_audio_packet() {
             audio_buf_pos = 0;
         }
 
-        in_buf[i * 2] = (WDL_ResampleSample) raw[i * INPUT_CHANNELS + 2] / 32768.0f;
-        in_buf[i * 2 + 1] = (WDL_ResampleSample) raw[i * INPUT_CHANNELS + 3] / 32768.0f;
-    }
-
-    // 3. Resample 48 kHz to 3 kHz.
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32 frames x 2 channels.
-    int out_frames = resampler.ResampleOut(out_buf, nframes, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
-
-    // 4. Convert to int8 and buffer until a 64-byte haptic packet is ready.
-    for (int i = 0; i < out_frames; i++) {
-        int val_l = (int) (out_buf[i * 2] * 127.0f * max(volume[1],0.0f));
-        int val_r = (int) (out_buf[i * 2 + 1] * 127.0f * max(volume[1],0.0f));
-        audio_haptic_buf[audio_haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127); // Clamp defensively.
-        audio_haptic_buf[audio_haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
-
-        if (audio_haptic_buf_pos != SAMPLE_SIZE) {
-            continue;
+        if (append_averaged_haptic_frame(raw[i * INPUT_CHANNELS + 2], raw[i * INPUT_CHANNELS + 3], haptic_gain)) {
+            send_audio_haptics_packet(audio_haptic_buf, true);
         }
-        send_audio_haptics_packet(audio_haptic_buf, true);
-        audio_haptic_buf_pos = 0;
     }
     return true;
+}
+
+static bool process_usb_audio_raw_pcm_return_packet() {
+    const uint32_t now = time_us_32();
+    if (!tud_audio_available()) {
+        return false;
+    }
+
+    alignas(4) int16_t raw[HOST_RAW_PCM_RETURN_FRAMES * INPUT_CHANNELS];
+    const uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
+    if (bytes_read == 0) {
+        return false;
+    }
+    const int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
+    if (frames == 0) {
+        return false;
+    }
+    audio_stats_note_usb_read(now);
+
+    alignas(4) int16_t line[HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS]{};
+    for (int i = 0; i < frames; i++) {
+        line[i * HOST_RAW_PCM_RETURN_CHANNELS] = raw[i * INPUT_CHANNELS];
+        line[i * HOST_RAW_PCM_RETURN_CHANNELS + 1] = raw[i * INPUT_CHANNELS + 1];
+
+        if (append_averaged_haptic_frame(raw[i * INPUT_CHANNELS + 2], raw[i * INPUT_CHANNELS + 3], 1.0f)) {
+            store_latest_host_usb_haptics(audio_haptic_buf);
+        }
+    }
+
+    if (host_usb_pcm_return_active()) {
+        (void)host_pcm_iso_write(line, static_cast<uint16_t>(frames), now);
+    } else if (host_raw_pcm_return_active()) {
+        const uint16_t line_bytes = static_cast<uint16_t>(frames * HOST_RAW_PCM_RETURN_CHANNELS * sizeof(int16_t));
+        tu_fifo_t *ep_in_fifo = tud_audio_n_get_ep_in_ff(HOST_RAW_PCM_AUDIO_FUNC_ID);
+        if (ep_in_fifo != nullptr && tu_fifo_remaining(ep_in_fifo) < line_bytes) {
+            audio_debug_log(
+                AudioDebugUsbEvent,
+                5,
+                clamp_debug_u8(line_bytes),
+                clamp_debug_u8(tu_fifo_remaining(ep_in_fifo)),
+                0,
+                0
+            );
+            return true;
+        }
+
+        const uint16_t written = tud_audio_n_write(
+            HOST_RAW_PCM_AUDIO_FUNC_ID,
+            reinterpret_cast<uint8_t const *>(line),
+            line_bytes
+        );
+        if (written != line_bytes) {
+            audio_debug_log(
+                AudioDebugUsbEvent,
+                6,
+                clamp_debug_u8(written),
+                clamp_debug_u8(line_bytes),
+                usb_line_streaming_active() ? 1 : 0,
+                0
+            );
+        }
+    }
+
+    return true;
+}
+
+static void process_host_usb_audio_packets(uint8_t max_reads) {
+    if (!host_raw_pcm_return_requested()) {
+        discard_usb_audio_packets(max_reads);
+        return;
+    }
+
+    for (uint8_t i = 0; i < max_reads; i++) {
+        if (!process_usb_audio_raw_pcm_return_packet()) {
+            break;
+        }
+    }
 }
 
 static void discard_usb_audio_packets(uint8_t max_reads) {
@@ -2038,7 +2218,7 @@ static void discard_usb_audio_packets(uint8_t max_reads) {
             4,
             reads,
             max_reads,
-            static_cast<uint8_t>(audio_runtime_mode),
+            static_cast<uint8_t>(host_runtime.mode),
             tud_audio_available() ? 1 : 0
         );
     }
@@ -2083,18 +2263,86 @@ static void process_idle_speaker_silence_preroll(uint32_t now) {
     last_audio_us = now;
 }
 
+static bool write_mic_usb_concealment_chunk(tu_fifo_t *ep_in_fifo) {
+    if (ep_in_fifo != nullptr) {
+        if (tu_fifo_count(ep_in_fifo) >= HOST_MIC_USB_PACKET_BYTES) {
+            return false;
+        }
+        if (tu_fifo_remaining(ep_in_fifo) < HOST_MIC_USB_PACKET_BYTES) {
+            return false;
+        }
+    }
+
+    alignas(2) uint8_t chunk[HOST_MIC_USB_PACKET_BYTES]{};
+    const uint16_t written = tud_audio_n_write(0, chunk, HOST_MIC_USB_PACKET_BYTES);
+    mic_last_written_bytes = written;
+    if (written != HOST_MIC_USB_PACKET_BYTES) {
+        mic_usb_write_short++;
+        audio_debug_log(
+            AudioDebugMicPacket,
+            12,
+            clamp_debug_u8(written),
+            HOST_MIC_USB_PACKET_BYTES,
+            clamp_debug_u8(mic_usb_write_short),
+            0
+        );
+        return false;
+    }
+
+    mic_usb_write_success++;
+    const uint32_t conceal_count = ++mic_usb_conceal_count;
+    if (mic_debug_should_log(11, 250000)) {
+        audio_debug_log(
+            AudioDebugMicPacket,
+            11,
+            clamp_debug_u8(ep_in_fifo != nullptr ? tu_fifo_count(ep_in_fifo) : 0),
+            clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
+            clamp_debug_u8(queue_get_level(&mic_fifo)),
+            clamp_debug_u8(conceal_count)
+        );
+    }
+    return true;
+}
+
+static void configure_mic_usb_fifo_threshold(tu_fifo_t *ep_in_fifo) {
+    if (mic_usb_fifo_threshold_configured || ep_in_fifo == nullptr) {
+        return;
+    }
+
+    const uint16_t depth = tu_fifo_depth(ep_in_fifo);
+    if (depth <= HOST_MIC_USB_PACKET_BYTES) {
+        return;
+    }
+
+    const uint16_t max_threshold = static_cast<uint16_t>(depth - HOST_MIC_USB_PACKET_BYTES);
+    const uint16_t threshold = std::min<uint16_t>(HOST_MIC_USB_PREFILL_BYTES, max_threshold);
+    tud_audio_n_set_ep_in_fifo_threshold(0, threshold);
+    mic_usb_fifo_threshold_configured = true;
+}
+
+static void refresh_mic_usb_buffered_bytes(tu_fifo_t *ep_in_fifo) {
+    const uint32_t fifo_bytes = ep_in_fifo != nullptr ? tu_fifo_count(ep_in_fifo) : 0;
+    const uint32_t pending_bytes = mic_usb_pending_len > mic_usb_pending_offset
+        ? static_cast<uint32_t>(mic_usb_pending_len - mic_usb_pending_offset)
+        : 0;
+    mic_usb_buffered_bytes = fifo_bytes + pending_bytes;
+}
+
 static void process_mic_usb_output() {
-    if (!host_mic_path_active() || !usb_mic_streaming_active()) {
+    if (!host_mic_stream_active()) {
         if (mic_usb_playout_started || mic_usb_pending_len != 0) {
-            tud_audio_clear_ep_in_ff();
+            tud_audio_n_clear_ep_in_ff(0);
         }
         mic_usb_playout_started = false;
         mic_usb_pending_offset = 0;
         mic_usb_pending_len = 0;
+        mic_usb_buffered_bytes = 0;
         return;
     }
 
-    tu_fifo_t *ep_in_fifo = tud_audio_get_ep_in_ff();
+    tu_fifo_t *ep_in_fifo = tud_audio_n_get_ep_in_ff(0);
+    configure_mic_usb_fifo_threshold(ep_in_fifo);
+    refresh_mic_usb_buffered_bytes(ep_in_fifo);
     if (!mic_usb_playout_started) {
         if (queue_get_level(&mic_decode_fifo) < HOST_MIC_PLAYOUT_START_DEPTH) {
             return;
@@ -2102,39 +2350,40 @@ static void process_mic_usb_output() {
         mic_usb_playout_started = true;
     }
 
+    const uint8_t max_chunks = host_pcm_return_active()
+        ? HOST_MIC_USB_FILL_MAX_CHUNKS_WITH_RAW_PCM
+        : HOST_MIC_USB_FILL_MAX_CHUNKS;
     uint8_t chunks_written = 0;
-    while (chunks_written < HOST_MIC_USB_FILL_MAX_CHUNKS) {
+    while (chunks_written < max_chunks) {
         const uint16_t fifo_level = ep_in_fifo != nullptr ? tu_fifo_count(ep_in_fifo) : 0;
         if (fifo_level >= HOST_MIC_USB_PREFILL_BYTES) {
+            refresh_mic_usb_buffered_bytes(ep_in_fifo);
             return;
         }
 
         if (mic_usb_pending_offset >= mic_usb_pending_len) {
             if (!queue_try_remove(&mic_decode_fifo, &mic_usb_pending)) {
-                if (fifo_level < HOST_MIC_USB_PACKET_BYTES) {
-                    mic_usb_playout_started = false;
-                    mic_packets_dropped++;
-                    audio_debug_log(
-                        AudioDebugMicPacket,
-                        3,
-                        clamp_debug_u8(fifo_level),
-                        clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
-                        clamp_debug_u8(mic_packets_dropped),
-                        0
-                    );
+                if (write_mic_usb_concealment_chunk(ep_in_fifo)) {
+                    chunks_written++;
                 }
+                refresh_mic_usb_buffered_bytes(ep_in_fifo);
                 return;
             }
             mic_usb_pending_offset = 0;
             mic_usb_pending_len = mic_usb_pending.len;
+            refresh_mic_usb_buffered_bytes(ep_in_fifo);
         }
 
         const uint16_t remaining = static_cast<uint16_t>(mic_usb_pending_len - mic_usb_pending_offset);
         uint16_t target_len = std::min<uint16_t>(remaining, HOST_MIC_USB_PACKET_BYTES);
         if (ep_in_fifo != nullptr) {
-            target_len = std::min<uint16_t>(target_len, tu_fifo_remaining(ep_in_fifo));
+            if (tu_fifo_remaining(ep_in_fifo) < target_len) {
+                refresh_mic_usb_buffered_bytes(ep_in_fifo);
+                return;
+            }
         }
         if (target_len == 0) {
+            refresh_mic_usb_buffered_bytes(ep_in_fifo);
             return;
         }
 
@@ -2151,15 +2400,17 @@ static void process_mic_usb_output() {
             }
             write_data = scaled_data;
         }
-        const uint16_t written = tud_audio_write(write_data, target_len);
+        const uint16_t written = tud_audio_n_write(0, write_data, target_len);
         mic_last_written_bytes = written;
         if (written > 0) {
             mic_usb_pending_offset = static_cast<uint16_t>(mic_usb_pending_offset + written);
             chunks_written++;
+            refresh_mic_usb_buffered_bytes(ep_in_fifo);
         }
         if (mic_usb_pending_offset >= mic_usb_pending_len) {
             mic_usb_pending_offset = 0;
             mic_usb_pending_len = 0;
+            refresh_mic_usb_buffered_bytes(ep_in_fifo);
         }
 
         if (written != target_len) {
@@ -2178,10 +2429,11 @@ static void process_mic_usb_output() {
 
         mic_usb_write_success++;
     }
+    refresh_mic_usb_buffered_bytes(ep_in_fifo);
 }
 
 void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
-    if (!host_mic_path_active()) {
+    if (!host_mic_stream_active()) {
         return;
     }
     if (data == nullptr || len < HOST_MIC_OPUS_SIZE) {
@@ -2208,14 +2460,16 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
     }
     if (queue_try_add(&mic_fifo, &packet)) {
         mic_packets_received++;
-        audio_debug_log(
-            AudioDebugMicPacket,
-            2,
-            clamp_debug_u8(mic_packets_received),
-            clamp_debug_u8(queue_get_level(&mic_fifo)),
-            0,
-            0
-        );
+        if (mic_packets_received <= 8 || mic_debug_should_log(2, 250000)) {
+            audio_debug_log(
+                AudioDebugMicPacket,
+                2,
+                clamp_debug_u8(mic_packets_received),
+                clamp_debug_u8(queue_get_level(&mic_fifo)),
+                0,
+                0
+            );
+        }
     } else {
         mic_packets_dropped++;
         audio_debug_log(AudioDebugMicPacket, 5, clamp_debug_u8(queue_get_level(&mic_fifo)), clamp_debug_u8(mic_packets_dropped), 0, 0);
@@ -2227,21 +2481,26 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
 
 void audio_loop() {
     const uint32_t now = time_us_32();
+    AudioLoopTelemetryScope loop_telemetry(now);
     process_mic_usb_output();
     audio_host_poll();
 
     if (!bt_is_controller_connected()) {
+        controller_mic_state_valid = false;
+        clear_mic_queues();
         discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         if (speaker_route_active || last_audio_us != 0) {
             audio_handle_controller_disconnect();
         }
-        if (audio_runtime_mode == AudioRuntimeHostEncodedActive) {
+        if (host_runtime.mode == AudioRuntimeHostEncodedActive) {
             enter_fallback(AudioFallbackControllerDisconnected);
         }
         return;
     }
 
     if (quiet_mode_enabled) {
+        refresh_controller_mic_transport_state();
+        clear_mic_queues();
         discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         if (speaker_route_active) {
             bt_set_speaker_output_enabled(false);
@@ -2251,15 +2510,19 @@ void audio_loop() {
         return;
     }
 
-    if (host_audio_requested && host_start_grace_active(time_us_32())) {
+    if (host_runtime.requested && host_start_grace_active(time_us_32())) {
+        refresh_controller_mic_transport_state();
         (void)prime_host_audio_route_if_needed();
-        discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        process_host_usb_audio_packets(HOST_AUDIO_LOOP_MAX_USB_READS);
+        process_mic_usb_output();
         return;
     }
 
-    if (audio_runtime_mode == AudioRuntimeHostEncodedActive) {
+    if (host_runtime.mode == AudioRuntimeHostEncodedActive) {
+        refresh_controller_mic_transport_state();
         (void)prime_host_audio_route_if_needed();
-        discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        process_host_usb_audio_packets(HOST_AUDIO_LOOP_MAX_USB_READS);
+        process_mic_usb_output();
         return;
     }
 
@@ -2278,10 +2541,6 @@ void audio_init() {
     critical_section_init(&audio_debug_cs);
     audio_debug_cs_ready = true;
 #endif
-    resampler.SetMode(true, 0, false);
-    resampler.SetRates(48000, 3000);
-    resampler.SetFeedMode(true);
-    resampler.Prealloc(2, 24, 6);
     queue_init(&audio_fifo,sizeof(audio_raw_element),2);
     queue_init(&mic_fifo,sizeof(mic_packet_element),HOST_MIC_QUEUE_DEPTH);
     queue_init(&mic_decode_fifo,sizeof(mic_decode_element),HOST_MIC_QUEUE_DEPTH);
@@ -2339,14 +2598,16 @@ static bool queue_mic_decoded_samples(int16_t const *decoded_mono, int decoded_s
     if (queue_is_full(&mic_decode_fifo)) {
         queue_try_remove(&mic_decode_fifo, NULL);
         mic_packets_dropped++;
-        audio_debug_log(
-            AudioDebugMicPacket,
-            7,
-            clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
-            clamp_debug_u8(mic_packets_dropped),
-            0,
-            0
-        );
+        if (mic_debug_should_log(7, 250000)) {
+            audio_debug_log(
+                AudioDebugMicPacket,
+                7,
+                clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
+                clamp_debug_u8(mic_packets_dropped),
+                0,
+                0
+            );
+        }
     }
     if (!queue_try_add(&mic_decode_fifo, &decoded)) {
         mic_packets_dropped++;
@@ -2382,27 +2643,49 @@ static bool core1_process_mic() {
         return true;
     }
 
-    queue_mic_decoded_samples(decoded_mono, decoded_samples, true);
+    if (queue_mic_decoded_samples(decoded_mono, decoded_samples, true)) {
+        mic_decode_empty_since_us = 0;
+    }
     mic_next_plc_us = time_us_32() + HOST_MIC_OPUS_FRAME_INTERVAL_US;
     return true;
 }
 
+static bool mic_playout_reservoir_needs_plc(uint8_t decoded_level) {
+    const uint32_t decoded_bytes = static_cast<uint32_t>(decoded_level)
+        * HOST_MIC_OPUS_FRAMES
+        * HOST_MIC_USB_CHANNELS
+        * sizeof(int16_t);
+    return mic_usb_buffered_bytes + decoded_bytes < HOST_MIC_PLC_RESERVOIR_BYTES;
+}
+
 static bool core1_process_mic_plc() {
+    const uint32_t now = time_us_32();
+    const uint8_t decoded_level = queue_get_level(&mic_decode_fifo);
     if (
         mic_decoder == nullptr
+        || !host_mic_stream_active()
         || !mic_usb_playout_started
-        || !usb_mic_streaming_active()
-        || queue_get_level(&mic_decode_fifo) >= HOST_MIC_PLC_TARGET_DEPTH
         || !queue_is_empty(&mic_fifo)
     ) {
         return false;
     }
 
-    const uint32_t now = time_us_32();
-    if (mic_next_plc_us == 0) {
-        mic_next_plc_us = now + HOST_MIC_OPUS_FRAME_INTERVAL_US;
+    if (decoded_level >= HOST_MIC_PLC_TARGET_DEPTH || !mic_playout_reservoir_needs_plc(decoded_level)) {
+        mic_decode_empty_since_us = 0;
+        mic_next_plc_us = 0;
         return false;
     }
+
+    if (mic_decode_empty_since_us == 0) {
+        mic_decode_empty_since_us = now;
+        mic_next_plc_us = now + HOST_MIC_PLC_EMPTY_GRACE_US;
+        return false;
+    }
+
+    if (mic_next_plc_us == 0) {
+        mic_next_plc_us = mic_decode_empty_since_us + HOST_MIC_PLC_EMPTY_GRACE_US;
+    }
+
     if (!time_reached(now, mic_next_plc_us)) {
         return false;
     }
@@ -2425,7 +2708,9 @@ static bool core1_process_mic_plc() {
         return true;
     }
 
-    queue_mic_decoded_samples(decoded_mono, decoded_samples, false);
+    if (queue_mic_decoded_samples(decoded_mono, decoded_samples, false)) {
+        mic_plc_count++;
+    }
     audio_debug_log(
         AudioDebugMicPacket,
         10,
@@ -2442,7 +2727,7 @@ static bool core1_process_mic_plc() {
 }
 
 static bool core1_process_mic_burst() {
-    if (!host_mic_path_active()) {
+    if (!host_mic_stream_active()) {
         return false;
     }
     bool did_mic = false;
@@ -2533,12 +2818,46 @@ static void core1_entry() {
         mic_decoder = nullptr;
     }
 
+    uint32_t cpu_window_start_us = time_us_32();
+    uint32_t core1_sleep_us = 0;
+    uint32_t core1_speaker_us = 0;
+    uint32_t core1_mic_us = 0;
+
     while (true) {
+        const uint32_t speaker_start_us = time_us_32();
+        const bool did_speaker = core1_process_speaker();
+        const uint32_t mic_start_us = time_us_32();
         const bool did_mic = core1_process_mic_burst();
         const bool did_mic_plc = core1_process_mic_plc();
-        const bool did_speaker = core1_process_speaker();
+        const uint32_t work_end_us = time_us_32();
+        if (did_speaker) {
+            core1_speaker_us += static_cast<uint32_t>(mic_start_us - speaker_start_us);
+        }
+        if (did_mic || did_mic_plc) {
+            core1_mic_us += static_cast<uint32_t>(work_end_us - mic_start_us);
+        }
         if (!did_speaker && !did_mic && !did_mic_plc) {
+            const uint32_t sleep_start_us = time_us_32();
             sleep_us(250);
+            core1_sleep_us += static_cast<uint32_t>(time_us_32() - sleep_start_us);
+        }
+
+        const uint32_t now_us = time_us_32();
+        const uint32_t window_us = static_cast<uint32_t>(now_us - cpu_window_start_us);
+        if (window_us >= CPU_DEBUG_INTERVAL_US) {
+            const uint32_t busy_us = window_us > core1_sleep_us ? window_us - core1_sleep_us : 0;
+            audio_debug_log(
+                AudioDebugCpuLoad,
+                percent_debug_u8(busy_us, window_us),
+                percent_debug_u8(core1_speaker_us, window_us),
+                percent_debug_u8(core1_mic_us, window_us),
+                us_to_100us_debug_u8(take_audio_loop_runtime_max_us()),
+                us_to_100us_debug_u8(take_audio_loop_gap_max_us())
+            );
+            cpu_window_start_us = now_us;
+            core1_sleep_us = 0;
+            core1_speaker_us = 0;
+            core1_mic_us = 0;
         }
     }
 }

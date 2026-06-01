@@ -3,6 +3,7 @@
 // Modified for DS5 Bridge companion firmware and app integration.
 //
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -14,6 +15,9 @@
 #include <vector>
 
 #include "audio.h"
+#include "controller_packet_compositor.h"
+#include "controller_output_policy.h"
+#include "output_scheduler.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
 #endif
@@ -105,6 +109,8 @@
 #define OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET 46
 #define RSSI_POLL_INTERVAL_US 2000000u
 #define RSSI_REQUEST_TIMEOUT_US 1000000u
+#define INQUIRY_RETRY_DELAY_US 2000000u
+#define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
 #define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
 
@@ -228,8 +234,12 @@ static bool audio_output_route_protected();
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
-static bool device_found = false;
+static bool device_found = false; // Outbound inquiry target found; do not set for incoming ACL requests.
 static bool new_pair = false; // Only newly paired devices create channels; auto-reconnect uses the services.
+static bool inquiry_active = false;
+static uint32_t inquiry_retry_at_us = 0;
+static bool acl_connection_pending = false;
+static uint32_t acl_connection_pending_at_us = 0;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
@@ -274,7 +284,6 @@ static uint8_t state_report_seq = 0;
 static bool speaker_output_enabled = false;
 static bool speaker_output_headset_route = false;
 static uint8_t companion_mic_volume_percent = 100;
-static uint8_t classic_rumble_gain_percent = 100;
 static bool classic_rumble_output_active = false;
 
 static void update_max_u32(uint32_t &current, uint32_t candidate) {
@@ -346,6 +355,46 @@ static void update_queue_depth_counters_locked() {
 
 static uint32_t packet_age_us(uint32_t now, uint32_t enqueue_time_us) {
     return static_cast<uint32_t>(now - enqueue_time_us);
+}
+
+static bool bt_time_reached(uint32_t now, uint32_t target) {
+    return static_cast<int32_t>(now - target) >= 0;
+}
+
+static void clear_acl_connection_pending() {
+    acl_connection_pending = false;
+    acl_connection_pending_at_us = 0;
+}
+
+static void mark_acl_connection_pending() {
+    acl_connection_pending = true;
+    acl_connection_pending_at_us = time_us_32();
+}
+
+static void clear_outbound_inquiry_target() {
+    device_found = false;
+    new_pair = false;
+}
+
+static void schedule_inquiry_retry(uint32_t delay_us = INQUIRY_RETRY_DELAY_US) {
+    inquiry_active = false;
+    inquiry_retry_at_us = time_us_32() + delay_us;
+}
+
+static void start_inquiry_if_needed() {
+    if (
+        inquiry_active
+        || device_found
+        || acl_connection_pending
+        || acl_handle != HCI_CON_HANDLE_INVALID
+        || usb_pm_should_pause_inquiry()
+    ) {
+        return;
+    }
+
+    DS5_LOG("[HCI] Start inquiry\n");
+    gap_inquiry_start(30);
+    inquiry_active = true;
 }
 
 static uint8_t clamp_output_trace_u8(uint32_t value) {
@@ -429,40 +478,20 @@ bool bt_has_signal_strength() {
     return bt_rssi_known;
 }
 
-void bt_set_classic_rumble_gain(uint8_t gain_percent) {
-    classic_rumble_gain_percent = gain_percent > 200 ? 200 : gain_percent;
+void bt_set_classic_rumble_gain(uint16_t gain_percent) {
+    controller_output_policy_set_classic_rumble_gain(gain_percent);
 }
 
-uint8_t bt_classic_rumble_gain() {
-    return classic_rumble_gain_percent;
+uint16_t bt_classic_rumble_gain() {
+    return controller_output_policy_classic_rumble_gain();
 }
 
 static uint8_t scale_classic_rumble_byte(uint8_t value) {
-    const uint16_t scaled = static_cast<uint16_t>(value) * classic_rumble_gain_percent;
-    return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
+    return controller_output_policy_scale_classic_rumble_byte(value);
 }
 
 bool bt_apply_classic_rumble_gain_payload(uint8_t *payload, uint16_t len) {
-    if (payload == nullptr || len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
-        return false;
-    }
-
-    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t flag2 = len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET ? payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] : 0;
-    const bool has_rumble = (flag0 & (
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
-        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
-    if (!has_rumble) {
-        return false;
-    }
-
-    const uint8_t right = payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
-    const uint8_t left = payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
-    payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
-    payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
-    return payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
-        || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
+    return controller_output_policy_apply_classic_rumble_gain_payload(payload, len);
 }
 
 static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
@@ -553,11 +582,7 @@ static uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percen
 }
 
 static void init_state_report(uint8_t *report) {
-    memset(report, 0, DS_OUTPUT_REPORT_BT_SIZE);
-    report[0] = DS_OUTPUT_REPORT_BT;
-    report[1] = state_report_seq << 4;
-    state_report_seq = (state_report_seq + 1) & 0x0F;
-    report[2] = DS_OUTPUT_TAG;
+    controller_packet_init_bt_output_report(report, state_report_seq);
 }
 
 static uint8_t trigger_strength_from_percent(uint8_t intensity_percent) {
@@ -567,6 +592,17 @@ static uint8_t trigger_strength_from_percent(uint8_t intensity_percent) {
     const uint8_t clamped = intensity_percent > 100 ? 100 : intensity_percent;
     const uint8_t strength = static_cast<uint8_t>((clamped * 8 + 99) / 100);
     return strength == 0 ? 1 : strength;
+}
+
+static uint8_t trigger_position_from_percent(uint8_t percent) {
+    const uint8_t clamped = percent > 100 ? 100 : percent;
+    return static_cast<uint8_t>(std::min<uint16_t>(9, (static_cast<uint16_t>(clamped) + 5) / 10));
+}
+
+static uint8_t trigger_frequency_from_percent(uint8_t percent) {
+    const uint8_t clamped = percent > 100 ? 100 : percent;
+    const uint8_t frequency = static_cast<uint8_t>((static_cast<uint16_t>(clamped) * 28 + 50) / 100);
+    return frequency == 0 ? 1 : frequency;
 }
 
 static void set_trigger_off(uint8_t *trigger) {
@@ -695,6 +731,86 @@ void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uin
     bt_write(report, sizeof(report));
 }
 
+static void set_custom_trigger_effect(
+    uint8_t *trigger,
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    const uint8_t strength = trigger_strength_from_percent(force_percent);
+    uint8_t start_position = trigger_position_from_percent(start_percent);
+    uint8_t wall_position = trigger_position_from_percent(wall_percent);
+    const uint8_t frequency = trigger_frequency_from_percent(wall_percent);
+
+    if (strength == 0) {
+        set_trigger_off(trigger);
+    } else if (mode == 1) {
+        start_position = std::min<uint8_t>(std::max<uint8_t>(start_position, 2), 7);
+        wall_position = std::min<uint8_t>(std::max<uint8_t>(wall_position, static_cast<uint8_t>(start_position + 1)), 8);
+        set_trigger_weapon(trigger, start_position, wall_position, strength);
+    } else if (mode == 2) {
+        set_trigger_vibration(trigger, start_position, strength, frequency);
+    } else {
+        set_trigger_feedback(trigger, start_position, strength);
+    }
+}
+
+void bt_set_custom_adaptive_trigger_effects(
+    uint8_t right_mode,
+    uint8_t right_start_percent,
+    uint8_t right_wall_percent,
+    uint8_t right_force_percent,
+    bool right_active,
+    uint8_t left_mode,
+    uint8_t left_start_percent,
+    uint8_t left_wall_percent,
+    uint8_t left_force_percent,
+    bool left_active
+) {
+    if (hid_interrupt_cid == 0) {
+        return;
+    }
+
+    uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
+    init_state_report(report);
+    report[3] = 0x04 | 0x08;
+    uint8_t *right_trigger = report + 3 + DS_TRIGGER_EFFECT_RIGHT_OFFSET;
+    uint8_t *left_trigger = report + 3 + DS_TRIGGER_EFFECT_LEFT_OFFSET;
+
+    right_active
+        ? set_custom_trigger_effect(right_trigger, right_mode, right_start_percent, right_wall_percent, right_force_percent)
+        : set_trigger_off(right_trigger);
+    left_active
+        ? set_custom_trigger_effect(left_trigger, left_mode, left_start_percent, left_wall_percent, left_force_percent)
+        : set_trigger_off(left_trigger);
+
+    bt_write(report, sizeof(report));
+}
+
+void bt_set_custom_adaptive_trigger_effect(
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent,
+    uint8_t target
+) {
+    const bool left_active = target == DS_TRIGGER_TARGET_LEFT || target == DS_TRIGGER_TARGET_BOTH;
+    const bool right_active = target == DS_TRIGGER_TARGET_RIGHT || target == DS_TRIGGER_TARGET_BOTH;
+    bt_set_custom_adaptive_trigger_effects(
+        mode,
+        start_percent,
+        wall_percent,
+        force_percent,
+        right_active,
+        mode,
+        start_percent,
+        wall_percent,
+        force_percent,
+        left_active
+    );
+}
+
 void bt_replay_adaptive_trigger_effect(
     uint8_t const *right_trigger,
     bool right_valid,
@@ -790,10 +906,14 @@ void bt_set_microphone_state(uint8_t volume_percent, bool muted) {
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE;
-    report[3 + OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE;
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
+        DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE
+    );
     report[3 + OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = muted
         ? 0
         : static_cast<uint8_t>((companion_mic_volume_percent * DS_OUTPUT_MIC_VOLUME_MAX + 50) / 100);
+    report[3 + OUTPUT_PAYLOAD_MUTE_LED_OFFSET] = 0;
     report[3 + OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] = muted ? DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE : 0;
     bt_write(report, sizeof(report));
 }
@@ -1011,6 +1131,34 @@ void bt_connection_recovery_loop() {
     schedule_hid_channel_recovery();
 }
 
+void bt_inquiry_loop() {
+    const uint32_t now = time_us_32();
+    if (
+        acl_connection_pending
+        && acl_handle == HCI_CON_HANDLE_INVALID
+        && bt_time_reached(now, acl_connection_pending_at_us + ACL_CONNECTION_PENDING_TIMEOUT_US)
+    ) {
+        DS5_LOG("[HCI] ACL connection pending timed out, restart inquiry\n");
+        clear_outbound_inquiry_target();
+        clear_acl_connection_pending();
+        schedule_inquiry_retry(0);
+    }
+
+    if (
+        inquiry_active
+        || device_found
+        || acl_connection_pending
+        || acl_handle != HCI_CON_HANDLE_INVALID
+        || usb_pm_should_pause_inquiry()
+    ) {
+        return;
+    }
+
+    if (inquiry_retry_at_us == 0 || bt_time_reached(now, inquiry_retry_at_us)) {
+        start_inquiry_if_needed();
+    }
+}
+
 int bt_init() {
     critical_section_init(&queue_lock);
 
@@ -1042,8 +1190,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t state = btstack_event_state_get_state(packet);
             DS5_LOG("[BT] State: %u\n", state);
             if (state == HCI_STATE_WORKING) {
-                DS5_LOG("[BT] Stack ready, start inquiry\n");
-                gap_inquiry_start(30);
+                DS5_LOG("[BT] Stack ready\n");
+                schedule_inquiry_retry(0);
+                start_inquiry_if_needed();
             }
             break;
         }
@@ -1065,10 +1214,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             }
 
             // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
-            if ((cod & 0x000F00) == 0x000500) {
+            if (
+                (cod & 0x000F00) == 0x000500
+                && !acl_connection_pending
+                && acl_handle == HCI_CON_HANDLE_INVALID
+            ) {
                 DS5_LOG("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
                 bd_addr_copy(current_device_addr, addr);
                 device_found = true;
+                inquiry_active = false;
                 gap_inquiry_stop();
             }
             break;
@@ -1077,11 +1231,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case GAP_EVENT_INQUIRY_COMPLETE:
         case HCI_EVENT_INQUIRY_COMPLETE: {
             DS5_LOG("[HCI] Inquiry complete\n");
-            if (device_found) {
+            inquiry_active = false;
+            if (device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
+                mark_acl_connection_pending();
                 HCI_SEND_CMD_LOGGED(&hci_create_connection, current_device_addr,
                              hci_usable_acl_packet_types(), 0, 0, 0, 1);
+            } else if (!device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
+                schedule_inquiry_retry();
             }
             break;
         }
@@ -1089,11 +1247,14 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t status = hci_event_command_status_get_status(packet);
             const uint16_t opcode = hci_event_command_status_get_command_opcode(packet);
             DS5_LOG("[HCI] CmdStatus %s(0x%04X) status=0x%02X\n", opcode_to_str(opcode), opcode, status);
-            if (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION && status != ERROR_CODE_SUCCESS) {
-                device_found = false;
-                new_pair = false;
-                DS5_LOG("[HCI] Create connection rejected, restart inquiry\n");
-                // gap_inquiry_start(30);
+            if (
+                (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION || opcode == HCI_OPCODE_HCI_ACCEPT_CONNECTION_REQUEST)
+                && status != ERROR_CODE_SUCCESS
+            ) {
+                clear_outbound_inquiry_target();
+                clear_acl_connection_pending();
+                DS5_LOG("[HCI] ACL connection command rejected, restart inquiry\n");
+                schedule_inquiry_retry();
             }
             break;
         }
@@ -1114,15 +1275,17 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 bt_rssi_known = false;
                 bt_rssi_request_pending = false;
                 bt_rssi_last_request_us = 0;
+                clear_acl_connection_pending();
+                device_found = false;
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
                 DS5_LOG("[HCI] ACL connected handle=0x%04X\n", handle);
                 DS5_LOG("[HCI] Request authentication on handle=0x%04X\n", handle);
                 HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
             } else {
-                device_found = false;
-                new_pair = false;
+                clear_outbound_inquiry_target();
+                clear_acl_connection_pending();
                 DS5_LOG("[HCI] ACL connect failed status=0x%02X, restart inquiry\n", status);
-                // gap_inquiry_start(30);
+                schedule_inquiry_retry();
             }
             break;
         }
@@ -1167,7 +1330,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (status != ERROR_CODE_SUCCESS) {
                 DS5_LOG("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
                 gap_drop_link_key_for_bd_addr(current_device_addr);
-                gap_inquiry_start(30);
+                clear_outbound_inquiry_target();
+                clear_acl_connection_pending();
+                schedule_inquiry_retry();
             } else {
                 HCI_SEND_CMD_LOGGED(&hci_set_connection_encryption, handle, 1);
             }
@@ -1196,6 +1361,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             DS5_LOG("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
+                clear_outbound_inquiry_target();
+                mark_acl_connection_pending();
+                inquiry_active = false;
                 gap_inquiry_stop();
                 HCI_SEND_CMD_LOGGED(&hci_accept_connection_request, addr, 0x01);
             }
@@ -1208,8 +1376,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             gap_connectable_control(1);
             gap_discoverable_control(1);
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
-            device_found = false;
-            new_pair = false;
+            clear_outbound_inquiry_target();
+            clear_acl_connection_pending();
+            inquiry_active = false;
             acl_handle = HCI_CON_HANDLE_INVALID;
             bt_rssi = 0;
             bt_rssi_known = false;
@@ -1324,33 +1493,37 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
     const uint32_t audio_age_us = audio_available
         ? packet_age_us(now, audio_queue.front().enqueue_time_us)
         : 0;
-    if (
-        audio_available
-        && !critical_queue.empty()
-        && critical_queue.size() >= CRITICAL_QUEUE_TARGET_DEPTH
-        && audio_age_us >= OUTPUT_AUDIO_MAX_AGE_US
-    ) {
+    const OutputSchedulerInputs scheduler_inputs{
+        audio_available,
+        !critical_queue.empty(),
+        state_pending,
+        audio_age_us,
+        static_cast<uint32_t>(audio_queue.size()),
+        static_cast<uint32_t>(critical_queue.size()),
+        consecutive_non_audio_sends
+    };
+    constexpr OutputSchedulerConfig scheduler_config{
+        OUTPUT_AUDIO_MAX_AGE_US,
+        CRITICAL_QUEUE_TARGET_DEPTH,
+        OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS
+    };
+
+    if (output_scheduler_urgent_is_starving_audio(scheduler_inputs, scheduler_config)) {
         output_counters.critical_starving_audio_count++;
     }
 
-    // If a 0x36 audio packet is ready, keep it ahead of input-triggered
-    // output reports; letting those steal the next slot is audible on headset.
-    const bool non_audio_available = !critical_queue.empty() || state_pending;
-    const bool audio_due = audio_available
-        && (
-            non_audio_available
-            || audio_age_us >= OUTPUT_AUDIO_MAX_AGE_US
-            || audio_queue.size() > 1
-            || consecutive_non_audio_sends >= OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS
-        );
+    const OutputSchedulerChoice choice = output_scheduler_choose_interrupt_packet(
+        scheduler_inputs,
+        scheduler_config
+    );
 
-    if (audio_due) {
+    if (choice == OutputSchedulerChoice::AudioStream) {
         packet = std::move(audio_queue.front());
         audio_queue.pop();
-    } else if (!critical_queue.empty()) {
+    } else if (choice == OutputSchedulerChoice::UrgentTransition) {
         packet = std::move(critical_queue.front());
         critical_queue.pop();
-    } else if (state_pending) {
+    } else if (choice == OutputSchedulerChoice::CoalescedState) {
         uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
         memcpy(report, state_pending_report, sizeof(report));
         if (!build_interrupt_output_packet(report, sizeof(report), packet.data)) {
@@ -1363,9 +1536,6 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         packet.report_id = DS_OUTPUT_REPORT_BT;
         packet.reason = state_pending_reason;
         state_pending = false;
-    } else if (audio_available) {
-        packet = std::move(audio_queue.front());
-        audio_queue.pop();
     } else {
         return false;
     }
@@ -1522,7 +1692,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 hid_interrupt_ready = false;
                 hid_channel_recovery_pending = false;
                 hid_channel_recovery_attempts = 0;
-                device_found = false;
+                clear_outbound_inquiry_target();
                 DS5_LOG("[L2CAP] Open failed psm=0x%04X status=0x%02X\n", psm, status);
                 bt_disconnect();
             }
@@ -1875,118 +2045,19 @@ static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t
 }
 
 bool bt_sanitize_host_speaker_amp_ownership_payload(uint8_t *payload, uint16_t len) {
-    if (payload == nullptr || len < DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-
-    bool changed = false;
-
-    const uint8_t original_flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t original_flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
-    const uint8_t next_flag0 = original_flag0 & static_cast<uint8_t>(~(
-        DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE
-        | DS_OUTPUT_VALID_FLAG0_AUDIO_CONTROL_ENABLE
-    ));
-    if (payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] != next_flag0) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = next_flag0;
-        changed = true;
-    }
-
-    const uint8_t next_flag1 = original_flag1 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE);
-    if (payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] != next_flag1) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = next_flag1;
-        changed = true;
-    }
-
-    if (original_flag0 & (DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE | DS_OUTPUT_VALID_FLAG0_AUDIO_CONTROL_ENABLE)) {
-        if (payload[OUTPUT_PAYLOAD_HEADPHONE_VOLUME_OFFSET] != 0) {
-            payload[OUTPUT_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = 0;
-            changed = true;
-        }
-        if (payload[OUTPUT_PAYLOAD_SPEAKER_VOLUME_OFFSET] != 0) {
-            payload[OUTPUT_PAYLOAD_SPEAKER_VOLUME_OFFSET] = 0;
-            changed = true;
-        }
-    }
-    if (original_flag0 & DS_OUTPUT_VALID_FLAG0_AUDIO_CONTROL_ENABLE) {
-        if (payload[OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] != 0) {
-            payload[OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] = 0;
-            changed = true;
-        }
-    }
-    if (original_flag1 & DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE) {
-        if (payload[OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET] != 0) {
-            payload[OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET] = 0;
-            changed = true;
-        }
-    }
-
-    return changed;
+    return controller_output_policy_sanitize_host_speaker_amp_payload(payload, len);
 }
 
 bool bt_sanitize_host_speaker_amp_ownership(uint8_t *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
-        return false;
-    }
-
-    return bt_sanitize_host_speaker_amp_ownership_payload(data + 3, len - 3);
+    return controller_output_policy_sanitize_host_speaker_amp_report(data, len);
 }
 
 bool bt_sanitize_host_mic_ownership_payload(uint8_t *payload, uint16_t len) {
-    if (payload == nullptr || len < DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-
-    bool changed = false;
-    const uint8_t original_flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t original_flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
-    const uint8_t next_flag0 = original_flag0 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE);
-    uint8_t next_flag1 = original_flag1 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE);
-    const bool original_power_save_control =
-        (original_flag1 & DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE) != 0;
-    const uint8_t next_power_save_control = original_power_save_control
-        ? static_cast<uint8_t>(payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] & ~DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE)
-        : payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET];
-    if (original_power_save_control && next_power_save_control == 0) {
-        next_flag1 &= static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE);
-    }
-
-    if (payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] != next_flag0) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = next_flag0;
-        changed = true;
-    }
-    if (payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] != next_flag1) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = next_flag1;
-        changed = true;
-    }
-    if ((original_flag0 & DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE) && payload[OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] != 0) {
-        payload[OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = 0;
-        changed = true;
-    }
-    if ((original_flag1 & DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE) && payload[OUTPUT_PAYLOAD_MUTE_LED_OFFSET] != 0) {
-        payload[OUTPUT_PAYLOAD_MUTE_LED_OFFSET] = 0;
-        changed = true;
-    }
-    if (original_power_save_control && payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] != next_power_save_control) {
-        payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] = next_power_save_control;
-        changed = true;
-    }
-
-    return changed;
+    return controller_output_policy_sanitize_host_mic_payload(payload, len);
 }
 
 bool bt_sanitize_host_mic_ownership(uint8_t *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
-        return false;
-    }
-
-    return bt_sanitize_host_mic_ownership_payload(data + 3, len - 3);
+    return controller_output_policy_sanitize_host_mic_report(data, len);
 }
 
 static uint8_t classify_output_report(uint8_t const *data, uint16_t len) {

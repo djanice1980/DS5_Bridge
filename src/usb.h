@@ -10,9 +10,9 @@
 
 extern uint8_t mute[2]; // 0: speaker/LED fallback, 1: mic/idle-disconnect fallback
 extern float volume[2]; // 0: companion speaker gain, 1: haptics gain
-extern uint8_t usb_host_volume_percent[2]; // Last USB audio volume requested by host.
-extern uint8_t usb_host_mute[2]; // Last USB audio mute requested by host.
-extern uint32_t usb_host_volume_set_count[2];
+extern uint8_t usb_host_volume_percent[3]; // Speaker, mic, raw line capture.
+extern uint8_t usb_host_mute[3]; // Speaker, mic, raw line capture.
+extern uint32_t usb_host_volume_set_count[3];
 extern float usb_host_speaker_gain; // Host UAC speaker volume as linear gain.
 
 void usb_device_stack_init_disconnected();
@@ -26,6 +26,7 @@ bool usb_suspend_disconnect_enabled();
 bool usb_pm_should_pause_inquiry();
 bool usb_speaker_streaming_active();
 bool usb_mic_streaming_active();
+bool usb_line_streaming_active();
 void usb_handle_controller_transport_disconnect();
 void usb_handle_controller_transport_ready();
 

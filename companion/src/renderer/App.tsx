@@ -17,11 +17,15 @@ import {
   IconDeviceFloppy as Save,
   IconDeviceGamepad2,
   IconDeviceGamepad3,
+  IconFlame,
+  IconFlask2,
   IconBrandGithub,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
   IconKeyboard as Keyboard,
   IconLayoutDashboard,
+  IconLink as LinkIcon,
+  IconLinkOff as LinkOffIcon,
   IconMicrophone as Mic,
   IconMinus as Minus,
   IconMoon as Moon,
@@ -47,6 +51,7 @@ import {
 import kofiBadgeUrl from '../../../assets/brand/support_me_on_kofi_badge_dark.png';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
+import remappingEdgeLayoutImage from '../../../assets/controllers/dualsense-edge-remapping-layout.svg';
 import remappingLayoutImage from '../../../assets/controllers/dualsense-remapping-layout.svg';
 import circleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Circle.svg';
 import createGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Create.svg';
@@ -66,12 +71,13 @@ import rightStickClickGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-
 import squareGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Square.svg';
 import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Triangle.svg';
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
-import { DEFAULT_BUTTON_REMAP_PROFILE_ID, DEFAULT_CONTROLLER_PROFILE_ID, ackResultName } from '../shared/protocol';
+import { DEFAULT_BUTTON_REMAP_PROFILE_ID, DEFAULT_CONTROLLER_PROFILE_ID, REMAP_BUTTON_IDS, ackResultName } from '../shared/protocol';
 import type {
   ControllerProfileSettings,
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
+  BridgeStatusPayload,
   RemapButtonId,
   TriggerTestMode,
   TriggerTestTarget
@@ -79,16 +85,65 @@ import type {
 import type { BridgeSnapshot, UiScalePercent } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
+type ControllerType = BridgeStatusPayload['controllerType'];
+type KnownControllerType = Exclude<ControllerType, 'unknown'>;
 type RemapButtonDefinition = {
   id: RemapButtonId;
   label: string;
-  glyphUrl: string;
+  glyphUrl?: string;
+  textGlyph?: string;
 };
+type DualSenseEdgeRemapButtonId = Extract<RemapButtonId, 'lb' | 'rb' | 'lfn' | 'rfn'>;
+type StandardRemapButtonId = Exclude<RemapButtonId, DualSenseEdgeRemapButtonId>;
 type RemapProfileDialogMode = 'save' | 'rename' | 'delete';
 type ControllerProfileDialogMode = 'save' | 'rename' | 'delete';
+type TriggerLabProfileDialogMode = 'save' | 'rename' | 'delete';
+type TriggerLabBuiltinProfileId = 'default';
+type TriggerLabCustomProfileId = 'custom' | `custom-${string}`;
+type TriggerLabProfileId = TriggerLabBuiltinProfileId | TriggerLabCustomProfileId;
+type TriggerLabSide = Extract<TriggerTestTarget, 'l2' | 'r2'>;
+type TriggerLabDraft = {
+  profileId: TriggerLabProfileId;
+  mode: TriggerTestMode;
+  startPercent: number;
+  wallPercent: number;
+  forcePercent: number;
+};
+type TriggerLabCustomProfile = {
+  id: TriggerLabCustomProfileId;
+  name: string;
+  mode: TriggerTestMode;
+  startPercent: number;
+  wallPercent: number;
+  forcePercent: number;
+  active: boolean;
+};
+type TriggerLabProfileDialogState = {
+  mode: TriggerLabProfileDialogMode;
+  side: TriggerLabSide;
+};
+type TriggerLabSplitState = {
+  drafts: Record<TriggerLabSide, TriggerLabDraft>;
+  active: Record<TriggerLabSide, boolean>;
+};
+type TriggerLabWorkspaceState = {
+  linked: boolean;
+  drafts: Record<TriggerLabSide, TriggerLabDraft>;
+  active: Record<TriggerLabSide, boolean>;
+  splitState: TriggerLabSplitState | null;
+};
+type TriggerLabInitialState = TriggerLabWorkspaceState & {
+  profiles: TriggerLabCustomProfile[];
+};
 type RemapCalloutLayout = {
   top: number;
   points: string;
+};
+type EdgeRemapControlLayout = {
+  left: number;
+  top: number;
+  anchor: 'top' | 'bottom';
+  linePoints: string;
 };
 type LightbarPaletteCell = {
   color: string;
@@ -99,12 +154,15 @@ type FeatureTipsPanelProps = {
   onSettingsFocusRequest?: (target: SettingsFocusTarget) => void;
   onFeatureFocusRequest?: (target: FeatureFocusTarget) => void;
   hostEncodingTipActionable?: boolean;
+  triggerLabOpen?: boolean;
 };
 type SettingsFocusTarget = 'controller-power-saving' | 'sleep-shortcut' | 'volume-shortcut';
-type NotificationFocusTarget = 'controller-status' | 'low-battery';
+type NotificationFocusTarget = 'controller-status' | 'low-battery' | 'all';
 type FeatureFocusTarget = 'host-encoding';
 
 const HAPTICS_STEP = 20;
+const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
+const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
 const SPEAKER_VOLUME_STEP = 10;
 const MIC_VOLUME_STEP = 10;
 const LIGHTBAR_BRIGHTNESS_STEP = 10;
@@ -160,7 +218,9 @@ const TRIGGER_EFFECT_PRESETS: Array<[string, number]> = [
   ['High', 100]
 ];
 const PERCENT_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 10);
-const HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
+const TRIGGER_LAB_SLIDER_STEP = 5;
+const TRIGGER_LAB_SLIDER_TICKS = Array.from({ length: 21 }, (_, index) => index * TRIGGER_LAB_SLIDER_STEP);
+const STANDARD_HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
 const BRIDGE_AUDIO_OUTPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
 const BRIDGE_AUDIO_INPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
 const BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE = 'DualSense audio endpoint unavailable';
@@ -190,6 +250,21 @@ const TRIGGER_TEST_MODE_OPTIONS: Array<[string, TriggerTestMode]> = [
   ['Weapon', 'weapon'],
   ['Vibration', 'vibration']
 ];
+const TRIGGER_LAB_BUILTIN_PROFILE_OPTIONS: Array<[string, TriggerLabBuiltinProfileId]> = [
+  ['Default', 'default']
+];
+const TRIGGER_LAB_PROFILE_PRESETS: Record<TriggerLabBuiltinProfileId, TriggerLabDraft> = {
+  default: {
+    profileId: 'default',
+    mode: 'weapon',
+    startPercent: 20,
+    wallPercent: 60,
+    forcePercent: 85
+  }
+};
+const TRIGGER_LAB_DEFAULT_DRAFT = TRIGGER_LAB_PROFILE_PRESETS.default;
+const TRIGGER_LAB_AUTO_CUSTOM_PROFILE_ID: TriggerLabCustomProfileId = 'custom';
+const TRIGGER_LAB_AUTO_CUSTOM_PROFILE_NAME = 'Custom';
 const MUTE_BUTTON_MODE_OPTIONS: Array<[string, MuteButtonMode]> = [
   ['Normal', 'normal'],
   ['Keyboard Key', 'keyboard'],
@@ -236,25 +311,37 @@ const REMAP_BUTTONS: Record<RemapButtonId, RemapButtonDefinition> = {
   circle: { id: 'circle', label: 'Circle', glyphUrl: circleGlyphUrl },
   cross: { id: 'cross', label: 'Cross', glyphUrl: crossGlyphUrl },
   square: { id: 'square', label: 'Square', glyphUrl: squareGlyphUrl },
-  r3: { id: 'r3', label: 'R3', glyphUrl: rightStickClickGlyphUrl }
+  r3: { id: 'r3', label: 'R3', glyphUrl: rightStickClickGlyphUrl },
+  lb: { id: 'lb', label: 'Left Back Button', textGlyph: 'LB' },
+  rb: { id: 'rb', label: 'Right Back Button', textGlyph: 'RB' },
+  lfn: { id: 'lfn', label: 'Left Function Button', textGlyph: 'LFN' },
+  rfn: { id: 'rfn', label: 'Right Function Button', textGlyph: 'RFN' }
 };
-const REMAP_LEFT_BUTTON_IDS: RemapButtonId[] = ['l2', 'l1', 'create', 'dpad-up', 'dpad-left', 'dpad-down', 'dpad-right', 'l3'];
-const REMAP_RIGHT_BUTTON_IDS: RemapButtonId[] = ['r2', 'r1', 'options', 'triangle', 'circle', 'cross', 'square', 'r3'];
-const REMAP_STICK_CLICK_IDS: RemapButtonId[] = ['l3', 'r3'];
-const REMAP_TARGET_OPTIONS: Array<[string, RemapButtonId]> = [
+const REMAP_LEFT_BUTTON_IDS: StandardRemapButtonId[] = ['l2', 'l1', 'create', 'dpad-up', 'dpad-right', 'dpad-down', 'dpad-left', 'l3'];
+const REMAP_RIGHT_BUTTON_IDS: StandardRemapButtonId[] = ['r2', 'r1', 'options', 'triangle', 'circle', 'cross', 'r3', 'square'];
+const REMAP_STANDARD_BUTTON_IDS: StandardRemapButtonId[] = [
   ...REMAP_LEFT_BUTTON_IDS,
   ...REMAP_RIGHT_BUTTON_IDS
+];
+const REMAP_EDGE_TOP_BUTTON_IDS: DualSenseEdgeRemapButtonId[] = ['lb', 'rb'];
+const REMAP_EDGE_BOTTOM_BUTTON_IDS: DualSenseEdgeRemapButtonId[] = ['lfn', 'rfn'];
+const REMAP_EDGE_BUTTON_IDS: DualSenseEdgeRemapButtonId[] = [
+  ...REMAP_EDGE_TOP_BUTTON_IDS,
+  ...REMAP_EDGE_BOTTOM_BUTTON_IDS
+];
+const REMAP_ALL_BUTTON_IDS = [...REMAP_BUTTON_IDS] as RemapButtonId[];
+const REMAP_STICK_CLICK_IDS: StandardRemapButtonId[] = ['l3', 'r3'];
+const REMAP_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> = [
+  ...REMAP_STANDARD_BUTTON_IDS
 ].map((id) => [REMAP_BUTTONS[id].label, id]);
 const DEFAULT_REMAP_DRAFT = Object.fromEntries(
-  REMAP_TARGET_OPTIONS.map(([, id]) => [id, id])
+  REMAP_ALL_BUTTON_IDS.map((id) => [id, id])
 ) as Record<RemapButtonId, RemapButtonId>;
-const REMAP_STICK_CLICK_TARGET_OPTIONS: Array<[string, RemapButtonId]> = REMAP_STICK_CLICK_IDS.map((id) => [
+const REMAP_STICK_CLICK_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> = REMAP_STICK_CLICK_IDS.map((id) => [
   REMAP_BUTTONS[id].label,
   id
 ]);
-const REMAP_SVG_VIEWBOX_WIDTH = 597.47;
-const REMAP_SVG_VIEWBOX_HEIGHT = 429.39;
-const REMAP_CALLOUT_POINTS: Record<RemapButtonId, Array<[number, number]>> = {
+const REMAP_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]>> = {
   l2: [[2.4, 3.17], [117.91, 3.17], [171.1, 93.49]],
   l1: [[2.4, 63.71], [129.99, 63.71], [161.13, 118.36]],
   create: [[2.4, 124.24], [110.86, 124.24], [134, 163], [186.65, 162.89]],
@@ -272,7 +359,25 @@ const REMAP_CALLOUT_POINTS: Record<RemapButtonId, Array<[number, number]>> = {
   square: [[595.34, 366.39], [485.42, 366.39], [405.35, 223.46]],
   r3: [[595.34, 426.93], [453.97, 426.93], [369.45, 275.47]]
 };
-const REMAP_CALLOUT_Y: Record<RemapButtonId, number> = {
+const REMAP_EDGE_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]>> = {
+  l2: [[0.5, 0.5], [116.01, 0.5], [162.08, 90.82]],
+  l1: [[0.5, 61.04], [128.09, 61.04], [162.08, 112.52]],
+  create: [[0.5, 121.57], [108.96, 121.57], [132.1, 160.28], [183.55, 160.28]],
+  'dpad-up': [[0.5, 182.11], [141.23, 182.11]],
+  'dpad-right': [[0.5, 363.72], [104.65, 363.72], [188.5, 216.96]],
+  'dpad-down': [[0.5, 303.19], [122.73, 303.19], [159.9, 239.79]],
+  'dpad-left': [[0.5, 242.65], [124.41, 242.65], [137.98, 216.32]],
+  l3: [[0.5, 424.26], [141.87, 424.26], [226.76, 271.06]],
+  r2: [[593.44, 0.5], [478.88, 0.5], [439.58, 90.82]],
+  r1: [[593.44, 61.04], [467.02, 61.04], [439.58, 112.52]],
+  options: [[593.44, 121.57], [485.6, 121.57], [462.38, 160.22], [414.99, 160.22]],
+  triangle: [[593.44, 182.11], [455.88, 182.11]],
+  circle: [[593.44, 242.65], [484.98, 242.65], [470.67, 217.4]],
+  cross: [[593.44, 303.19], [470.32, 303.19], [436.66, 246.17]],
+  square: [[593.44, 363.72], [498.9, 363.72], [406.86, 218.55]],
+  r3: [[593.44, 424.26], [452.07, 424.26], [370.93, 271.66]]
+};
+const REMAP_CALLOUT_Y: Record<StandardRemapButtonId, number> = {
   l2: 3.17,
   l1: 63.71,
   create: 124.24,
@@ -290,6 +395,50 @@ const REMAP_CALLOUT_Y: Record<RemapButtonId, number> = {
   square: 366.39,
   r3: 426.93
 };
+const REMAP_EDGE_CALLOUT_Y: Record<StandardRemapButtonId, number> = {
+  l2: 0.5,
+  l1: 61.04,
+  create: 121.57,
+  'dpad-up': 182.11,
+  'dpad-right': 363.72,
+  'dpad-down': 303.19,
+  'dpad-left': 242.65,
+  l3: 424.26,
+  r2: 0.5,
+  r1: 61.04,
+  options: 121.57,
+  triangle: 182.11,
+  circle: 242.65,
+  cross: 303.19,
+  square: 363.72,
+  r3: 424.26
+};
+const REMAP_STANDARD_LAYOUT_ASSET = {
+  src: remappingLayoutImage,
+  viewBoxWidth: 597.47,
+  viewBoxHeight: 429.39,
+  calloutPoints: REMAP_CALLOUT_POINTS,
+  calloutY: REMAP_CALLOUT_Y
+};
+const REMAP_EDGE_LAYOUT_ASSET = {
+  src: remappingEdgeLayoutImage,
+  viewBoxWidth: 593.94,
+  viewBoxHeight: 424.76,
+  calloutPoints: REMAP_EDGE_CALLOUT_POINTS,
+  calloutY: REMAP_EDGE_CALLOUT_Y
+};
+const REMAP_EDGE_CONTROL_POINTS: Record<DualSenseEdgeRemapButtonId, { x: number; y: number; anchor: 'top' | 'bottom' }> = {
+  lb: { x: 227.59, y: 33.19, anchor: 'bottom' },
+  rb: { x: 371.02, y: 33.19, anchor: 'bottom' },
+  lfn: { x: 227.5, y: 368.88, anchor: 'top' },
+  rfn: { x: 370.46, y: 368.88, anchor: 'top' }
+};
+const REMAP_EDGE_LINE_POINTS: Record<DualSenseEdgeRemapButtonId, [[number, number], [number, number]]> = {
+  lb: [[227.59, 33.19], [227.42, 105.09]],
+  rb: [[371.02, 33.19], [370.84, 105.09]],
+  lfn: [[227.5, 368.88], [227.68, 296.98]],
+  rfn: [[370.46, 368.88], [370.64, 296.98]]
+};
 const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: TablerIcon }> = [
   { id: 'overview', label: 'Overview', Icon: IconLayoutDashboard },
   { id: 'audio', label: 'Audio', Icon: IconVolume },
@@ -305,20 +454,31 @@ type SinkSelectableAudio = HTMLAudioElement & {
   setSinkId?: (sinkId: string) => Promise<void>;
   sinkId?: string;
 };
+const LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY = 'ds5bridge.lastRemapControllerType';
+const TRIGGER_LAB_CUSTOM_PROFILES_STORAGE_KEY = 'ds5bridge.triggerLabProfiles';
+const TRIGGER_LAB_WORKSPACE_STORAGE_KEY = 'ds5bridge.triggerLabWorkspace';
+
+function storedRemapControllerType(): KnownControllerType {
+  const saved = window.localStorage.getItem(LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY);
+  return saved === 'dualsense-edge' ? 'dualsense-edge' : 'dualsense';
+}
+
 type CustomSelectProps<T extends SelectValue> = {
   value: T;
   options: Array<[string, T]>;
   disabled?: boolean;
   className?: string;
   showSelectedCheck?: boolean;
+  closeOnSelect?: boolean;
   renderValue?: (label: string, value: T) => ReactNode;
   renderOption?: (label: string, value: T) => ReactNode;
+  renderMenuFooter?: (closeMenu: () => void) => ReactNode;
   ariaLabel: string;
   onChange: (value: T) => void;
 };
 
-function snapHapticsValue(value: number): number {
-  return Math.max(0, Math.min(200, Math.round(value / HAPTICS_STEP) * HAPTICS_STEP));
+function snapHapticsValue(value: number, max = STANDARD_FEEDBACK_GAIN_PERCENT): number {
+  return Math.max(0, Math.min(max, Math.round(value / HAPTICS_STEP) * HAPTICS_STEP));
 }
 
 function snapSpeakerVolume(value: number): number {
@@ -337,6 +497,185 @@ function snapTriggerEffectIntensity(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / TRIGGER_EFFECT_STEP) * TRIGGER_EFFECT_STEP));
 }
 
+function snapTriggerLabPercent(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value / TRIGGER_LAB_SLIDER_STEP) * TRIGGER_LAB_SLIDER_STEP));
+}
+
+function isTriggerLabBuiltinProfileId(value: string): value is TriggerLabBuiltinProfileId {
+  return value === 'default';
+}
+
+function isTriggerTestModeValue(value: unknown): value is TriggerTestMode {
+  return value === 'feedback' || value === 'weapon' || value === 'vibration';
+}
+
+function loadTriggerLabCustomProfiles(): TriggerLabCustomProfile[] {
+  try {
+    const rawProfiles = JSON.parse(window.localStorage.getItem(TRIGGER_LAB_CUSTOM_PROFILES_STORAGE_KEY) ?? '[]') as unknown;
+    if (!Array.isArray(rawProfiles)) {
+      return [];
+    }
+    return rawProfiles.flatMap((profile): TriggerLabCustomProfile[] => {
+      if (!profile || typeof profile !== 'object') {
+        return [];
+      }
+      const candidate = profile as Partial<TriggerLabCustomProfile>;
+      if (
+        typeof candidate.id !== 'string'
+        || (candidate.id !== TRIGGER_LAB_AUTO_CUSTOM_PROFILE_ID && !candidate.id.startsWith('custom-'))
+        || typeof candidate.name !== 'string'
+        || candidate.name.trim().length === 0
+        || !isTriggerTestModeValue(candidate.mode)
+      ) {
+        return [];
+      }
+      return [{
+        id: candidate.id as TriggerLabCustomProfileId,
+        name: candidate.name.trim().slice(0, 48),
+        mode: candidate.mode,
+        startPercent: snapTriggerLabPercent(Number(candidate.startPercent ?? 0)),
+        wallPercent: snapTriggerLabPercent(Number(candidate.wallPercent ?? 0)),
+        forcePercent: snapTriggerLabPercent(Number(candidate.forcePercent ?? 0)),
+        active: candidate.active === true
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function saveTriggerLabCustomProfiles(profiles: TriggerLabCustomProfile[]) {
+  window.localStorage.setItem(TRIGGER_LAB_CUSTOM_PROFILES_STORAGE_KEY, JSON.stringify(profiles));
+}
+
+function createTriggerLabProfileId(): TriggerLabCustomProfileId {
+  return `custom-${window.crypto.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`}`;
+}
+
+function defaultTriggerLabWorkspaceState(): TriggerLabWorkspaceState {
+  return {
+    linked: true,
+    drafts: {
+      l2: { ...TRIGGER_LAB_DEFAULT_DRAFT },
+      r2: { ...TRIGGER_LAB_DEFAULT_DRAFT }
+    },
+    active: {
+      l2: false,
+      r2: false
+    },
+    splitState: null
+  };
+}
+
+function triggerLabProfileDraftFromProfile(profile: TriggerLabCustomProfile): TriggerLabDraft {
+  return {
+    profileId: profile.id,
+    mode: profile.mode,
+    startPercent: profile.startPercent,
+    wallPercent: profile.wallPercent,
+    forcePercent: profile.forcePercent
+  };
+}
+
+function normalizeTriggerLabWorkspaceDraft(
+  value: unknown,
+  profiles: TriggerLabCustomProfile[]
+): TriggerLabDraft {
+  if (!value || typeof value !== 'object') {
+    return { ...TRIGGER_LAB_DEFAULT_DRAFT };
+  }
+
+  const candidate = value as Partial<TriggerLabDraft>;
+  if (candidate.profileId === 'default') {
+    return { ...TRIGGER_LAB_DEFAULT_DRAFT };
+  }
+
+  if (typeof candidate.profileId === 'string') {
+    const customProfile = profiles.find((profile) => profile.id === candidate.profileId);
+    if (customProfile) {
+      return triggerLabProfileDraftFromProfile(customProfile);
+    }
+  }
+
+  return { ...TRIGGER_LAB_DEFAULT_DRAFT };
+}
+
+function triggerLabWorkspaceDraftActive(
+  draft: TriggerLabDraft,
+  storedActive: unknown,
+  profiles: TriggerLabCustomProfile[]
+): boolean {
+  if (draft.profileId === 'default') {
+    return false;
+  }
+  const profileActive = profiles.find((profile) => profile.id === draft.profileId)?.active ?? false;
+  const active = typeof storedActive === 'boolean' ? storedActive : profileActive;
+  return active && draft.forcePercent > 0;
+}
+
+function loadTriggerLabWorkspaceState(profiles: TriggerLabCustomProfile[]): TriggerLabWorkspaceState {
+  const fallback = defaultTriggerLabWorkspaceState();
+  try {
+    const value = JSON.parse(window.localStorage.getItem(TRIGGER_LAB_WORKSPACE_STORAGE_KEY) ?? 'null') as unknown;
+    if (!value || typeof value !== 'object') {
+      return fallback;
+    }
+
+    const candidate = value as Partial<TriggerLabWorkspaceState>;
+    const l2Draft = normalizeTriggerLabWorkspaceDraft(candidate.drafts?.l2, profiles);
+    const r2Draft = normalizeTriggerLabWorkspaceDraft(candidate.drafts?.r2, profiles);
+    const active = {
+      l2: triggerLabWorkspaceDraftActive(l2Draft, candidate.active?.l2, profiles),
+      r2: triggerLabWorkspaceDraftActive(r2Draft, candidate.active?.r2, profiles)
+    };
+
+    let splitState: TriggerLabSplitState | null = null;
+    if (candidate.splitState && typeof candidate.splitState === 'object') {
+      const splitL2Draft = normalizeTriggerLabWorkspaceDraft(candidate.splitState.drafts?.l2, profiles);
+      const splitR2Draft = normalizeTriggerLabWorkspaceDraft(candidate.splitState.drafts?.r2, profiles);
+      splitState = {
+        drafts: {
+          l2: splitL2Draft,
+          r2: splitR2Draft
+        },
+        active: {
+          l2: triggerLabWorkspaceDraftActive(splitL2Draft, candidate.splitState.active?.l2, profiles),
+          r2: triggerLabWorkspaceDraftActive(splitR2Draft, candidate.splitState.active?.r2, profiles)
+        }
+      };
+    }
+
+    const linked = candidate.linked !== false;
+    const workspaceActive = linked
+      ? { l2: active.l2 || active.r2, r2: active.l2 || active.r2 }
+      : active;
+
+    return {
+      linked,
+      drafts: {
+        l2: l2Draft,
+        r2: r2Draft
+      },
+      active: workspaceActive,
+      splitState
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function loadTriggerLabInitialState(): TriggerLabInitialState {
+  const profiles = loadTriggerLabCustomProfiles();
+  return {
+    ...loadTriggerLabWorkspaceState(profiles),
+    profiles
+  };
+}
+
+function saveTriggerLabWorkspaceState(state: TriggerLabWorkspaceState) {
+  window.localStorage.setItem(TRIGGER_LAB_WORKSPACE_STORAGE_KEY, JSON.stringify(state));
+}
+
 function controllerPowerSavingActiveFromSnapshot(snapshot: BridgeSnapshot | null | undefined): boolean {
   return Boolean(snapshot?.settings.controllerPowerSavingEnabled && snapshot.diagnostics.hostAudioStatus?.headsetPlugged);
 }
@@ -347,12 +686,32 @@ function capControllerPowerSavingValue(value: number, snapshot: BridgeSnapshot |
     : value;
 }
 
+function feedbackSliderMaxFromSnapshot(snapshot: BridgeSnapshot | null | undefined): number {
+  if (controllerPowerSavingActiveFromSnapshot(snapshot)) {
+    return CONTROLLER_POWER_SAVING_CAP_PERCENT;
+  }
+  return snapshot?.settings.feedbackBoostEnabled ? BOOSTED_FEEDBACK_GAIN_PERCENT : STANDARD_FEEDBACK_GAIN_PERCENT;
+}
+
+function feedbackSliderTicks(max: number): number[] {
+  if (max === STANDARD_FEEDBACK_GAIN_PERCENT) {
+    return STANDARD_HAPTICS_SLIDER_TICKS;
+  }
+  return Array.from({ length: 11 }, (_, index) => (max / 10) * index);
+}
+
 function displayHapticsValue(snapshot: BridgeSnapshot): number {
-  return snapHapticsValue(capControllerPowerSavingValue(snapshot.settings.hapticsGainPercent, snapshot));
+  return snapHapticsValue(
+    capControllerPowerSavingValue(snapshot.settings.hapticsGainPercent, snapshot),
+    feedbackSliderMaxFromSnapshot(snapshot)
+  );
 }
 
 function displayClassicRumbleValue(snapshot: BridgeSnapshot): number {
-  return snapHapticsValue(capControllerPowerSavingValue(snapshot.settings.classicRumbleGainPercent, snapshot));
+  return snapHapticsValue(
+    capControllerPowerSavingValue(snapshot.settings.classicRumbleGainPercent, snapshot),
+    feedbackSliderMaxFromSnapshot(snapshot)
+  );
 }
 
 function displayLightbarBrightnessValue(snapshot: BridgeSnapshot): number {
@@ -373,13 +732,92 @@ function sliderTickClass(value: number, max: number): string | undefined {
   return undefined;
 }
 
+type TriggerLabMeterProps = {
+  label: string;
+  value: number;
+  disabled?: boolean;
+  onChange: (value: number) => void;
+  onCommit: (value: number) => void;
+};
+
+function TriggerLabMeter({ label, value, disabled = false, onChange, onCommit }: TriggerLabMeterProps) {
+  function commitValue(element: HTMLInputElement) {
+    onCommit(snapTriggerLabPercent(Number(element.value)));
+  }
+
+  return (
+    <div className="range-control trigger-lab-meter">
+      <input
+        type="range"
+        min="0"
+        max="100"
+        step={TRIGGER_LAB_SLIDER_STEP}
+        value={value}
+        disabled={disabled}
+        aria-label={label}
+        style={{ '--range-fill': `${value}%` } as CSSProperties}
+        onChange={(event) => onChange(snapTriggerLabPercent(Number(event.currentTarget.value)))}
+        onBlur={(event) => commitValue(event.currentTarget)}
+        onKeyUp={(event) => commitValue(event.currentTarget)}
+        onPointerCancel={(event) => commitValue(event.currentTarget)}
+        onPointerUp={(event) => commitValue(event.currentTarget)}
+      />
+      <div className="range-ticks" aria-hidden="true">
+        {TRIGGER_LAB_SLIDER_TICKS.map((tick) => (
+          <span key={tick} className={sliderTickClass(tick, 100)} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+type HostAudioCaptureStatusReason =
+  | NonNullable<BridgeSnapshot['diagnostics']['hostAudioCaptureIssue']>['reason']
+  | NonNullable<BridgeSnapshot['diagnostics']['hostAudioCaptureRetry']>['reason'];
+
+function hostAudioCaptureIssueLabel(reason: HostAudioCaptureStatusReason): string {
+  switch (reason) {
+    case 'device-in-use':
+      return 'Endpoint Busy';
+    case 'device-invalidated':
+      return 'Endpoint Changed';
+    case 'unsupported-format':
+      return 'Format Error';
+    case 'bulk-pcm-unavailable':
+      return 'PCM Pipe Missing';
+    case 'start-timeout':
+      return 'Retrying';
+    case 'helper-exit':
+      return 'Helper Restarting';
+  }
+}
+
+function hostAudioCaptureIssueTooltip(reason: HostAudioCaptureStatusReason): string {
+  switch (reason) {
+    case 'device-in-use':
+      return 'Another app has exclusive control of the DualSense audio endpoint. Host Encoding will retry automatically.';
+    case 'device-invalidated':
+      return 'Windows changed the DualSense audio endpoint while Host Encoding was starting. The app will retry automatically.';
+    case 'unsupported-format':
+      return 'Windows rejected the DualSense raw PCM capture format. Re-enumerate or clean stale DualSense audio devices.';
+    case 'bulk-pcm-unavailable':
+      return 'Windows did not expose the DS5 Bridge WinUSB PCM pipe. Re-enumerate or clean stale DS5 Bridge devices.';
+    case 'start-timeout':
+      return 'The host audio encoder did not start in time. The app will retry automatically.';
+    case 'helper-exit':
+      return 'The host audio encoder stopped before capture started. The app will retry automatically.';
+  }
+}
+
 function FeatureTipsPanel({
   tab,
   onSettingsFocusRequest,
   onFeatureFocusRequest,
-  hostEncodingTipActionable = false
+  hostEncodingTipActionable = false,
+  triggerLabOpen = false
 }: FeatureTipsPanelProps) {
   const [featureTileSampleActive, setFeatureTileSampleActive] = useState(false);
+  const [triggerLabLinkTipSplit, setTriggerLabLinkTipSplit] = useState(false);
   const tips: Array<{
     key: string;
     icon: ReactNode;
@@ -401,7 +839,14 @@ function FeatureTipsPanel({
     }
   ];
 
-  if (tab === 'audio') {
+  if (tab === 'triggers' && triggerLabOpen) {
+    tips.push({
+      key: 'trigger-lab-override',
+      icon: <IconFlask2 size={16} />,
+      title: 'Lab Override',
+      text: 'Active Lab effects stay applied and ignore incoming game trigger output.'
+    });
+  } else if (tab === 'audio') {
     tips.push({
       key: 'host-encoding',
       icon: <Headphones size={16} />,
@@ -418,7 +863,14 @@ function FeatureTipsPanel({
     });
   }
 
-  if (tab === 'lighting') {
+  if (tab === 'triggers' && triggerLabOpen) {
+    tips.push({
+      key: 'trigger-lab-link',
+      icon: triggerLabLinkTipSplit ? <LinkOffIcon size={16} /> : <LinkIcon size={16} />,
+      title: 'Linked / Split',
+      text: 'When Linked is on, the selected effect mirrors across L2 and R2. Split keeps each trigger separate.'
+    });
+  } else if (tab === 'lighting') {
     tips.push({
       key: 'custom-color',
       icon: <Palette size={16} />,
@@ -477,6 +929,16 @@ function FeatureTipsPanel({
               >
                 {tip.icon}
               </button>
+            ) : tip.key === 'trigger-lab-link' ? (
+              <button
+                className={`feature-help-icon feature-help-icon-button ${triggerLabLinkTipSplit ? '' : 'active'}`}
+                type="button"
+                aria-pressed={!triggerLabLinkTipSplit}
+                aria-label="Toggle Linked Split tip example"
+                onClick={() => setTriggerLabLinkTipSplit((split) => !split)}
+              >
+                {tip.icon}
+              </button>
             ) : (
               <span className={`feature-help-icon ${tip.tone ?? ''}`} aria-hidden="true">
                 {tip.icon}
@@ -497,6 +959,7 @@ function controllerProfileSettingsFromSnapshot(snapshot: BridgeSnapshot): Contro
   return {
     hapticsEnabled: snapshot.settings.hapticsEnabled,
     hapticsGainPercent: snapshot.settings.hapticsGainPercent,
+    feedbackBoostEnabled: snapshot.settings.feedbackBoostEnabled,
     classicRumbleEnabled: snapshot.settings.classicRumbleEnabled,
     classicRumbleGainPercent: snapshot.settings.classicRumbleGainPercent,
     adaptiveTriggersEnabled: snapshot.settings.adaptiveTriggersEnabled,
@@ -1128,8 +1591,10 @@ function CustomSelect<T extends SelectValue>({
   disabled = false,
   className = '',
   showSelectedCheck = true,
+  closeOnSelect = true,
   renderValue,
   renderOption,
+  renderMenuFooter,
   ariaLabel,
   onChange
 }: CustomSelectProps<T>) {
@@ -1201,7 +1666,9 @@ function CustomSelect<T extends SelectValue>({
   }, [open]);
 
   function choose(nextValue: T) {
-    setOpen(false);
+    if (closeOnSelect) {
+      setOpen(false);
+    }
     if (nextValue !== value) {
       onChange(nextValue);
     }
@@ -1265,6 +1732,11 @@ function CustomSelect<T extends SelectValue>({
               </button>
             );
           })}
+          {renderMenuFooter && (
+            <div className="custom-select-menu-footer">
+              {renderMenuFooter(() => setOpen(false))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1306,13 +1778,32 @@ function RemapGlyphOption({ label, value }: { label: string; value: RemapButtonI
 
   return (
     <span className="remap-glyph-option" title={label}>
-      <img src={button.glyphUrl} alt={label} />
+      {button.glyphUrl ? (
+        <img src={button.glyphUrl} alt={label} />
+      ) : (
+        <span className="remap-text-glyph" aria-hidden="true">{button.textGlyph ?? button.label}</span>
+      )}
+    </span>
+  );
+}
+
+function RemapSourceGlyph({ button }: { button: RemapButtonDefinition }) {
+  return button.glyphUrl ? (
+    <img src={button.glyphUrl} alt={button.label} title={button.label} />
+  ) : (
+    <span className="remap-text-glyph remap-text-glyph-source" title={button.label}>
+      {button.textGlyph ?? button.label}
     </span>
   );
 }
 
 function remapTargetOptionsFor(buttonId: RemapButtonId): Array<[string, RemapButtonId]> {
-  return REMAP_STICK_CLICK_IDS.includes(buttonId) ? REMAP_STICK_CLICK_TARGET_OPTIONS : REMAP_TARGET_OPTIONS;
+  if ((REMAP_EDGE_BUTTON_IDS as readonly RemapButtonId[]).includes(buttonId)) {
+    return [[REMAP_BUTTONS[buttonId].label, buttonId], ...REMAP_TARGET_OPTIONS];
+  }
+  return (REMAP_STICK_CLICK_IDS as readonly RemapButtonId[]).includes(buttonId)
+    ? REMAP_STICK_CLICK_TARGET_OPTIONS
+    : REMAP_TARGET_OPTIONS;
 }
 
 export function App() {
@@ -1336,12 +1827,26 @@ export function App() {
   const [lightbarBrightnessValue, setLightbarBrightnessValue] = useState(100);
   const [triggerEffectIntensityValue, setTriggerEffectIntensityValue] = useState(100);
   const [triggerTarget, setTriggerTarget] = useState<TriggerTestTarget>('both');
+  const triggerLabInitialStateRef = useRef<TriggerLabInitialState | null>(null);
+  if (triggerLabInitialStateRef.current === null) {
+    triggerLabInitialStateRef.current = loadTriggerLabInitialState();
+  }
+  const triggerLabInitialState = triggerLabInitialStateRef.current;
+  const [triggerLabOpen, setTriggerLabOpen] = useState(false);
+  const [triggerLabLinked, setTriggerLabLinked] = useState(triggerLabInitialState.linked);
+  const [triggerLabDrafts, setTriggerLabDrafts] = useState<Record<TriggerLabSide, TriggerLabDraft>>(triggerLabInitialState.drafts);
+  const [triggerLabActive, setTriggerLabActive] = useState<Record<TriggerLabSide, boolean>>(triggerLabInitialState.active);
+  const [triggerLabSplitState, setTriggerLabSplitState] = useState<TriggerLabSplitState | null>(triggerLabInitialState.splitState);
+  const [triggerLabCustomProfiles, setTriggerLabCustomProfiles] = useState<TriggerLabCustomProfile[]>(triggerLabInitialState.profiles);
+  const [triggerLabProfileDialog, setTriggerLabProfileDialog] = useState<TriggerLabProfileDialogState | null>(null);
+  const [triggerLabProfileNameDraft, setTriggerLabProfileNameDraft] = useState('');
   const [remapDraft, setRemapDraft] = useState<Record<RemapButtonId, RemapButtonId>>(DEFAULT_REMAP_DRAFT);
   const [remapProfileDialogMode, setRemapProfileDialogMode] = useState<RemapProfileDialogMode | null>(null);
   const [remapProfileNameDraft, setRemapProfileNameDraft] = useState('');
   const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
   const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
-  const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<RemapButtonId, RemapCalloutLayout> | null>(null);
+  const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<StandardRemapButtonId, RemapCalloutLayout> | null>(null);
+  const [edgeRemapControlLayout, setEdgeRemapControlLayout] = useState<Record<DualSenseEdgeRemapButtonId, EdgeRemapControlLayout> | null>(null);
   const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
@@ -1352,6 +1857,7 @@ export function App() {
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
+  const [lastRemapControllerType, setLastRemapControllerType] = useState<KnownControllerType>(storedRemapControllerType);
   const [windowDragging, setWindowDragging] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
@@ -1389,13 +1895,38 @@ export function App() {
   const featureFocusTimerRef = useRef<number | null>(null);
   const windowDraggingRef = useRef(false);
   const windowDragReleaseTimerRef = useRef<number | null>(null);
+  const triggerLabRestoreAppliedRef = useRef(false);
   const deferredSnapshotRef = useRef<BridgeSnapshot | null>(null);
   const overviewSleepConfirmArmedRef = useRef(false);
   const appOpenedAtRef = useRef(Date.now());
+
+  useEffect(() => {
+    saveTriggerLabCustomProfiles(triggerLabCustomProfiles);
+  }, [triggerLabCustomProfiles]);
+
+  useEffect(() => {
+    saveTriggerLabWorkspaceState({
+      linked: triggerLabLinked,
+      drafts: triggerLabDrafts,
+      active: triggerLabActive,
+      splitState: triggerLabSplitState
+    });
+  }, [triggerLabActive, triggerLabDrafts, triggerLabLinked, triggerLabSplitState]);
+
   const connected = snapshot?.state === 'connected';
+  const liveControllerType = snapshot?.status?.controllerType;
+  const remapControllerType = snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown'
+    ? liveControllerType
+    : lastRemapControllerType;
+  const showDualSenseEdgeRemapButtons = remapControllerType === 'dualsense-edge';
   const remapModifiedCount = useMemo(() => (
-    REMAP_TARGET_OPTIONS.filter(([, buttonId]) => remapDraft[buttonId] !== buttonId).length
+    REMAP_ALL_BUTTON_IDS.filter((buttonId) => remapDraft[buttonId] !== buttonId).length
   ), [remapDraft]);
+  const triggerLabProfileOptions = useMemo<Array<[string, TriggerLabProfileId]>>(() => ([
+    ...TRIGGER_LAB_BUILTIN_PROFILE_OPTIONS,
+    ...triggerLabCustomProfiles.map((profile): [string, TriggerLabProfileId] => [profile.name, profile.id])
+  ]), [triggerLabCustomProfiles]);
+  const triggerLabAnyActive = triggerLabActive.l2 || triggerLabActive.r2;
   const selectedControllerProfile = snapshot?.settings.controllerProfiles.find((profile) => (
     profile.id === snapshot.settings.selectedControllerProfileId
   ));
@@ -1413,6 +1944,14 @@ export function App() {
     snapshot?.settings.buttonRemappingProfiles.map((profile) => [profile.name, profile.id]) ?? [['Default', DEFAULT_BUTTON_REMAP_PROFILE_ID]]
   ), [snapshot?.settings.buttonRemappingProfiles]);
   const selectedRemapProfileIsDefault = selectedRemapProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID;
+  const remappingLayoutAsset = showDualSenseEdgeRemapButtons ? REMAP_EDGE_LAYOUT_ASSET : REMAP_STANDARD_LAYOUT_ASSET;
+
+  useEffect(() => {
+    if (snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown') {
+      setLastRemapControllerType(liveControllerType);
+      window.localStorage.setItem(LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY, liveControllerType);
+    }
+  }, [liveControllerType, snapshot?.status?.controllerConnected]);
 
   function applySnapshot(next: BridgeSnapshot) {
     setSnapshot(next);
@@ -1570,16 +2109,18 @@ export function App() {
       const artHeight = artRect.height / layoutScaleY;
       const leftTop = toLocalY(leftRect.top);
       const rightTop = toLocalY(rightRect.top);
-      const viewBoxAspect = REMAP_SVG_VIEWBOX_WIDTH / REMAP_SVG_VIEWBOX_HEIGHT;
+      const viewBoxAspect = remappingLayoutAsset.viewBoxWidth / remappingLayoutAsset.viewBoxHeight;
       const renderedSvgHeight = Math.min(artHeight, artWidth / viewBoxAspect);
       const renderedSvgWidth = renderedSvgHeight * viewBoxAspect;
       const renderedSvgTop = artTop + (artHeight - renderedSvgHeight) / 2;
       const renderedSvgLeft = artLeft + (artWidth - renderedSvgWidth) / 2;
-      const nextLayout = {} as Record<RemapButtonId, RemapCalloutLayout>;
+      const nextLayout = {} as Record<StandardRemapButtonId, RemapCalloutLayout>;
       const mapSvgPoint = ([x, y]: [number, number]) => (
-        `${renderedSvgLeft + (x / REMAP_SVG_VIEWBOX_WIDTH) * renderedSvgWidth},${renderedSvgTop + (y / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight}`
+        `${renderedSvgLeft + (x / remappingLayoutAsset.viewBoxWidth) * renderedSvgWidth},${renderedSvgTop + (y / remappingLayoutAsset.viewBoxHeight) * renderedSvgHeight}`
       );
-      const remapPillEdgeX = (side: HTMLElement, buttonId: RemapButtonId, edge: 'left' | 'right') => {
+      const mapSvgX = (x: number) => renderedSvgLeft + (x / remappingLayoutAsset.viewBoxWidth) * renderedSvgWidth;
+      const mapSvgY = (y: number) => renderedSvgTop + (y / remappingLayoutAsset.viewBoxHeight) * renderedSvgHeight;
+      const remapPillEdgeX = (side: HTMLElement, buttonId: StandardRemapButtonId, edge: 'left' | 'right') => {
         const pill = side.querySelector<HTMLElement>(`[data-remap-button-id="${buttonId}"]`);
         if (!pill) {
           return edge === 'right' ? toLocalX(side.getBoundingClientRect().right) : toLocalX(side.getBoundingClientRect().left);
@@ -1589,30 +2130,30 @@ export function App() {
       };
 
       for (const buttonId of REMAP_LEFT_BUTTON_IDS) {
-        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - leftTop;
+        const top = renderedSvgTop + (remappingLayoutAsset.calloutY[buttonId] / remappingLayoutAsset.viewBoxHeight) * renderedSvgHeight - leftTop;
         const pillRightX = remapPillEdgeX(leftSideElement, buttonId, 'right');
         nextLayout[buttonId] = {
           top,
           points: [
             `${pillRightX},${leftTop + top}`,
-            ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
+            ...remappingLayoutAsset.calloutPoints[buttonId].map(mapSvgPoint)
           ].join(' ')
         };
       }
       for (const buttonId of REMAP_RIGHT_BUTTON_IDS) {
-        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - rightTop;
+        const top = renderedSvgTop + (remappingLayoutAsset.calloutY[buttonId] / remappingLayoutAsset.viewBoxHeight) * renderedSvgHeight - rightTop;
         const pillLeftX = remapPillEdgeX(rightSideElement, buttonId, 'left');
         nextLayout[buttonId] = {
           top,
           points: [
             `${pillLeftX},${rightTop + top}`,
-            ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
+            ...remappingLayoutAsset.calloutPoints[buttonId].map(mapSvgPoint)
           ].join(' ')
         };
       }
 
       setRemapCalloutLayout((current) => {
-        if (current && REMAP_TARGET_OPTIONS.every(([, buttonId]) => (
+        if (current && REMAP_STANDARD_BUTTON_IDS.every((buttonId) => (
           Math.abs(current[buttonId].top - nextLayout[buttonId].top) < 0.5
           && current[buttonId].points === nextLayout[buttonId].points
         ))) {
@@ -1620,6 +2161,32 @@ export function App() {
         }
         return nextLayout;
       });
+
+      if (showDualSenseEdgeRemapButtons) {
+        const nextEdgeLayout = {} as Record<DualSenseEdgeRemapButtonId, EdgeRemapControlLayout>;
+        for (const buttonId of REMAP_EDGE_BUTTON_IDS) {
+          const point = REMAP_EDGE_CONTROL_POINTS[buttonId];
+          nextEdgeLayout[buttonId] = {
+            left: mapSvgX(point.x),
+            top: mapSvgY(point.y),
+            anchor: point.anchor,
+            linePoints: REMAP_EDGE_LINE_POINTS[buttonId].map(mapSvgPoint).join(' ')
+          };
+        }
+        setEdgeRemapControlLayout((current) => {
+          if (current && REMAP_EDGE_BUTTON_IDS.every((buttonId) => (
+            Math.abs(current[buttonId].left - nextEdgeLayout[buttonId].left) < 0.5
+            && Math.abs(current[buttonId].top - nextEdgeLayout[buttonId].top) < 0.5
+            && current[buttonId].anchor === nextEdgeLayout[buttonId].anchor
+            && current[buttonId].linePoints === nextEdgeLayout[buttonId].linePoints
+          ))) {
+            return current;
+          }
+          return nextEdgeLayout;
+        });
+      } else {
+        setEdgeRemapControlLayout(null);
+      }
     }
 
     updateRemapCalloutPositions();
@@ -1634,7 +2201,7 @@ export function App() {
       resizeObserver.disconnect();
       window.removeEventListener('resize', updateRemapCalloutPositions);
     };
-  }, [activeControlTab]);
+  }, [activeControlTab, remappingLayoutAsset, showDualSenseEdgeRemapButtons]);
 
   useEffect(() => {
     if (!connected) {
@@ -1706,13 +2273,57 @@ export function App() {
   const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const adaptiveTriggerOutputActive = Boolean(snapshot?.status?.adaptiveTriggerOutputRecent);
-  const audioStreamActive = Boolean(snapshot?.status?.audioRecent && pendingAction !== 'speaker' && !speakerTestLocked);
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
   const headsetOutputDetected = Boolean(hostAudioStatus?.headsetPlugged);
   const controllerPowerSavingActive = controllerPowerSavingActiveFromSnapshot(snapshot);
-  const hapticsSliderMax = controllerPowerSavingActive ? CONTROLLER_POWER_SAVING_CAP_PERCENT : 200;
+  const feedbackBoostEnabled = Boolean(snapshot?.settings.feedbackBoostEnabled);
+  const hapticsSliderMax = feedbackSliderMaxFromSnapshot(snapshot);
+  const hapticsSliderTicks = feedbackSliderTicks(hapticsSliderMax);
   const percentSliderMax = controllerPowerSavingActive ? CONTROLLER_POWER_SAVING_CAP_PERCENT : 100;
   const OutputIcon = headsetOutputDetected ? Headphones : Volume2;
+
+  useEffect(() => {
+    if (!connected) {
+      triggerLabRestoreAppliedRef.current = false;
+    }
+  }, [connected]);
+
+  useEffect(() => {
+    if (
+      triggerLabRestoreAppliedRef.current
+      || !connected
+      || !adaptiveTriggersSupported
+      || !adaptiveTriggersEnabled
+      || pendingAction !== null
+    ) {
+      return;
+    }
+
+    triggerLabRestoreAppliedRef.current = true;
+    if (!triggerLabAnyActive) {
+      return;
+    }
+
+    if (triggerLabLinked) {
+      const active = triggerLabActive.l2 && triggerLabActive.r2 && triggerLabDrafts.l2.forcePercent > 0;
+      persistTriggerLab('l2', triggerLabDrafts.l2, active, 'trigger-lab-restore', 'both');
+      return;
+    }
+
+    persistTriggerLabSplitState({
+      drafts: triggerLabDrafts,
+      active: triggerLabActive
+    }, 'trigger-lab-restore');
+  }, [
+    adaptiveTriggersEnabled,
+    adaptiveTriggersSupported,
+    connected,
+    pendingAction,
+    triggerLabActive,
+    triggerLabAnyActive,
+    triggerLabDrafts,
+    triggerLabLinked
+  ]);
   const outputControlLabel = headsetOutputDetected ? 'Headphones' : 'Speaker';
   const outputControlLower = headsetOutputDetected ? 'headphones' : 'speaker';
   const outputPresetLower = headsetOutputDetected ? 'headphones' : 'speaker';
@@ -1720,9 +2331,15 @@ export function App() {
   const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
   const audioEnabled = speakerEnabled || duplexMicEnabled;
   const hostAudioActive = hostAudioStatus?.mode === 'host-encoded-active';
+  const hostAudioCaptureIssue = snapshot?.diagnostics.hostAudioCaptureIssue ?? null;
+  const hostAudioCaptureRetry = snapshot?.diagnostics.hostAudioCaptureRetry ?? null;
+  const hostAudioCaptureStatus = hostAudioCaptureIssue ?? hostAudioCaptureRetry;
+  const hostAudioCaptureWarning = hostAudioEnabled && Boolean(hostAudioCaptureIssue);
+  const hostAudioCaptureRetrying = hostAudioEnabled && !hostAudioCaptureWarning && Boolean(hostAudioCaptureRetry);
   const initialHostAudioStartGrace = Date.now() - appOpenedAtRef.current < HOST_AUDIO_INITIAL_START_GRACE_MS;
   const hostAudioStarting = hostAudioEnabled
     && !hostAudioActive
+    && !hostAudioCaptureStatus
     && (
       !hostAudioStatus
       || hostAudioStatus.fallbackReason === 'none'
@@ -1733,18 +2350,25 @@ export function App() {
     ? 'Unavailable'
     : hostAudioActive
       ? 'Host Encoding Active'
+      : hostAudioEnabled && hostAudioCaptureStatus
+        ? hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)
       : hostAudioStarting
         ? 'Starting Host Encoding'
       : hostAudioEnabled
         ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
         : 'Pico Local';
+  const hostAudioTooltip = hostAudioCaptureStatus
+    ? hostAudioCaptureStatus.message || hostAudioCaptureIssueTooltip(hostAudioCaptureStatus.reason)
+    : hostAudioLabel;
   const hostAudioTone = hostAudioActive
     ? 'good'
-    : connected && hostAudioEnabled && !hostAudioStarting
+    : connected && hostAudioEnabled && !hostAudioCaptureRetrying && (Boolean(hostAudioCaptureIssue) || !hostAudioStarting)
       ? 'warn'
       : 'idle';
   const duplexMicLabel = hostAudioStatus?.duplexActive
     ? 'Duplex Active'
+    : duplexMicEnabled && hostAudioActive
+      ? 'Mic Standby'
     : duplexMicEnabled
       ? 'Disabled in Fallback'
       : 'Off';
@@ -1755,8 +2379,6 @@ export function App() {
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || testLocked
-    || gameStreamActive
-    || audioStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy)
     || Boolean(snapshot?.status?.testHapticsCooldown);
   const testRumbleUnavailable = !connected
@@ -1765,43 +2387,33 @@ export function App() {
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || testLocked
-    || gameStreamActive
-    || audioStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy);
   const hapticsTestReady = !testHapticsUnavailable;
   const rumbleTestReady = !testRumbleUnavailable;
   const hapticsStatusLabel = testLocked || snapshot?.status?.testHapticsBusy
     ? 'Testing'
-    : snapshot?.status?.testHapticsCooldown
-      ? 'Cooling Down'
+      : snapshot?.status?.testHapticsCooldown
+        ? 'Cooling Down'
       : hapticsTestReady
         ? 'Ready'
-        : connected && gameStreamActive
-          ? 'Game Active'
-          : connected && audioStreamActive
-            ? 'Audio Active'
-            : connected && pendingAction !== null
-              ? 'Command Pending'
-              : 'Unavailable';
+        : connected && pendingAction !== null
+          ? 'Command Pending'
+          : 'Unavailable';
   const rumbleStatusLabel = testLocked
     ? 'Testing'
     : rumbleTestReady
       ? 'Ready'
-      : connected && gameStreamActive
-        ? 'Game Active'
-        : connected && audioStreamActive
-          ? 'Audio Active'
-          : connected && pendingAction !== null
-            ? 'Command Pending'
-            : 'Unavailable';
+      : connected && pendingAction !== null
+        ? 'Command Pending'
+        : 'Unavailable';
   const hapticsStatusTone = testLocked || snapshot?.status?.testHapticsBusy || hapticsTestReady
     ? 'good'
-    : connected && (snapshot?.status?.testHapticsCooldown || gameStreamActive || audioStreamActive || pendingAction !== null)
+    : connected && (snapshot?.status?.testHapticsCooldown || pendingAction !== null)
       ? 'warn'
       : 'idle';
   const rumbleStatusTone = testLocked || rumbleTestReady
     ? 'good'
-    : connected && (gameStreamActive || audioStreamActive || pendingAction !== null)
+    : connected && pendingAction !== null
       ? 'warn'
       : 'idle';
   const activeFeedbackTestUnavailable = showClassicRumbleControl ? testRumbleUnavailable : testHapticsUnavailable;
@@ -1905,9 +2517,11 @@ export function App() {
     ? '--'
     : hostAudioActive
       ? 'Active'
+      : hostAudioEnabled && hostAudioCaptureStatus
+        ? hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)
       : hostAudioStarting
         ? 'Starting'
-        : hostAudioEnabled
+      : hostAudioEnabled
           ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
           : 'Pico Local';
   const overviewAudioOutputLabel = connected ? (headsetOutputDetected ? 'Headphones' : 'Speaker') : '--';
@@ -2069,6 +2683,8 @@ export function App() {
         `micDecodeFail=${host.micDecodeFail}`,
         `micUsbWriteSuccess=${host.micUsbWriteSuccess}`,
         `micUsbWriteShort=${host.micUsbWriteShort}`,
+        `micUsbConcealCount=${host.micUsbConcealCount}`,
+        `micPlcCount=${host.micPlcCount}`,
         `micLastDecodedSamples=${host.micLastDecodedSamples}`,
         `micLastWrittenBytes=${host.micLastWrittenBytes}`,
         `micPeakPermille=${host.micPeakPermille}`,
@@ -2134,7 +2750,7 @@ export function App() {
   }
 
   async function commitHapticsValue(value = hapticsValue) {
-    const snappedValue = snapHapticsValue(value);
+    const snappedValue = snapHapticsValue(value, hapticsSliderMax);
     if (
       !snapshot
       || snapshot.state !== 'connected'
@@ -2164,7 +2780,7 @@ export function App() {
   }
 
   async function commitClassicRumbleValue(value = classicRumbleValue) {
-    const snappedValue = snapHapticsValue(value);
+    const snappedValue = snapHapticsValue(value, hapticsSliderMax);
     if (
       !snapshot
       || snapshot.state !== 'connected'
@@ -2351,14 +2967,14 @@ export function App() {
   }
 
   function setHapticsPreset(value: number) {
-    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot));
+    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot), hapticsSliderMax);
     hapticsEditingRef.current = true;
     setHapticsValue(snappedValue);
     void commitHapticsValue(snappedValue);
   }
 
   function setClassicRumblePreset(value: number) {
-    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot));
+    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot), hapticsSliderMax);
     classicRumbleEditingRef.current = true;
     setClassicRumbleValue(snappedValue);
     void commitClassicRumbleValue(snappedValue);
@@ -2530,12 +3146,386 @@ export function App() {
     });
   }
 
+  function updateTriggerLabSide(side: TriggerLabSide, update: (current: TriggerLabDraft) => TriggerLabDraft) {
+    setTriggerLabDrafts((current) => {
+      const nextSide = update(current[side]);
+      if (triggerLabLinked) {
+        return { l2: nextSide, r2: nextSide };
+      }
+      return { ...current, [side]: nextSide };
+    });
+  }
+
+  function triggerLabActiveForSide(side: TriggerLabSide) {
+    return triggerLabLinked ? triggerLabActive.l2 && triggerLabActive.r2 : triggerLabActive[side];
+  }
+
+  function setTriggerLabActiveForTarget(side: TriggerLabSide, active: boolean) {
+    setTriggerLabActive((current) => (
+      triggerLabLinked ? { l2: active, r2: active } : { ...current, [side]: active }
+    ));
+  }
+
+  function triggerLabProfileDraft(profileId: TriggerLabProfileId): TriggerLabDraft | null {
+    if (isTriggerLabBuiltinProfileId(profileId)) {
+      return { ...TRIGGER_LAB_PROFILE_PRESETS[profileId] };
+    }
+    const profile = triggerLabCustomProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      return null;
+    }
+    return {
+      profileId: profile.id,
+      mode: profile.mode,
+      startPercent: profile.startPercent,
+      wallPercent: profile.wallPercent,
+      forcePercent: profile.forcePercent
+    };
+  }
+
+  function triggerLabProfileName(profileId: TriggerLabProfileId): string {
+    const builtin = TRIGGER_LAB_BUILTIN_PROFILE_OPTIONS.find(([, value]) => value === profileId);
+    if (builtin) {
+      return builtin[0];
+    }
+    return triggerLabCustomProfiles.find((profile) => profile.id === profileId)?.name
+      ?? (profileId === TRIGGER_LAB_AUTO_CUSTOM_PROFILE_ID ? TRIGGER_LAB_AUTO_CUSTOM_PROFILE_NAME : 'Profile');
+  }
+
+  function triggerLabProfileIsCustom(profileId: TriggerLabProfileId): boolean {
+    return triggerLabCustomProfiles.some((profile) => profile.id === profileId);
+  }
+
+  function triggerLabProfileActive(profileId: TriggerLabProfileId): boolean {
+    if (isTriggerLabBuiltinProfileId(profileId)) {
+      return false;
+    }
+    return triggerLabCustomProfiles.find((profile) => profile.id === profileId)?.active ?? false;
+  }
+
+  function triggerLabCustomProfileFromDraft(
+    id: TriggerLabCustomProfileId,
+    name: string,
+    draft: TriggerLabDraft,
+    active: boolean
+  ): TriggerLabCustomProfile {
+    return {
+      id,
+      name: name.trim().slice(0, 48) || TRIGGER_LAB_AUTO_CUSTOM_PROFILE_NAME,
+      mode: draft.mode,
+      startPercent: draft.startPercent,
+      wallPercent: draft.wallPercent,
+      forcePercent: draft.forcePercent,
+      active: active && draft.forcePercent > 0
+    };
+  }
+
+  function upsertTriggerLabCustomProfile(profile: TriggerLabCustomProfile) {
+    setTriggerLabCustomProfiles((current) => {
+      const existingProfile = current.find((candidate) => candidate.id === profile.id);
+      if (!existingProfile) {
+        return [...current, profile];
+      }
+      return current.map((candidate) => (
+        candidate.id === profile.id ? profile : candidate
+      ));
+    });
+  }
+
+  function saveTriggerLabDraftToProfile(draft: TriggerLabDraft, active: boolean) {
+    if (isTriggerLabBuiltinProfileId(draft.profileId)) {
+      return;
+    }
+    upsertTriggerLabCustomProfile(triggerLabCustomProfileFromDraft(
+      draft.profileId,
+      triggerLabProfileName(draft.profileId),
+      draft,
+      active
+    ));
+  }
+
+  function editableTriggerLabDraft(draft: TriggerLabDraft, active: boolean): TriggerLabDraft {
+    if (isTriggerLabBuiltinProfileId(draft.profileId)) {
+      const nextDraft = {
+        ...draft,
+        profileId: TRIGGER_LAB_AUTO_CUSTOM_PROFILE_ID
+      };
+      upsertTriggerLabCustomProfile(triggerLabCustomProfileFromDraft(
+        TRIGGER_LAB_AUTO_CUSTOM_PROFILE_ID,
+        TRIGGER_LAB_AUTO_CUSTOM_PROFILE_NAME,
+        nextDraft,
+        active
+      ));
+      return nextDraft;
+    }
+
+    upsertTriggerLabCustomProfile(triggerLabCustomProfileFromDraft(
+      draft.profileId,
+      triggerLabProfileName(draft.profileId),
+      draft,
+      active
+    ));
+    return draft;
+  }
+
+  function updateEditableTriggerLabSide(
+    side: TriggerLabSide,
+    update: (current: TriggerLabDraft) => TriggerLabDraft
+  ): TriggerLabDraft {
+    const nextDraft = editableTriggerLabDraft(update(triggerLabDrafts[side]), triggerLabActiveForSide(side));
+    updateTriggerLabSide(side, () => nextDraft);
+    return nextDraft;
+  }
+
+  function persistTriggerLab(
+    side: TriggerLabSide,
+    draft: TriggerLabDraft,
+    active: boolean,
+    label: string,
+    target: TriggerTestTarget = triggerLabLinked ? 'both' : side
+  ) {
+    void runAction(label, () => (
+      window.bridge.applyAdaptiveTriggerEffect({
+        mode: draft.mode,
+        target,
+        startPercent: draft.startPercent,
+        wallPercent: draft.wallPercent,
+        forcePercent: active ? draft.forcePercent : 0
+      })
+    ));
+  }
+
+  function persistTriggerLabSplitState(nextState: TriggerLabSplitState, label: string) {
+    void runAction(label, async () => {
+      await window.bridge.applyAdaptiveTriggerEffect({
+        mode: nextState.drafts.l2.mode,
+        target: 'l2',
+        startPercent: nextState.drafts.l2.startPercent,
+        wallPercent: nextState.drafts.l2.wallPercent,
+        forcePercent: nextState.active.l2 ? nextState.drafts.l2.forcePercent : 0
+      });
+      return window.bridge.applyAdaptiveTriggerEffect({
+        mode: nextState.drafts.r2.mode,
+        target: 'r2',
+        startPercent: nextState.drafts.r2.startPercent,
+        wallPercent: nextState.drafts.r2.wallPercent,
+        forcePercent: nextState.active.r2 ? nextState.drafts.r2.forcePercent : 0
+      });
+    });
+  }
+
+  function setTriggerLabProfile(side: TriggerLabSide, profileId: TriggerLabProfileId) {
+    const profileDraft = triggerLabProfileDraft(profileId);
+    if (!profileDraft) {
+      return;
+    }
+    const previousActive = triggerLabActiveForSide(side);
+    const nextActive = triggerLabProfileActive(profileId) && profileDraft.forcePercent > 0;
+    const nextDraft = { ...profileDraft, profileId };
+    updateTriggerLabSide(side, () => nextDraft);
+    setTriggerLabActiveForTarget(side, nextActive);
+    if (previousActive || nextActive) {
+      persistTriggerLab(side, nextDraft, nextActive, `trigger-lab-update-${side}`);
+    }
+  }
+
+  function openTriggerLabProfileDialog(mode: TriggerLabProfileDialogMode, side: TriggerLabSide) {
+    const profileId = triggerLabDrafts[side].profileId;
+    if ((mode === 'rename' || mode === 'delete') && !triggerLabProfileIsCustom(profileId)) {
+      return;
+    }
+    setTriggerLabProfileNameDraft(
+      mode === 'save'
+        ? `Custom Trigger ${triggerLabCustomProfiles.length + 1}`
+        : triggerLabProfileName(profileId)
+    );
+    setTriggerLabProfileDialog({ mode, side });
+  }
+
+  function closeTriggerLabProfileDialog() {
+    setTriggerLabProfileDialog(null);
+    setTriggerLabProfileNameDraft('');
+  }
+
+  function submitTriggerLabProfileDialog() {
+    if (!triggerLabProfileDialog) {
+      return;
+    }
+
+    const side = triggerLabProfileDialog.side;
+    const draft = triggerLabDrafts[side];
+    const nextName = triggerLabProfileNameDraft.trim();
+
+    if (triggerLabProfileDialog.mode === 'save') {
+      if (!nextName) {
+        return;
+      }
+      const id = createTriggerLabProfileId();
+      const nextProfile: TriggerLabCustomProfile = {
+        id,
+        name: nextName,
+        mode: draft.mode,
+        startPercent: draft.startPercent,
+        wallPercent: draft.wallPercent,
+        forcePercent: draft.forcePercent,
+        active: triggerLabActiveForSide(side) && draft.forcePercent > 0
+      };
+      setTriggerLabCustomProfiles((current) => [...current, nextProfile]);
+      updateTriggerLabSide(side, (current) => ({ ...current, profileId: id }));
+      closeTriggerLabProfileDialog();
+      return;
+    }
+
+    if (!triggerLabProfileIsCustom(draft.profileId)) {
+      closeTriggerLabProfileDialog();
+      return;
+    }
+
+    if (triggerLabProfileDialog.mode === 'rename') {
+      if (!nextName || nextName === triggerLabProfileName(draft.profileId)) {
+        closeTriggerLabProfileDialog();
+        return;
+      }
+      setTriggerLabCustomProfiles((current) => current.map((profile) => (
+        profile.id === draft.profileId ? { ...profile, name: nextName } : profile
+      )));
+      closeTriggerLabProfileDialog();
+      return;
+    }
+
+    if (triggerLabProfileDialog.mode === 'delete') {
+      const profileId = draft.profileId;
+      const nextDrafts = {
+        l2: triggerLabDrafts.l2.profileId === profileId ? { ...TRIGGER_LAB_DEFAULT_DRAFT } : triggerLabDrafts.l2,
+        r2: triggerLabDrafts.r2.profileId === profileId ? { ...TRIGGER_LAB_DEFAULT_DRAFT } : triggerLabDrafts.r2
+      };
+      const nextActive = {
+        l2: triggerLabDrafts.l2.profileId === profileId ? false : triggerLabActive.l2,
+        r2: triggerLabDrafts.r2.profileId === profileId ? false : triggerLabActive.r2
+      };
+      setTriggerLabCustomProfiles((current) => current.filter((profile) => profile.id !== profileId));
+      setTriggerLabDrafts(nextDrafts);
+      setTriggerLabActive(nextActive);
+      setTriggerLabSplitState((current) => current
+        ? {
+            drafts: {
+              l2: current.drafts.l2.profileId === profileId ? { ...TRIGGER_LAB_DEFAULT_DRAFT } : current.drafts.l2,
+              r2: current.drafts.r2.profileId === profileId ? { ...TRIGGER_LAB_DEFAULT_DRAFT } : current.drafts.r2
+            },
+            active: {
+              l2: current.drafts.l2.profileId === profileId ? false : current.active.l2,
+              r2: current.drafts.r2.profileId === profileId ? false : current.active.r2
+            }
+          }
+        : null);
+      if (triggerLabActive.l2 || triggerLabActive.r2) {
+        if (triggerLabLinked) {
+          persistTriggerLab('l2', nextDrafts.l2, false, 'trigger-lab-delete-profile', 'both');
+        } else {
+          persistTriggerLabSplitState({ drafts: nextDrafts, active: nextActive }, 'trigger-lab-delete-profile');
+        }
+      }
+      closeTriggerLabProfileDialog();
+    }
+  }
+
+  function setTriggerLabMode(side: TriggerLabSide, mode: TriggerTestMode) {
+    const nextDraft = updateEditableTriggerLabSide(side, (current) => ({ ...current, mode }));
+    if (triggerLabActiveForSide(side)) {
+      persistTriggerLab(side, nextDraft, nextDraft.forcePercent > 0, `trigger-lab-update-${side}`);
+      setTriggerLabActiveForTarget(side, nextDraft.forcePercent > 0);
+    }
+  }
+
+  function setTriggerLabPercent(side: TriggerLabSide, key: 'startPercent' | 'wallPercent' | 'forcePercent', value: number) {
+    updateEditableTriggerLabSide(side, (current) => ({
+      ...current,
+      [key]: snapTriggerLabPercent(value),
+    }));
+  }
+
+  function commitTriggerLabPercent(side: TriggerLabSide, key: 'startPercent' | 'wallPercent' | 'forcePercent', value: number) {
+    const nextDraft = updateEditableTriggerLabSide(side, (current) => ({
+      ...current,
+      [key]: snapTriggerLabPercent(value),
+    }));
+    if (triggerLabActiveForSide(side)) {
+      const nextActive = nextDraft.forcePercent > 0;
+      saveTriggerLabDraftToProfile(nextDraft, nextActive);
+      persistTriggerLab(side, nextDraft, nextActive, `trigger-lab-update-${side}`);
+      setTriggerLabActiveForTarget(side, nextActive);
+    }
+  }
+
+  function toggleTriggerLabLinked(sourceSide: TriggerLabSide) {
+    if (triggerLabLinked) {
+      if (triggerLabSplitState) {
+        setTriggerLabDrafts({
+          l2: { ...triggerLabSplitState.drafts.l2 },
+          r2: { ...triggerLabSplitState.drafts.r2 }
+        });
+        setTriggerLabActive({ ...triggerLabSplitState.active });
+        persistTriggerLabSplitState(triggerLabSplitState, `trigger-lab-unlink-${sourceSide}`);
+      }
+      setTriggerLabLinked(false);
+      return;
+    }
+
+    const sourceDraft = { ...triggerLabDrafts[sourceSide] };
+    const sourceActive = triggerLabActive[sourceSide];
+    setTriggerLabSplitState({
+      drafts: {
+        l2: { ...triggerLabDrafts.l2 },
+        r2: { ...triggerLabDrafts.r2 }
+      },
+      active: { ...triggerLabActive }
+    });
+    setTriggerLabDrafts({ l2: sourceDraft, r2: { ...sourceDraft } });
+    setTriggerLabActive({ l2: sourceActive, r2: sourceActive });
+    setTriggerLabLinked(true);
+    if (sourceActive || triggerLabActive.l2 || triggerLabActive.r2) {
+      persistTriggerLab(sourceSide, sourceDraft, sourceActive, `trigger-lab-link-${sourceSide}`, 'both');
+    }
+  }
+
+  function previewTriggerLab(side: TriggerLabSide) {
+    const draft = triggerLabDrafts[side];
+    setTriggerTestLocked(true);
+    void runAction(`trigger-lab-${side}`, () => (
+      window.bridge.previewAdaptiveTriggerEffect({
+        mode: draft.mode,
+        target: triggerLabLinked ? 'both' : side,
+        startPercent: draft.startPercent,
+        wallPercent: draft.wallPercent,
+        forcePercent: draft.forcePercent
+      })
+    )).finally(() => {
+      window.setTimeout(() => setTriggerTestLocked(false), TEST_TRIGGER_LOCK_MS);
+    });
+  }
+
+  function toggleTriggerLabActive(side: TriggerLabSide, active: boolean) {
+    const draft = active
+      ? editableTriggerLabDraft(triggerLabDrafts[side], active)
+      : editableTriggerLabDraft(triggerLabDrafts[side], false);
+    updateTriggerLabSide(side, () => draft);
+    setTriggerLabActiveForTarget(side, active);
+    persistTriggerLab(side, draft, active, `trigger-lab-active-${side}`);
+  }
+
   function setTriggerTestMode(mode: TriggerTestMode) {
     void runAction('trigger-mode', () => window.bridge.setTriggerTestMode(mode));
   }
 
   function resetAdaptiveTriggers() {
+    saveTriggerLabDraftToProfile(triggerLabDrafts.l2, false);
+    saveTriggerLabDraftToProfile(triggerLabDrafts.r2, false);
+    setTriggerLabActive({ l2: false, r2: false });
     void runAction('triggers-reset', () => window.bridge.resetAdaptiveTriggers());
+  }
+
+  function resetTriggerLab() {
+    resetAdaptiveTriggers();
   }
 
   function selectControllerProfile(profileId: string) {
@@ -2681,6 +3671,13 @@ export function App() {
     ));
   }
 
+  function toggleFeedbackBoostEnabled() {
+    if (!snapshot) return;
+    void runAction('feedback-boost', () => (
+      window.bridge.setFeedbackBoostEnabled(!snapshot.settings.feedbackBoostEnabled)
+    ));
+  }
+
   function toggleSpeakerEnabled() {
     if (!snapshot) return;
     void runAction('speaker-enabled', () => window.bridge.setSpeakerEnabled(!snapshot.settings.speakerEnabled));
@@ -2756,9 +3753,8 @@ export function App() {
       if (next.settings.speakerEnabled !== enabled) {
         next = await window.bridge.setSpeakerEnabled(enabled);
       }
-      const micEnabled = enabled && next.settings.hostEncodedAudioEnabled;
-      if (next.settings.duplexMicEnabled !== micEnabled) {
-        next = await window.bridge.setDuplexMicEnabled(micEnabled);
+      if (!enabled && next.settings.duplexMicEnabled) {
+        next = await window.bridge.setDuplexMicEnabled(false);
       }
       return next;
     });
@@ -2931,6 +3927,174 @@ export function App() {
     setActiveControlTab(tab);
   }
 
+  function renderTriggerLabCard(side: TriggerLabSide) {
+    const draft = triggerLabDrafts[side];
+    const label = side === 'l2' ? 'Left Trigger' : 'Right Trigger';
+    const glyphUrl = side === 'l2' ? l2GlyphUrl : r2GlyphUrl;
+    const targetLabel = side.toUpperCase();
+    const active = triggerLabActiveForSide(side);
+    const labActionDisabled = !connected
+      || !adaptiveTriggersSupported
+      || !adaptiveTriggersEnabled
+      || pendingAction !== null;
+    const activeDisabled = labActionDisabled || (!active && draft.forcePercent <= 0);
+    const previewDisabled = labActionDisabled
+      || triggerTestLocked
+      || adaptiveTriggerOutputActive
+      || Boolean(snapshot.status?.testAdaptiveTriggersBusy);
+
+    return (
+      <section className="feature-card trigger-lab-card trigger-lab-trigger-card" key={side}>
+        <div className="feature-card-title">
+          <button
+            type="button"
+            className={`feature-icon triggers-enable-button trigger-lab-trigger-badge ${active ? 'active' : ''}`}
+            aria-pressed={active}
+            aria-label={`${label} persistent lab effect`}
+            disabled={activeDisabled}
+            onClick={() => toggleTriggerLabActive(side, !active)}
+          >
+            <span
+              className="trigger-lab-trigger-glyph"
+              style={{
+                WebkitMaskImage: `url("${glyphUrl}")`,
+                maskImage: `url("${glyphUrl}")`
+              } as CSSProperties}
+            />
+          </button>
+          <div className="title-copy">
+            <h3>{label}</h3>
+            <p>Shape the {targetLabel} trigger feel</p>
+          </div>
+          <div className="inline-switch trigger-lab-card-active">
+            <span>Active</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={active}
+              aria-label={`${label} persistent lab effect`}
+              className={`switch trigger-lab-active-switch ${active ? 'on' : ''}`}
+              disabled={activeDisabled}
+              onClick={() => toggleTriggerLabActive(side, !active)}
+            >
+              <span />
+            </button>
+          </div>
+        </div>
+        <div className="trigger-lab-editor">
+          <div className="trigger-lab-profile-row">
+            <CustomSelect
+              value={draft.profileId}
+              options={triggerLabProfileOptions}
+              ariaLabel={`${label} lab profile`}
+              className="trigger-lab-profile-select"
+              closeOnSelect={false}
+              onChange={(profileId) => setTriggerLabProfile(side, profileId)}
+              renderMenuFooter={() => {
+                const customProfile = triggerLabProfileIsCustom(draft.profileId);
+                return (
+                  <div className="trigger-lab-profile-actions">
+                    <button
+                      type="button"
+                      aria-label="Save new trigger profile"
+                      title="Save New"
+                      onClick={() => {
+                        openTriggerLabProfileDialog('save', side);
+                      }}
+                    >
+                      <Save size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Rename trigger profile"
+                      title="Rename"
+                      disabled={!customProfile}
+                      onClick={() => {
+                        openTriggerLabProfileDialog('rename', side);
+                      }}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Delete trigger profile"
+                      title="Delete"
+                      disabled={!customProfile}
+                      onClick={() => {
+                        openTriggerLabProfileDialog('delete', side);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                );
+              }}
+            />
+            <button
+              type="button"
+              className={`trigger-lab-chip compact ${triggerLabLinked ? 'active' : ''}`}
+              aria-pressed={triggerLabLinked}
+              onClick={() => toggleTriggerLabLinked(side)}
+            >
+              {triggerLabLinked ? <LinkIcon size={13} /> : <LinkOffIcon size={13} />}
+              <span className="trigger-lab-chip-label">{triggerLabLinked ? 'Linked' : 'Split'}</span>
+            </button>
+          </div>
+          <div className="trigger-lab-mode-grid">
+            {TRIGGER_TEST_MODE_OPTIONS.map(([modeLabel, mode]) => (
+              <button
+                key={mode}
+                type="button"
+                className={`trigger-lab-mode-button ${draft.mode === mode ? 'active' : ''}`}
+                onClick={() => setTriggerLabMode(side, mode)}
+              >
+                {modeLabel}
+              </button>
+            ))}
+          </div>
+          <div className="trigger-lab-meter-row">
+            <span>Start</span>
+            <TriggerLabMeter
+              label={`${label} start`}
+              value={draft.startPercent}
+              onChange={(value) => setTriggerLabPercent(side, 'startPercent', value)}
+              onCommit={(value) => commitTriggerLabPercent(side, 'startPercent', value)}
+            />
+            <strong>{draft.startPercent}%</strong>
+          </div>
+          <div className="trigger-lab-meter-row">
+            <span>Wall</span>
+            <TriggerLabMeter
+              label={`${label} wall`}
+              value={draft.wallPercent}
+              onChange={(value) => setTriggerLabPercent(side, 'wallPercent', value)}
+              onCommit={(value) => commitTriggerLabPercent(side, 'wallPercent', value)}
+            />
+            <strong>{draft.wallPercent}%</strong>
+          </div>
+          <div className="trigger-lab-meter-row">
+            <span>Force</span>
+            <TriggerLabMeter
+              label={`${label} force`}
+              value={draft.forcePercent}
+              onChange={(value) => setTriggerLabPercent(side, 'forcePercent', value)}
+              onCommit={(value) => commitTriggerLabPercent(side, 'forcePercent', value)}
+            />
+            <strong>{draft.forcePercent}%</strong>
+          </div>
+          <div className="trigger-lab-button-row two-up">
+            <button type="button" disabled={previewDisabled} onClick={() => previewTriggerLab(side)}>
+              <Play size={14} /> Preview
+            </button>
+            <button type="button" disabled={labActionDisabled} onClick={resetTriggerLab}>
+              <RefreshCcw size={14} /> Reset
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
   if (!snapshot) {
     return <div className="shell loading">Starting bridge companion</div>;
   }
@@ -2975,7 +4139,7 @@ export function App() {
                     <Bell size={16} />
                     <span>Notifications</span>
                   </div>
-                  <div className={`settings-menu-row ${notificationFocusTarget === 'controller-status' ? 'settings-menu-row-highlight' : ''}`}>
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'controller-status' || notificationFocusTarget === 'all' ? 'settings-menu-row-highlight' : ''}`}>
                     <div>
                       <strong>Controller Status</strong>
                       <span>Toast when the controller connects or disconnects</span>
@@ -2991,7 +4155,7 @@ export function App() {
                       <span />
                     </button>
                   </div>
-                  <div className={`settings-menu-row ${notificationFocusTarget === 'low-battery' ? 'settings-menu-row-highlight' : ''}`}>
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'low-battery' || notificationFocusTarget === 'all' ? 'settings-menu-row-highlight' : ''}`}>
                     <div>
                       <strong>Low Battery</strong>
                       <span>Toast when battery reaches 20% or below</span>
@@ -3277,7 +4441,10 @@ export function App() {
                         onPointerDown={() => {
                           hapticsEditingRef.current = true;
                         }}
-                        onChange={(event) => setHapticsValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                        onChange={(event) => setHapticsValue(snapHapticsValue(
+                          Number(event.currentTarget.value),
+                          hapticsSliderMax
+                        ))}
                         onPointerUp={() => void commitHapticsValue()}
                         onKeyDown={(event) => {
                           if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
@@ -3292,8 +4459,8 @@ export function App() {
                         onBlur={() => void commitHapticsValue()}
                       />
                       <div className="overview-range-ticks" aria-hidden="true">
-                        {HAPTICS_SLIDER_TICKS.map((value) => (
-                          <span key={value} className={sliderTickClass(value, 200)} />
+                        {hapticsSliderTicks.map((value) => (
+                          <span key={value} className={sliderTickClass(value, hapticsSliderMax)} />
                         ))}
                       </div>
                     </div>
@@ -3499,7 +4666,13 @@ export function App() {
                       </button>
                     ))
                   ) : (
-                    <span className="overview-chip muted">Off</span>
+                    <button
+                      className="overview-chip muted"
+                      type="button"
+                      onClick={() => focusNotificationSettings('all')}
+                    >
+                      Off
+                    </button>
                   )}
                 </div>
               </div>
@@ -3587,7 +4760,10 @@ export function App() {
                             onPointerDown={() => {
                               classicRumbleEditingRef.current = true;
                             }}
-                            onChange={(event) => setClassicRumbleValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                            onChange={(event) => setClassicRumbleValue(snapHapticsValue(
+                              Number(event.currentTarget.value),
+                              hapticsSliderMax
+                            ))}
                             onPointerUp={() => void commitClassicRumbleValue()}
                             onKeyDown={(event) => {
                               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
@@ -3613,7 +4789,10 @@ export function App() {
                             onPointerDown={() => {
                               hapticsEditingRef.current = true;
                             }}
-                            onChange={(event) => setHapticsValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                            onChange={(event) => setHapticsValue(snapHapticsValue(
+                              Number(event.currentTarget.value),
+                              hapticsSliderMax
+                            ))}
                             onPointerUp={() => void commitHapticsValue()}
                             onKeyDown={(event) => {
                               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
@@ -3629,8 +4808,8 @@ export function App() {
                           />
                         )}
                         <div className="range-ticks" aria-hidden="true">
-                          {HAPTICS_SLIDER_TICKS.map((value) => (
-                            <span key={value} className={sliderTickClass(value, 200)} />
+                          {hapticsSliderTicks.map((value) => (
+                            <span key={value} className={sliderTickClass(value, hapticsSliderMax)} />
                           ))}
                         </div>
                       </div>
@@ -3640,7 +4819,7 @@ export function App() {
                   <p>{showClassicRumbleControl ? 'Applies to game rumble output.' : 'Balanced feedback across both motors.'}</p>
                   <div className="segmented-row">
                     {HAPTICS_PRESETS.map(([label, value]) => {
-                      const presetValue = snapHapticsValue(Number(value));
+                      const presetValue = snapHapticsValue(Number(value), hapticsSliderMax);
                       const currentValue = showClassicRumbleControl ? classicRumbleValue : hapticsValue;
                       return (
                         <button
@@ -3662,6 +4841,26 @@ export function App() {
                       );
                     })}
                   </div>
+                  <div
+                    className="inline-switch feedback-boost-control haptics-boost-control"
+                    title={feedbackBoostEnabled ? 'Feedback boost: up to 500%' : 'Enable feedback boost up to 500%'}
+                  >
+                    <span className="feedback-boost-label">
+                      <IconFlame size={16} aria-hidden="true" />
+                      Boost
+                    </span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={feedbackBoostEnabled}
+                      aria-label={feedbackBoostEnabled ? 'Disable feedback boost' : 'Enable feedback boost'}
+                      className={`switch ${feedbackBoostEnabled ? 'on' : ''}`}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={toggleFeedbackBoostEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">
@@ -3674,18 +4873,12 @@ export function App() {
                   <button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable} onClick={runFeedbackTest}>
                     <Play size={15} />
                     {showClassicRumbleControl
-                      ? connected && gameStreamActive
-                        ? 'Game Active'
-                        : connected && audioStreamActive
-                          ? 'Audio Active'
-                        : connected && testLocked
-                          ? 'Testing'
-                          : 'Test Rumble'
-                    : connected && gameStreamActive
-                      ? 'Game Active'
-                      : connected && audioStreamActive
-                        ? 'Audio Active'
-                      : connected && (testLocked || snapshot.status?.testHapticsCooldown)
+                      ? connected && testLocked
+                        ? 'Testing'
+                        : 'Test Rumble'
+                    : connected && testLocked
+                        ? 'Testing'
+                      : connected && snapshot.status?.testHapticsCooldown
                         ? 'Cooling Down'
                         : 'Test Haptics'}
                   </button>
@@ -3720,21 +4913,37 @@ export function App() {
                   <div
                     className={[
                       'inline-switch',
+                      'host-encoding-switch',
+                      hostAudioCaptureWarning ? 'host-encoding-switch-warn' : '',
                       featureFocusTarget === 'host-encoding' ? `feature-focus-highlight feature-focus-highlight-${featureFocusPulse % 2}` : ''
                     ].filter(Boolean).join(' ')}
                   >
+                    {hostAudioEnabled && hostAudioCaptureStatus ? (
+                      <span className={`host-encoding-state ${hostAudioCaptureWarning ? 'warn' : 'retry'}`}>
+                        {hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)}
+                      </span>
+                    ) : null}
                     <span>Host Encoding</span>
                     <button
                       type="button"
                       role="switch"
                       aria-checked={hostAudioEnabled}
                       aria-label="Enable host encoded audio"
-                      className={`switch ${hostAudioEnabled ? 'on' : ''}`}
+                      className={[
+                        'switch',
+                        hostAudioEnabled ? 'on' : '',
+                        hostAudioCaptureWarning ? 'warn' : ''
+                      ].filter(Boolean).join(' ')}
                       disabled={!connected || pendingAction !== null}
                       onClick={toggleHostEncodedAudioEnabled}
                     >
                       <span />
                     </button>
+                    {hostAudioEnabled && hostAudioCaptureStatus ? (
+                      <span className="settings-shortcut-tooltip shortcut-glyph-tooltip host-encoding-tooltip" role="tooltip">
+                        {hostAudioTooltip}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="inline-switch">
                     <span>Enabled</span>
@@ -3965,7 +5174,7 @@ export function App() {
                       <span className={`dot ${activeAudioTestStatusTone}`} />
                       <strong>{activeAudioTestStatusLabel}</strong>
                     </span>
-                    <span className={`status-badge ${hostAudioTone}`} title={hostAudioLabel}>
+                    <span className={`status-badge ${hostAudioTone}`} title={hostAudioTooltip}>
                       <span className={`dot ${hostAudioTone}`} />
                       <strong>{hostAudioLabel}</strong>
                     </span>
@@ -3988,23 +5197,54 @@ export function App() {
           >
               <div className="feature-heading">
                 <div>
-                  <h2>Adaptive Triggers</h2>
-                  <p>Set trigger effect intensity and test mode</p>
+                  <h2>{triggerLabOpen ? 'Trigger Lab' : 'Adaptive Triggers'}</h2>
+                  <p>{triggerLabOpen ? 'Experimental adaptive trigger profile editor' : 'Set trigger effect intensity and test mode'}</p>
                 </div>
-                <div className="inline-switch">
-                  <span>Enabled</span>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={snapshot.settings.adaptiveTriggersEnabled}
-                    className={`switch ${snapshot.settings.adaptiveTriggersEnabled ? 'on' : ''}`}
-                    disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
-                    onClick={toggleAdaptiveTriggersEnabled}
-                  >
-                    <span />
-                  </button>
+                <div className="triggers-heading-controls">
+                  <div className="inline-switch trigger-lab-switch-control">
+                    {triggerLabAnyActive ? (
+                      <span className="host-encoding-state warn trigger-lab-state">
+                        Lab Override
+                      </span>
+                    ) : null}
+                    <span>Lab</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={triggerLabOpen}
+                      aria-label={triggerLabOpen ? 'Exit Trigger Lab' : 'Enter Trigger Lab'}
+                      className={`switch trigger-lab-switch ${triggerLabOpen ? 'on' : ''}`}
+                      onClick={() => setTriggerLabOpen((open) => !open)}
+                    >
+                      <span />
+                    </button>
+                    {triggerLabAnyActive ? (
+                      <span className="settings-shortcut-tooltip shortcut-glyph-tooltip trigger-lab-override-tooltip">
+                        Trigger Lab is overriding game adaptive trigger output.
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="inline-switch">
+                    <span>Enabled</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={snapshot.settings.adaptiveTriggersEnabled}
+                      className={`switch ${snapshot.settings.adaptiveTriggersEnabled ? 'on' : ''}`}
+                      disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
+                      onClick={toggleAdaptiveTriggersEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
                 </div>
               </div>
+              {triggerLabOpen ? (
+                <div className="feature-card-grid trigger-lab-grid">
+                  {renderTriggerLabCard('l2')}
+                  {renderTriggerLabCard('r2')}
+                </div>
+              ) : (
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
@@ -4146,7 +5386,12 @@ export function App() {
                   </div>
                 </section>
               </div>
-              <FeatureTipsPanel tab="triggers" onSettingsFocusRequest={focusBridgeSettings} />
+              )}
+              <FeatureTipsPanel
+                tab="triggers"
+                triggerLabOpen={triggerLabOpen}
+                onSettingsFocusRequest={focusBridgeSettings}
+              />
           </div>
 
           <div
@@ -4447,7 +5692,64 @@ export function App() {
                         })}
                       </g>
                     )}
+                    {showDualSenseEdgeRemapButtons && edgeRemapControlLayout && (
+                      <g>
+                        {REMAP_EDGE_BUTTON_IDS.map((buttonId) => {
+                          const remapped = remapDraft[buttonId] !== buttonId;
+                          return (
+                            <g key={buttonId} className={hoveredRemapButton === buttonId || remapped ? 'active' : undefined}>
+                              <polyline
+                                className="remapping-callout-underlay"
+                                points={edgeRemapControlLayout[buttonId].linePoints}
+                              />
+                              <polyline
+                                className="remapping-callout-line"
+                                points={edgeRemapControlLayout[buttonId].linePoints}
+                              />
+                            </g>
+                          );
+                        })}
+                      </g>
+                    )}
                   </svg>
+                  {showDualSenseEdgeRemapButtons && (
+                    <div className="remapping-edge-layer" aria-label="DualSense Edge button mappings">
+                      {REMAP_EDGE_BUTTON_IDS.map((buttonId) => {
+                        const button = REMAP_BUTTONS[buttonId];
+                        const targetOptions = remapTargetOptionsFor(buttonId);
+                        const remapped = remapDraft[buttonId] !== buttonId;
+                        const fallbackPoint = REMAP_EDGE_CONTROL_POINTS[buttonId];
+                        const edgeLayout = edgeRemapControlLayout?.[buttonId];
+                        const anchor = edgeLayout?.anchor ?? fallbackPoint.anchor;
+                        return (
+                          <div
+                            className={`remapping-pill remapping-pill-edge remapping-pill-edge-compact remapping-edge-control remapping-edge-control-${anchor} ${remapped ? 'changed' : ''}`}
+                            data-remap-button-id={buttonId}
+                            key={buttonId}
+                            onMouseEnter={() => setHoveredRemapButton(buttonId)}
+                            onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                            onFocusCapture={() => setHoveredRemapButton(buttonId)}
+                            onBlurCapture={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                            style={{
+                              left: edgeLayout ? `${edgeLayout.left}px` : `${(fallbackPoint.x / remappingLayoutAsset.viewBoxWidth) * 100}%`,
+                              top: edgeLayout ? `${edgeLayout.top}px` : `${(fallbackPoint.y / remappingLayoutAsset.viewBoxHeight) * 100}%`
+                            } as CSSProperties}
+                          >
+                            <CustomSelect
+                              value={remapDraft[buttonId]}
+                              options={targetOptions}
+                              className="remapping-select remapping-edge-select"
+                              showSelectedCheck={false}
+                              ariaLabel={`${button.label} remap target`}
+                              renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                              renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                              onChange={(value) => setButtonRemap(buttonId, value)}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                   <div className="remapping-side remapping-side-left" ref={remappingLeftSideRef} aria-label="Left side button mappings">
                     {REMAP_LEFT_BUTTON_IDS.map((buttonId) => {
                       const button = REMAP_BUTTONS[buttonId];
@@ -4465,11 +5767,11 @@ export function App() {
                           style={{
                             '--remapping-callout-top': remapCalloutLayout
                               ? `${remapCalloutLayout[buttonId].top}px`
-                              : `${(REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * 100}%`
+                              : `${(remappingLayoutAsset.calloutY[buttonId] / remappingLayoutAsset.viewBoxHeight) * 100}%`
                           } as CSSProperties}
                         >
                           <span className="remapping-source">
-                            <img src={button.glyphUrl} alt={button.label} title={button.label} />
+                            <RemapSourceGlyph button={button} />
                           </span>
                           <span className="remapping-arrow" aria-hidden="true">
                             <ArrowRight size={15} />
@@ -4489,7 +5791,15 @@ export function App() {
                     })}
                   </div>
                   <div className="remapping-controller-stage" aria-hidden="true">
-                    <img ref={remappingArtRef} className="remapping-controller-art" src={remappingLayoutImage} alt="" />
+                    <img
+                      ref={remappingArtRef}
+                      className="remapping-controller-art"
+                      src={remappingLayoutAsset.src}
+                      alt=""
+                      style={{
+                        '--remapping-art-aspect': remappingLayoutAsset.viewBoxWidth / remappingLayoutAsset.viewBoxHeight
+                      } as CSSProperties}
+                    />
                   </div>
                   <div className="remapping-side remapping-side-right" ref={remappingRightSideRef} aria-label="Right side button mappings">
                     {REMAP_RIGHT_BUTTON_IDS.map((buttonId) => {
@@ -4508,11 +5818,11 @@ export function App() {
                           style={{
                             '--remapping-callout-top': remapCalloutLayout
                               ? `${remapCalloutLayout[buttonId].top}px`
-                              : `${(REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * 100}%`
+                              : `${(remappingLayoutAsset.calloutY[buttonId] / remappingLayoutAsset.viewBoxHeight) * 100}%`
                           } as CSSProperties}
                         >
                           <span className="remapping-source">
-                            <img src={button.glyphUrl} alt={button.label} title={button.label} />
+                            <RemapSourceGlyph button={button} />
                           </span>
                           <span className="remapping-arrow" aria-hidden="true">
                             <ArrowRight size={15} />
@@ -4946,6 +6256,74 @@ export function App() {
                 disabled={pendingAction !== null || controllerConnected}
               >
                 {pendingAction === 'device-cleanup' ? 'Running...' : 'Run Repair'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {triggerLabProfileDialog && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeTriggerLabProfileDialog}
+        >
+          <form
+            className="settings-menu bridge-settings-modal remap-profile-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Trigger Lab profile"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitTriggerLabProfileDialog();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                {triggerLabProfileDialog.mode === 'delete' ? <Trash2 size={16} /> : <Save size={16} />}
+                <span>
+                  {triggerLabProfileDialog.mode === 'save'
+                    ? 'Save Trigger Profile'
+                    : triggerLabProfileDialog.mode === 'rename'
+                      ? 'Rename Trigger Profile'
+                      : 'Delete Trigger Profile'}
+                </span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close Trigger Lab profile dialog"
+                onClick={closeTriggerLabProfileDialog}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {triggerLabProfileDialog.mode === 'delete' ? (
+              <p className="remap-profile-dialog-copy">
+                Delete {triggerLabProfileName(triggerLabDrafts[triggerLabProfileDialog.side].profileId)}?
+              </p>
+            ) : (
+              <label className="remap-profile-name-field">
+                <span>Profile Name</span>
+                <input
+                  autoFocus
+                  value={triggerLabProfileNameDraft}
+                  maxLength={48}
+                  onChange={(event) => setTriggerLabProfileNameDraft(event.target.value)}
+                />
+              </label>
+            )}
+            <div className="remap-profile-dialog-actions">
+              <button type="button" className="secondary-action" onClick={closeTriggerLabProfileDialog}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className={`primary-action ${triggerLabProfileDialog.mode === 'delete' ? 'danger' : ''}`}
+                disabled={pendingAction !== null || (triggerLabProfileDialog.mode !== 'delete' && triggerLabProfileNameDraft.trim().length === 0)}
+              >
+                {triggerLabProfileDialog.mode === 'delete' ? 'Delete' : 'Save'}
               </button>
             </div>
           </form>

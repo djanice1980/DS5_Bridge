@@ -146,6 +146,7 @@ if (-not $SkipBuild) {
         cmake -S $repoRoot -B $firmwareBuildDir `
           "-DCMAKE_BUILD_TYPE=$Configuration" `
           "-DENABLE_COMPANION=ON" `
+          "-DDS5_DIAGNOSTICS_PRESET=off" `
           "-DENABLE_DEBUG_LOGS=OFF" `
           "-DENABLE_AUDIO_DEBUG_REPORTS=OFF" `
           "-DENABLE_TRIGGER_TRACE_REPORTS=OFF" `

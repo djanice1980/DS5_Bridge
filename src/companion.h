@@ -3,16 +3,9 @@
 
 #include <cstdint>
 #include "tusb.h"
+#include "debug_config.h"
 
-#ifndef DS5_TRIGGER_TRACE_ENABLED
-#define DS5_TRIGGER_TRACE_ENABLED 0
-#endif
-#ifndef DS5_FEEDBACK_TRACE_ENABLED
-#define DS5_FEEDBACK_TRACE_ENABLED 0
-#endif
-
-#define COMPANION_HID_INSTANCE 1
-#define KEYBOARD_HID_INSTANCE 2
+#define KEYBOARD_HID_INSTANCE 1
 #define COMPANION_REPORT_STATUS 0x01
 #define COMPANION_REPORT_COMMAND 0x02
 #define COMPANION_REPORT_ACK 0x03

@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { CompanionDebugConfig, DEBUG_ENV } from './debug-config';
 
 export type HostAudioFramePayload = {
   frame: number[];
@@ -9,14 +11,41 @@ export type HostAudioFramePayload = {
   encodedBytes: number;
 };
 
+export type HostAudioStartFailureReason =
+  | 'device-in-use'
+  | 'device-invalidated'
+  | 'unsupported-format'
+  | 'bulk-pcm-unavailable'
+  | 'start-timeout'
+  | 'helper-exit';
+
+export class HostAudioStartError extends Error {
+  constructor(
+    message: string,
+    readonly reason: HostAudioStartFailureReason
+  ) {
+    super(message);
+    this.name = 'HostAudioStartError';
+  }
+}
+
 const FRAME_RECORD_PREFIX_BYTES = 2;
 const HOST_AUDIO_FRAME_BYTES = 264;
 const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
-const HELPER_START_TIMEOUT_MS = 2000;
+const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
+const HELPER_START_TIMEOUT_MS = 8000;
 const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
 const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
+type HostAudioSource = 'usb-pcm' | 'usb-bulk-pcm' | 'raw-pcm-capture' | 'render-loopback';
+
+const HOST_AUDIO_SOURCE = normalizeHostAudioSource(CompanionDebugConfig.hostAudioSource);
+const BRIDGE_AUDIO_DEVICE_NAME = 'DS5 Bridge';
+const BRIDGE_RAW_PCM_DEVICE_NAME = 'DS5 Bridge Raw PCM';
+const HOST_AUDIO_AUTO_CAPTURE_ENABLED = CompanionDebugConfig.hostAudioAutoCaptureEnabled;
+const HOST_AUDIO_DIAGNOSTIC_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
+const HOST_AUDIO_DIAGNOSTIC_DIR = path.join(homedir(), 'Desktop');
 const DEV_HELPER_RELATIVE_PATH = path.join(
   'native',
   'HostAudioHelper',
@@ -121,11 +150,20 @@ export class HostAudioEngine extends EventEmitter {
 
   private async startInternal(hidPath: string | null, speakerVolumePercent: number): Promise<void> {
     const helperPath = resolveHelperPath();
-    const args = ['--device-name', 'DS5 Bridge', '--speaker-volume', `${speakerVolumePercent}`];
+    const deviceName = HOST_AUDIO_SOURCE === 'raw-pcm-capture' ? BRIDGE_RAW_PCM_DEVICE_NAME : BRIDGE_AUDIO_DEVICE_NAME;
+    const args = [
+      '--device-name',
+      deviceName,
+      '--source',
+      HOST_AUDIO_SOURCE,
+      '--speaker-volume',
+      `${speakerVolumePercent}`
+    ];
     if (hidPath) {
       args.push('--hid-path', hidPath);
     }
     const helper = spawn(helperPath, args, {
+      env: buildHostAudioHelperEnv(),
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -150,26 +188,60 @@ export class HostAudioEngine extends EventEmitter {
       }
     });
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const finish = () => {
+      let stderr = '';
+      const finish = (error?: Error) => {
         if (settled) {
           return;
         }
         settled = true;
         clearTimeout(timeout);
-        resolve();
+        if (error) {
+          if (!helper.killed) {
+            helper.kill();
+          }
+          reject(error);
+        } else {
+          resolve();
+        }
       };
-      const timeout = setTimeout(finish, HELPER_START_TIMEOUT_MS);
+      const timeout = setTimeout(() => {
+        finish(new HostAudioStartError(
+          `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`,
+          'start-timeout'
+        ));
+      }, HELPER_START_TIMEOUT_MS);
 
       helper.stderr.on('data', (chunk: Buffer) => {
-        const text = chunk.toString('utf8').trim();
-        this.emit('status', text);
-        if (text.includes(HELPER_RECORDING_STARTED_MESSAGE)) {
-          finish();
+        stderr += chunk.toString('utf8');
+        const lines = stderr.split(/\r?\n/);
+        stderr = lines.pop() ?? '';
+        for (const line of lines) {
+          const text = line.trim();
+          if (!text) {
+            continue;
+          }
+          this.emit('status', text);
+          if (text.includes(HELPER_RECORDING_STARTED_MESSAGE)) {
+            finish();
+            continue;
+          }
+          const reason = parseCaptureUnavailableReason(text);
+          if (reason) {
+            finish(new HostAudioStartError(
+              hostAudioStartFailureMessage(reason),
+              reason
+            ));
+          }
         }
       });
-      helper.once('exit', finish);
+      helper.once('exit', (code, signal) => {
+        finish(new HostAudioStartError(
+          `Host audio helper exited before recording started: helper exited (${signal ?? code ?? 'unknown'}).`,
+          'helper-exit'
+        ));
+      });
     });
   }
 
@@ -212,6 +284,64 @@ function isExpectedHelperPipeError(error: unknown): boolean {
   return code === 'EPIPE'
     || code === 'ERR_STREAM_DESTROYED'
     || error.message.includes('write EPIPE');
+}
+
+function parseCaptureUnavailableReason(line: string): HostAudioStartFailureReason | null {
+  if (!line.startsWith(HELPER_CAPTURE_UNAVAILABLE_PREFIX)) {
+    return null;
+  }
+  if (line.includes('reason=device-in-use')) {
+    return 'device-in-use';
+  }
+  if (line.includes('reason=device-invalidated')) {
+    return 'device-invalidated';
+  }
+  if (line.includes('reason=unsupported-format')) {
+    return 'unsupported-format';
+  }
+  if (line.includes('reason=bulk-pcm-unavailable')) {
+    return 'bulk-pcm-unavailable';
+  }
+  return 'helper-exit';
+}
+
+function hostAudioStartFailureMessage(reason: HostAudioStartFailureReason): string {
+  switch (reason) {
+    case 'device-in-use':
+      return 'DualSense audio endpoint is in exclusive use by another application.';
+    case 'device-invalidated':
+      return 'DualSense audio endpoint changed while host audio was starting.';
+    case 'unsupported-format':
+      return 'DualSense raw PCM capture endpoint format is not usable by Windows. Re-enumerate or clean stale DualSense audio devices.';
+    case 'bulk-pcm-unavailable':
+      return 'DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices, then Host Encoding will retry.';
+    case 'start-timeout':
+      return `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`;
+    case 'helper-exit':
+      return 'Host audio helper exited before recording started.';
+  }
+}
+
+function buildHostAudioHelperEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (!isWinUsbPcmSource(HOST_AUDIO_SOURCE) || !HOST_AUDIO_AUTO_CAPTURE_ENABLED) {
+    return env;
+  }
+
+  env[DEBUG_ENV.hostAudioHelperDiagnostics] ??= CompanionDebugConfig.hostAudioHelperDiagnosticsEnabled ? '1' : '0';
+  if (CompanionDebugConfig.hostAudioDumpEnabled) {
+    env[DEBUG_ENV.hostAudioRawCaptureDump] ??= path.join(
+      HOST_AUDIO_DIAGNOSTIC_DIR,
+      `ds5-bridge-winusb-pcm-${HOST_AUDIO_DIAGNOSTIC_STAMP}.wav`
+    );
+    env[DEBUG_ENV.hostAudioRawCaptureDumpSeconds] ??= '20';
+    env[DEBUG_ENV.hostAudioFrameDump] ??= path.join(
+      HOST_AUDIO_DIAGNOSTIC_DIR,
+      `ds5-bridge-host-frames-${HOST_AUDIO_DIAGNOSTIC_STAMP}.bin`
+    );
+    env[DEBUG_ENV.hostAudioFrameDumpLimit] ??= '2500';
+  }
+  return env;
 }
 
 export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise<void> {
@@ -338,7 +468,25 @@ export class MicKeepaliveEngine extends EventEmitter {
   }
 }
 
-function resolveHelperPath(): string {
+function normalizeHostAudioSource(value: string | undefined): HostAudioSource {
+  if (value === 'render-loopback' || value === 'raw-pcm-capture') {
+    return value;
+  }
+  if (value === 'usb-bulk-pcm' || value === 'usb-pcm') {
+    return 'usb-pcm';
+  }
+  return 'usb-pcm';
+}
+
+function isWinUsbPcmSource(value: HostAudioSource): boolean {
+  return value === 'usb-pcm' || value === 'usb-bulk-pcm';
+}
+
+export function hostAudioUsesRawPcmCapture(): boolean {
+  return HOST_AUDIO_SOURCE === 'raw-pcm-capture';
+}
+
+export function resolveHostAudioHelperPath(): string {
   const packagedCandidate = process.resourcesPath ? path.join(process.resourcesPath, HELPER_RELATIVE_PATH) : null;
   const devCandidates = [
     path.resolve(process.cwd(), DEV_HELPER_RELATIVE_PATH),
@@ -354,6 +502,10 @@ function resolveHelperPath(): string {
     throw new Error(`Host audio helper is missing. Run npm run build:host-audio from companion/.`);
   }
   return helperPath;
+}
+
+function resolveHelperPath(): string {
+  return resolveHostAudioHelperPath();
 }
 
 function resolveHelperTestAudioPath(helperPath: string): string {

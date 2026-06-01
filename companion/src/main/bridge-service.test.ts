@@ -19,6 +19,8 @@ import {
 } from '../shared/protocol';
 
 const hidMock = vi.hoisted(() => {
+  process.env.DS5_BRIDGE_AUDIO_DEBUG_DIAGNOSTICS = '1';
+
   const state = {
     devicesList: [] as Array<Record<string, unknown>>,
     openDevices: new Map<string, MockHidDevice>()
@@ -39,10 +41,28 @@ const hidMock = vi.hoisted(() => {
   };
 });
 
+const winUsbTransportMock = vi.hoisted(() => ({
+  open: vi.fn(async () => {
+    const listedPath = hidMock.state.devicesList[0]?.path;
+    const device = (typeof listedPath === 'string' ? hidMock.state.openDevices.get(listedPath) : null)
+      ?? hidMock.state.openDevices.values().next().value;
+    if (!device) {
+      throw new Error('No WinUSB bridge transport');
+    }
+    return device;
+  })
+}));
+
 vi.mock('node-hid', () => ({
   default: {
     devices: hidMock.devices,
     HID: hidMock.HID
+  }
+}));
+
+vi.mock('./winusb-companion-transport', () => ({
+  WinUsbCompanionTransport: {
+    open: winUsbTransportMock.open
   }
 }));
 
@@ -90,14 +110,19 @@ const FULL_REAPPLY_COMMANDS = [
 ];
 
 class MockHidDevice extends EventEmitter {
+  path = 'winusb-path';
   status = statusReport();
   audioDebugReports: number[][] = [];
   audioStatsReports: number[][] = [];
   hostAudioStatusReports: number[][] = [];
+  shortcutEvents: number[] = [];
+  shortcutReadError: Error | null = null;
   featureReportIds: number[] = [];
   sentReports: number[][] = [];
   outReports: number[][] = [];
   ackResults: number[] = [];
+  ackReports: number[][] = [];
+  writeError: Error | null = null;
   settingsRevision = 0;
   fixedAckRevision: number | null = null;
 
@@ -112,6 +137,10 @@ class MockHidDevice extends EventEmitter {
       return [...this.status];
     }
     if (reportId === REPORT_ID.ACK) {
+      const queuedAck = this.ackReports.shift();
+      if (queuedAck) {
+        return [...queuedAck];
+      }
       const command = this.sentReports.at(-1);
       const result = this.ackResults.shift() ?? ACK_RESULT.OK;
       if (result === ACK_RESULT.OK && this.fixedAckRevision === null) {
@@ -133,6 +162,12 @@ class MockHidDevice extends EventEmitter {
     if (reportId === REPORT_ID.HOST_AUDIO_STATUS) {
       return [...(this.hostAudioStatusReports.shift() ?? hostAudioStatusReport())];
     }
+    if (reportId === REPORT_ID.INPUT) {
+      if (this.shortcutReadError) {
+        throw this.shortcutReadError;
+      }
+      return shortcutEventReport(this.shortcutEvents.shift() ?? 0);
+    }
     throw new Error(`Unexpected report ID: ${reportId}`);
   }
 
@@ -142,8 +177,15 @@ class MockHidDevice extends EventEmitter {
   }
 
   write(report: number[]): number {
+    if (this.writeError) {
+      throw this.writeError;
+    }
     this.outReports.push([...report]);
     return report.length;
+  }
+
+  queueShortcutEvent(event: number): void {
+    this.shortcutEvents.push(event);
   }
 
   close(): void {
@@ -221,7 +263,7 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   report[20] = overrides.statusFlags ?? 0xb0;
   writeU32(report, 21, overrides.uptimeSeconds ?? 10);
   report[25] = overrides.firmwareMajor ?? 1;
-  report[26] = overrides.firmwareMinor ?? 0;
+  report[26] = overrides.firmwareMinor ?? 5;
   report[27] = overrides.firmwarePatch ?? 0;
   report[28] = overrides.firmwareFlags ?? 1;
   writeU16(report, 29, overrides.speakerVolumePercent ?? 30);
@@ -244,6 +286,13 @@ function ackReport(options: {
   report[9] = options.result;
   writeU16(report, 11, options.settingsRevision);
   writeU32(report, 13, 12);
+  return report;
+}
+
+function shortcutEventReport(event = 0): number[] {
+  const report = new Array<number>(REPORT_LENGTH).fill(0);
+  report[0] = REPORT_ID.INPUT;
+  report[1] = event;
   return report;
 }
 
@@ -324,6 +373,8 @@ function hostAudioStatusReport(overrides: Partial<{
   headsetPlugged: boolean;
   headsetAudioRoute: boolean;
   streamGeneration: number;
+  micUsbConcealCount: number;
+  micPlcCount: number;
 }> = {}): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.HOST_AUDIO_STATUS;
@@ -331,16 +382,18 @@ function hostAudioStatusReport(overrides: Partial<{
   writeVersion(report);
   report[7] = overrides.mode ?? 0;
   report[8] = overrides.fallbackReason ?? 1;
-  report[9] = overrides.hostRequested ? 1 : 0;
-  report[10] = overrides.heartbeatHealthy ? 1 : 0;
-  report[11] = overrides.streamActive ? 1 : 0;
-  report[12] = overrides.streamHealthy ? 1 : 0;
-  report[13] = overrides.duplexRequested ? 1 : 0;
-  report[14] = (overrides.duplexActive ? 0x01 : 0x00)
-    | (overrides.headsetPlugged ? 0x02 : 0x00)
-    | (overrides.headsetAudioRoute ? 0x04 : 0x00)
-    | (overrides.controllerStateReady ? 0x08 : 0x00);
-  writeU16(report, 15, overrides.streamGeneration ?? 0);
+  report[9] = (overrides.hostRequested ? 0x01 : 0x00)
+    | (overrides.heartbeatHealthy ? 0x02 : 0x00)
+    | (overrides.streamActive ? 0x04 : 0x00)
+    | (overrides.streamHealthy ? 0x08 : 0x00)
+    | (overrides.duplexRequested ? 0x10 : 0x00)
+    | (overrides.duplexActive ? 0x20 : 0x00)
+    | (overrides.controllerStateReady ? 0x40 : 0x00);
+  report[10] = (overrides.headsetPlugged ? 0x01 : 0x00)
+    | (overrides.headsetAudioRoute ? 0x02 : 0x00);
+  writeU16(report, 11, overrides.streamGeneration ?? 0);
+  writeU32(report, 49, overrides.micUsbConcealCount ?? 0);
+  writeU32(report, 53, overrides.micPlcCount ?? 0);
   return report;
 }
 
@@ -368,22 +421,34 @@ async function pollAndPublishErrors(service: BridgeService): Promise<void> {
   }
 }
 
+async function pollShortcut(service: BridgeService): Promise<void> {
+  await (service as unknown as { pollShortcutEvent(): Promise<void> }).pollShortcutEvent();
+}
+
 async function flushReapply(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+async function flushImmediate(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
 describe('BridgeService', () => {
   let tempDirs: string[] = [];
+  let services: BridgeService[] = [];
 
   beforeEach(() => {
     hidMock.state.devicesList = [];
     hidMock.state.openDevices.clear();
     hidMock.devices.mockClear();
     hidMock.HID.mockClear();
+    winUsbTransportMock.open.mockClear();
     tempDirs = [];
+    services = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.allSettled(services.map((service) => service.stop()));
     for (const tempDir of tempDirs) {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -392,6 +457,7 @@ describe('BridgeService', () => {
   function serviceFixture(initialSettings?: Parameters<SettingsStore['update']>[0]): BridgeService {
     const fixture = createService(initialSettings);
     tempDirs.push(fixture.tempDir);
+    services.push(fixture.service);
     return fixture.service;
   }
 
@@ -414,7 +480,7 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().message).toBe('Companion firmware required');
   });
 
-  it('treats HID read errors as disconnects instead of fatal main-process errors', async () => {
+  it('treats WinUSB transport close as a bridge disconnect', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     hidMock.state.devicesList = [companionDeviceInfo()];
@@ -422,10 +488,34 @@ describe('BridgeService', () => {
 
     await poll(service);
 
-    device.emit('error', new Error('could not read from HID device'));
+    device.emit('close');
 
     expect(service.getSnapshot().state).toBe('no-bridge');
     expect(service.getSnapshot().message).toBe('No bridge detected');
+  });
+
+  it('does not mark the bridge disconnected when optional shortcut feature polling fails', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.shortcutReadError = new Error('could not read from HID device');
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    expect(service.getSnapshot().state).toBe('connected');
+    expect(service.getSnapshot().message).toBe('Companion firmware connected');
+  });
+
+  it('does not start the companion interrupt input read loop', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    expect(device.listenerCount('data')).toBe(0);
   });
 
   it('blocks emergency Windows device repair while a controller is connected to the bridge', async () => {
@@ -442,7 +532,7 @@ describe('BridgeService', () => {
     );
   });
 
-  it('keeps audio debug diagnostics disabled during normal polling', async () => {
+  it('polls audio debug diagnostics during normal polling', async () => {
     const fixture = createService();
     tempDirs.push(fixture.tempDir);
     const device = new MockHidDevice();
@@ -466,12 +556,15 @@ describe('BridgeService', () => {
     await poll(fixture.service);
 
     const snapshot = fixture.service.getSnapshot();
-    expect(snapshot.diagnostics.audioDebugDroppedCount).toBe(0);
+    expect(snapshot.diagnostics.audioDebugDroppedCount).toBe(3);
     expect(snapshot.diagnostics.audioDebugLogPath).toBeNull();
-    expect(snapshot.diagnostics.audioDebugStats).toBeNull();
-    expect(snapshot.diagnostics.audioDebugLogLines).toEqual([]);
-    expect(device.featureReportIds).not.toContain(REPORT_ID.AUDIO_DEBUG);
-    expect(device.featureReportIds).not.toContain(REPORT_ID.AUDIO_STATS);
+    expect(snapshot.diagnostics.audioDebugStats?.usbAudioGapMaxUs).toBe(2100);
+    expect(snapshot.diagnostics.audioDebugLogLines).toEqual([
+      '#7 t=123456us [Audio] RESET: gap detected audio_fifo=1 opus_ready=2 gap_ms=255+ packet=9 skip=2',
+      '[AudioStats] version=1 usbAudioGapMaxUs=2100 usbAudioGapOver1500Count=0 opusEncodeMaxUs=0 opusEncodeOverBudgetCount=0 audio0x36EnqueueToSendMaxUs=0 audio0x36SendGapMaxUs=13000 audio0x36LateCountOver12000Us=0 audio0x36DropOldestCount=0 audioGenerationDropCount=0 nonAudioReportsBetweenAudioMax=3 btAudioQueueDepthMax=0 audio0x36EnqueuedCount=0 audio0x36SentCount=0 criticalStarvingAudioCount=0'
+    ]);
+    expect(device.featureReportIds).toContain(REPORT_ID.AUDIO_DEBUG);
+    expect(device.featureReportIds).toContain(REPORT_ID.AUDIO_STATS);
     expect(existsSync(path.join(fixture.tempDir, 'logs'))).toBe(false);
   });
 
@@ -495,11 +588,11 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.0.1 update required');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.0 update required');
     expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
   });
 
-  it('requires users to update pre-1.0 bridge firmware', async () => {
+  it('requires users to update pre-1.5 bridge firmware', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ firmwareMajor: 0, firmwareMinor: 5, firmwarePatch: 15 });
@@ -510,9 +603,9 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('incompatible');
-    expect(snapshot.message).toBe('Firmware 1.0.1 update required');
+    expect(snapshot.message).toBe('Firmware 1.5.0 update required');
     expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
-    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.0.1 or newer');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.0 or newer');
     expect(device.sentReports).toEqual([]);
   });
 
@@ -592,6 +685,80 @@ describe('BridgeService', () => {
     expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.TEST_CLASSIC_RUMBLE);
     expect(snapshot.diagnostics.lastError).toBe('Test is busy');
     expect(snapshot.diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.ERR_BUSY);
+  });
+
+  it('does not persist setting updates when firmware rejects the command', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.ackResults = [ACK_RESULT.ERR_INVALID_VALUE];
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await expect(service.setHapticsGain(80)).rejects.toThrow('Invalid value');
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.settings.hapticsGainPercent).toBe(100);
+    expect(snapshot.settings.selectedPresetId).toBe('balanced');
+    expect(snapshot.diagnostics.lastError).toBe('Invalid value');
+    expect(snapshot.diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.ERR_INVALID_VALUE);
+  });
+
+  it('rejects stale ACKs instead of applying them to a different command', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, settingsRevision: 10 });
+    device.settingsRevision = 10;
+    device.ackReports.push(ackReport({
+      commandId: COMMAND_ID.SET_SPEAKER_VOLUME,
+      sequence: 99,
+      result: ACK_RESULT.OK,
+      settingsRevision: 11
+    }));
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    await expect(service.setHapticsGain(80)).rejects.toThrow('Stale companion ACK');
+
+    const snapshot = service.getSnapshot();
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(snapshot.settings.hapticsGainPercent).toBe(100);
+    expect(snapshot.diagnostics.settingsRevision).toBe(10);
+    expect(snapshot.diagnostics.lastAck).toMatchObject({
+      commandId: COMMAND_ID.SET_SPEAKER_VOLUME,
+      commandSequence: 99,
+      resultCode: ACK_RESULT.OK
+    });
+    expect(snapshot.diagnostics.lastError).toContain('expected command 0x01 sequence');
+  });
+
+  it('serializes overlapping companion commands before reading ACK reports', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    const internals = service as unknown as {
+      device: MockHidDevice;
+      sendCommand(commandId: number, value: number, options?: { extraPayload?: number[] }): Promise<{
+        commandId: number;
+        commandSequence: number;
+      }>;
+    };
+    internals.device = device;
+
+    const [lightbarAck, hostAudioAck] = await Promise.all([
+      internals.sendCommand(COMMAND_ID.SET_LIGHTBAR_COLOR, 60, { extraPayload: [1, 2, 3] }),
+      internals.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1)
+    ]);
+
+    expect(lightbarAck.commandId).toBe(COMMAND_ID.SET_LIGHTBAR_COLOR);
+    expect(hostAudioAck.commandId).toBe(COMMAND_ID.SET_HOST_AUDIO_ENABLED);
+    expect(lightbarAck.commandSequence).toBe(1);
+    expect(hostAudioAck.commandSequence).toBe(2);
+    expect(device.sentReports.map((report) => report[7])).toEqual([
+      COMMAND_ID.SET_LIGHTBAR_COLOR,
+      COMMAND_ID.SET_HOST_AUDIO_ENABLED
+    ]);
+    expect(service.getSnapshot().diagnostics.lastError).toBeNull();
   });
 
   it('sends and stores mute button keyboard bindings', async () => {
@@ -808,7 +975,8 @@ describe('BridgeService', () => {
     await poll(service);
     await service.setSleepKeybindEnabled(true);
 
-    device.emit('data', Buffer.from([REPORT_ID.INPUT, SHORTCUT_EVENT.SLEEP_CONTROLLER]));
+    device.queueShortcutEvent(SHORTCUT_EVENT.SLEEP_CONTROLLER);
+    await pollShortcut(service);
     await flushReapply();
     await flushReapply();
 
@@ -847,14 +1015,15 @@ describe('BridgeService', () => {
     await service.setSpeakerVolumeShortcutEnabled(true);
     expect(service.getSnapshot().settings.speakerEnabled).toBe(true);
 
-    device.emit('data', Buffer.from([REPORT_ID.INPUT, SHORTCUT_EVENT.CONTROLLER_VOLUME_UP]));
+    device.queueShortcutEvent(SHORTCUT_EVENT.CONTROLLER_VOLUME_UP);
+    await pollShortcut(service);
     await flushReapply();
     await flushReapply();
 
     expect(service.getSnapshot().settings.speakerVolumePercent).toBe(40);
     expect(service.getSnapshot().status?.speakerVolumePercent).toBe(40);
-    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_SPEAKER_VOLUME);
-    expect(device.sentReports.at(-1)?.[9]).toBe(40);
+    const volumeCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_SPEAKER_VOLUME).at(-1);
+    expect(volumeCommand?.[9]).toBe(40);
   });
 
   it('sends and stores classic rumble gain', async () => {
@@ -871,6 +1040,37 @@ describe('BridgeService', () => {
     expect(command?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN);
     expect(command?.[9]).toBe(140);
     expect(snapshot.settings.classicRumbleGainPercent).toBe(140);
+  });
+
+  it('allows boosted haptics and rumble gains up to 500 percent', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    let snapshot = await service.setFeedbackBoostEnabled(true);
+    expect(snapshot.settings.feedbackBoostEnabled).toBe(true);
+
+    snapshot = await service.setHapticsGain(500);
+    let command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(command?.[9]).toBe(244);
+    expect(command?.[10]).toBe(1);
+    expect(snapshot.settings.hapticsGainPercent).toBe(500);
+
+    snapshot = await service.setClassicRumbleGain(500);
+    command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN);
+    expect(command?.[9]).toBe(244);
+    expect(command?.[10]).toBe(1);
+    expect(snapshot.settings.classicRumbleGainPercent).toBe(500);
+
+    snapshot = await service.setFeedbackBoostEnabled(false);
+    expect(snapshot.settings.feedbackBoostEnabled).toBe(false);
+    expect(snapshot.settings.hapticsGainPercent).toBe(200);
+    expect(snapshot.settings.classicRumbleGainPercent).toBe(200);
   });
 
   it('sends and stores polling rate settings', async () => {
@@ -953,8 +1153,7 @@ describe('BridgeService', () => {
     await poll(service);
     expect(toasts).toEqual([]);
 
-    hidMock.state.devicesList = [];
-    await poll(service);
+    device.emit('close');
     expect(toasts.at(-1)?.body).toBe('Controller disconnected');
 
     device.status = statusReport({ controllerConnected: true, uptimeSeconds: 1 });
@@ -1029,6 +1228,63 @@ describe('BridgeService', () => {
     expect(snapshot.settings.classicRumbleEnabled).toBe(false);
     expect(snapshot.settings.speakerEnabled).toBe(false);
     expect(snapshot.settings.adaptiveTriggersEnabled).toBe(false);
+  });
+
+  it('re-enables haptics when a positive gain is applied from an off state', async () => {
+    const service = serviceFixture({
+      hapticsEnabled: false,
+      hapticsGainPercent: 0
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x85 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setHapticsGain(100);
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-1)?.[9]).toBe(100);
+    expect(snapshot.settings.hapticsEnabled).toBe(true);
+    expect(snapshot.settings.hapticsGainPercent).toBe(100);
+  });
+
+  it('sends a positive haptics gain when moving up from an enabled zero state', async () => {
+    const service = serviceFixture({
+      hapticsEnabled: true,
+      hapticsGainPercent: 0
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x85 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setHapticsGain(100);
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-1)?.[9]).toBe(100);
+    expect(snapshot.settings.hapticsEnabled).toBe(true);
+    expect(snapshot.settings.hapticsGainPercent).toBe(100);
+  });
+
+  it('preserves an explicit zero haptics gain when toggling the feature on', async () => {
+    const service = serviceFixture({
+      hapticsEnabled: false,
+      hapticsGainPercent: 0
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x85 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setHapticsEnabled(true);
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-1)?.[9]).toBe(0);
+    expect(snapshot.settings.hapticsEnabled).toBe(true);
+    expect(snapshot.settings.hapticsGainPercent).toBe(0);
   });
 
   it('applies quiet preset as persisted app settings plus zeroed runtime features', async () => {
@@ -1202,13 +1458,16 @@ describe('BridgeService', () => {
     hidMock.state.openDevices.set('companion-path', device);
 
     await poll(service);
+    await service.setButtonRemap('lb', 'square');
     const snapshot = await service.setButtonRemap('cross', 'circle');
 
-    const command = device.sentReports.find((report) => report[7] === COMMAND_ID.SET_BUTTON_REMAP);
+    const command = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_BUTTON_REMAP).at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_BUTTON_REMAP);
     expect(command?.[9]).toBe(0);
     expect(command?.[11 + 13]).toBe(12);
+    expect(command?.[11 + 16]).toBe(14);
     expect(snapshot.settings.buttonRemappingDraft.cross).toBe('circle');
+    expect(snapshot.settings.buttonRemappingDraft.lb).toBe('square');
   });
 
   it('sends adaptive trigger test commands without rejecting busy ACKs', async () => {
@@ -1246,6 +1505,126 @@ describe('BridgeService', () => {
     await service.testAdaptiveTriggers('feedback', 'r2');
     expect(device.sentReports.at(-1)?.[9]).toBe(0x00);
     expect(device.sentReports.at(-1)?.[10]).toBe(0x02);
+  });
+
+  it('packs adaptive trigger lab preview parameters', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await service.previewAdaptiveTriggerEffect({
+      mode: 'weapon',
+      target: 'both',
+      startPercent: 18,
+      wallPercent: 62,
+      forcePercent: 85
+    });
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.PREVIEW_ADAPTIVE_TRIGGER_EFFECT);
+    expect(device.sentReports.at(-1)?.[9]).toBe(0x01);
+    expect(device.sentReports.at(-1)?.[10]).toBe(0x00);
+    expect(device.sentReports.at(-1)?.[11]).toBe(18);
+    expect(device.sentReports.at(-1)?.[12]).toBe(62);
+    expect(device.sentReports.at(-1)?.[13]).toBe(85);
+  });
+
+  it('normalizes adaptive trigger preview input before packing the command', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await service.previewAdaptiveTriggerEffect({
+      mode: 'invalid-mode',
+      target: 'invalid-target',
+      startPercent: -12,
+      wallPercent: 160.4,
+      forcePercent: Number.NaN
+    } as never);
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.PREVIEW_ADAPTIVE_TRIGGER_EFFECT);
+    expect(device.sentReports.at(-1)?.[9]).toBe(0x00);
+    expect(device.sentReports.at(-1)?.[10]).toBe(0x00);
+    expect(device.sentReports.at(-1)?.[11]).toBe(0);
+    expect(device.sentReports.at(-1)?.[12]).toBe(100);
+    expect(device.sentReports.at(-1)?.[13]).toBe(0);
+  });
+
+  it('packs persistent adaptive trigger lab parameters', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await service.applyAdaptiveTriggerEffect({
+      mode: 'vibration',
+      target: 'r2',
+      startPercent: 25,
+      wallPercent: 50,
+      forcePercent: 75
+    });
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.APPLY_ADAPTIVE_TRIGGER_EFFECT);
+    expect(device.sentReports.at(-1)?.[9]).toBe(0x02);
+    expect(device.sentReports.at(-1)?.[10]).toBe(0x02);
+    expect(device.sentReports.at(-1)?.[11]).toBe(25);
+    expect(device.sentReports.at(-1)?.[12]).toBe(50);
+    expect(device.sentReports.at(-1)?.[13]).toBe(75);
+  });
+
+  it('drops the oldest host-audio frame when the companion write queue backs up', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    const internals = service as unknown as {
+      device: MockHidDevice;
+      hostAudioCommandActive: boolean;
+      hostAudioReportQueue: number[][];
+      hostAudioFrameDropCount: number;
+      sendHostAudioFrame(payload: { frame: number[]; sequence: number }): void;
+    };
+    internals.device = device;
+    internals.hostAudioCommandActive = true;
+
+    const makeFrame = (sequence: number) => new Array<number>(264).fill(0).map((_, index) => (
+      (sequence * 31 + index) & 0xff
+    ));
+
+    internals.sendHostAudioFrame({ frame: makeFrame(1), sequence: 1 });
+    internals.sendHostAudioFrame({ frame: makeFrame(2), sequence: 2 });
+    internals.sendHostAudioFrame({ frame: makeFrame(3), sequence: 3 });
+
+    const queuedSequences = [...new Set(internals.hostAudioReportQueue.map((report) => (
+      report[2] | (report[3] << 8)
+    )))];
+    expect(queuedSequences).toEqual([2, 3]);
+    expect(internals.hostAudioReportQueue).toHaveLength(10);
+    expect(internals.hostAudioFrameDropCount).toBe(1);
+  });
+
+  it('deactivates host audio and clears queued frames after an OUT report write failure', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.writeError = new Error('bulk pipe disappeared');
+    const internals = service as unknown as {
+      device: MockHidDevice;
+      hostAudioCommandActive: boolean;
+      hostAudioReportQueue: number[][];
+      sendHostAudioFrame(payload: { frame: number[]; sequence: number }): void;
+    };
+    internals.device = device;
+    internals.hostAudioCommandActive = true;
+
+    internals.sendHostAudioFrame({
+      frame: new Array<number>(264).fill(0).map((_, index) => index & 0xff),
+      sequence: 17
+    });
+    await flushImmediate();
+    await flushImmediate();
+
+    expect(internals.hostAudioCommandActive).toBe(false);
+    expect(internals.hostAudioReportQueue).toEqual([]);
+    expect(service.getSnapshot().diagnostics.audioDebugLogLines.at(-1)).toContain('stage=write-failed');
   });
 
   it('rejects accepted setting commands that do not advance settings_revision', async () => {

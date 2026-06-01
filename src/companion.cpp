@@ -6,6 +6,8 @@
 
 #include "audio.h"
 #include "bt.h"
+#include "controller_output_submit.h"
+#include "dualsense_output.h"
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
@@ -15,10 +17,10 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 1;
+constexpr uint8_t kProtocolMinor = 5;
 constexpr uint8_t kFirmwareMajor = 1;
-constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 2;
+constexpr uint8_t kFirmwareMinor = 5;
+constexpr uint8_t kFirmwarePatch = 0;
 constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kSquareButtonBit = 0x10;
 constexpr uint8_t kCrossButtonBit = 0x20;
@@ -33,6 +35,14 @@ constexpr uint8_t kL3ButtonBit = 0x40;
 constexpr uint8_t kR3ButtonBit = 0x80;
 constexpr uint8_t kHomeButtonBit = 0x01;
 constexpr uint8_t kMuteButtonBit = 0x04;
+constexpr uint8_t kLeftFunctionButtonBit = 0x10;
+constexpr uint8_t kRightFunctionButtonBit = 0x20;
+constexpr uint8_t kLeftBackButtonBit = 0x40;
+constexpr uint8_t kRightBackButtonBit = 0x80;
+constexpr uint8_t kDualSenseEdgeButtonMask = kLeftFunctionButtonBit
+    | kRightFunctionButtonBit
+    | kLeftBackButtonBit
+    | kRightBackButtonBit;
 constexpr uint8_t kDpadMask = 0x0F;
 constexpr uint8_t kDpadUp = 0x00;
 constexpr uint8_t kDpadUpRight = 0x01;
@@ -52,7 +62,10 @@ constexpr uint32_t kMuteLedFlashDurationUs = 120000;
 constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
 constexpr uint8_t kClassicRumbleTestAmplitude = 160;
 constexpr uint32_t kAdaptiveTriggerTestDurationUs = 2500000;
+constexpr uint32_t kPersistentTriggerReapplyIntervalUs = 500000;
 constexpr uint32_t kGameTriggerUpdateRecentUs = 2000000;
+constexpr uint16_t kMaxFeedbackGainPercent = 500;
+constexpr float kMaxHapticsGain = 5.0f;
 #if DS5_TRIGGER_TRACE_ENABLED
 constexpr uint8_t kTriggerTraceRecordSize = 38;
 constexpr uint8_t kTriggerTraceRingSize = 96;
@@ -110,6 +123,8 @@ enum CommandId : uint8_t {
     CommandSetIdleDisconnectTimeout = 0x1C,
     CommandSetSpeakerVolumeShortcut = 0x1D,
     CommandSetButtonRemap = 0x1E,
+    CommandPreviewAdaptiveTriggerEffect = 0x1F,
+    CommandApplyAdaptiveTriggerEffect = 0x20,
 };
 
 enum AckResult : uint8_t {
@@ -168,6 +183,10 @@ enum RemapButton : uint8_t {
     RemapCross,
     RemapSquare,
     RemapR3,
+    RemapLb,
+    RemapRb,
+    RemapLfn,
+    RemapRfn,
     RemapButtonCount,
 };
 
@@ -184,6 +203,7 @@ constexpr ShortcutBinding kShortcutBindings[] = {
     {ShortcutComboHomeTriangle, ShortcutEventSleepController, ShortcutSettingSleepKeybind, ShortcutTriggerPressed},
 };
 constexpr size_t kShortcutBindingCount = sizeof(kShortcutBindings) / sizeof(kShortcutBindings[0]);
+constexpr uint8_t kShortcutEventQueueDepth = 8;
 
 critical_section_t companion_report_cs;
 uint8_t last_controller_report[63]{};
@@ -258,7 +278,10 @@ bool sleep_keybind_enabled = false;
 bool speaker_volume_shortcut_enabled = false;
 bool shortcut_binding_last_pressed[kShortcutBindingCount]{};
 uint32_t shortcut_binding_last_step_us[kShortcutBindingCount]{};
-uint8_t pending_shortcut_event = 0;
+uint8_t shortcut_event_queue[kShortcutEventQueueDepth]{};
+uint8_t shortcut_event_head = 0;
+uint8_t shortcut_event_tail = 0;
+uint8_t shortcut_event_count = 0;
 bool mute_keyboard_pending = false;
 bool mute_keyboard_pressed = false;
 uint32_t mute_keyboard_release_at_us = 0;
@@ -271,12 +294,23 @@ uint8_t adaptive_trigger_test_mode = kTriggerTestModeFeedback;
 uint8_t adaptive_trigger_test_target = kTriggerTargetBoth;
 bool adaptive_trigger_test_active = false;
 uint32_t adaptive_trigger_test_until_us = 0;
+struct PersistentTriggerEffect {
+    bool active = false;
+    uint8_t mode = kTriggerTestModeFeedback;
+    uint8_t start_percent = 0;
+    uint8_t wall_percent = 0;
+    uint8_t force_percent = 0;
+};
+PersistentTriggerEffect persistent_trigger_effect_left;
+PersistentTriggerEffect persistent_trigger_effect_right;
+uint32_t persistent_trigger_effect_last_apply_us = 0;
 uint8_t cached_game_trigger_right[kTriggerEffectSize]{};
 uint8_t cached_game_trigger_left[kTriggerEffectSize]{};
 bool cached_game_trigger_right_valid = false;
 bool cached_game_trigger_left_valid = false;
 uint8_t cached_game_trigger_motor_power = 0;
 bool cached_game_trigger_motor_power_valid = false;
+bool trigger_power_reset_pending = false;
 uint32_t last_game_trigger_update_us = 0;
 uint8_t companion_mic_volume_percent = 100;
 bool companion_mic_muted = false;
@@ -292,6 +326,9 @@ struct LastAck {
 LastAck last_ack;
 
 void clear_cached_game_trigger_effects();
+void reset_adaptive_trigger_test();
+bool persistent_trigger_effect_any_active();
+void stop_classic_rumble_test();
 
 uint16_t read_u16(uint8_t const *data) {
     return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
@@ -307,6 +344,13 @@ void write_u32(uint8_t *data, uint32_t value) {
     data[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
     data[2] = static_cast<uint8_t>((value >> 16) & 0xFF);
     data[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
+}
+
+uint16_t status_age_to_u16(uint32_t value) {
+    if (value == 0xffffffffu) {
+        return 0xffffu;
+    }
+    return value > 0xfffeu ? 0xfffeu : static_cast<uint16_t>(value);
 }
 
 #if DS5_TRIGGER_TRACE_ENABLED
@@ -587,17 +631,51 @@ void set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bright
     }
 }
 
+void clear_shortcut_events() {
+    critical_section_enter_blocking(&companion_report_cs);
+    shortcut_event_head = 0;
+    shortcut_event_tail = 0;
+    shortcut_event_count = 0;
+    critical_section_exit(&companion_report_cs);
+}
+
+uint8_t take_shortcut_event() {
+    uint8_t event = 0;
+    critical_section_enter_blocking(&companion_report_cs);
+    if (shortcut_event_count > 0) {
+        event = shortcut_event_queue[shortcut_event_head];
+        shortcut_event_head = static_cast<uint8_t>((shortcut_event_head + 1) % kShortcutEventQueueDepth);
+        shortcut_event_count--;
+    }
+    critical_section_exit(&companion_report_cs);
+    return event;
+}
+
+void queue_shortcut_event(ShortcutEvent event) {
+    critical_section_enter_blocking(&companion_report_cs);
+    if (shortcut_event_count == kShortcutEventQueueDepth) {
+        shortcut_event_head = static_cast<uint8_t>((shortcut_event_head + 1) % kShortcutEventQueueDepth);
+        shortcut_event_count--;
+    }
+    shortcut_event_queue[shortcut_event_tail] = static_cast<uint8_t>(event);
+    shortcut_event_tail = static_cast<uint8_t>((shortcut_event_tail + 1) % kShortcutEventQueueDepth);
+    shortcut_event_count++;
+    critical_section_exit(&companion_report_cs);
+}
+
 void restore_defaults() {
     volume[0] = DEFAULT_COMPANION_SPEAKER_GAIN;
     volume[1] = 1.0f;
     bt_set_classic_rumble_gain(100);
-    classic_rumble_test_active = false;
-    bt_set_classic_rumble_output(0, 0);
+    stop_classic_rumble_test();
     audio_set_haptics_buffer_length(64);
     trigger_effect_intensity_percent = 100;
     adaptive_trigger_test_mode = kTriggerTestModeFeedback;
     adaptive_trigger_test_target = kTriggerTargetBoth;
     adaptive_trigger_test_active = false;
+    persistent_trigger_effect_left = {};
+    persistent_trigger_effect_right = {};
+    persistent_trigger_effect_last_apply_us = 0;
     clear_cached_game_trigger_effects();
     bt_reset_adaptive_triggers();
     mute_button_mode = MuteButtonNormal;
@@ -608,7 +686,7 @@ void restore_defaults() {
     speaker_volume_shortcut_enabled = false;
     std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
     std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
-    pending_shortcut_event = 0;
+    clear_shortcut_events();
     mute_keyboard_pending = false;
     mute_keyboard_pressed = false;
     mute_led_flash_pending = false;
@@ -618,7 +696,6 @@ void restore_defaults() {
     companion_mic_volume_percent = 100;
     companion_mic_muted = false;
     audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
-    bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
     reset_button_remap();
     bt_set_mute_led(false);
     lightbar_override_enabled = false;
@@ -797,6 +874,7 @@ void clear_cached_game_trigger_effects() {
     cached_game_trigger_left_valid = false;
     cached_game_trigger_motor_power = 0;
     cached_game_trigger_motor_power_valid = false;
+    trigger_power_reset_pending = false;
     last_game_trigger_update_us = 0;
 }
 
@@ -832,14 +910,13 @@ void cache_game_trigger_effects(uint8_t const *payload, uint16_t len) {
         cached_game_trigger_left_valid = true;
     }
 
-    cached_game_trigger_motor_power = (
+    const bool has_motor_power = (
         len > 1
         && len > kTriggerEffectPowerOffset
         && (payload[1] & kTriggerMotorPowerFlag) != 0
-    )
-        ? payload[kTriggerEffectPowerOffset]
-        : 0;
-    cached_game_trigger_motor_power_valid = true;
+    );
+    cached_game_trigger_motor_power = has_motor_power ? payload[kTriggerEffectPowerOffset] : 0;
+    cached_game_trigger_motor_power_valid = has_motor_power;
 }
 
 bool build_scaled_cached_game_trigger_effect(
@@ -894,12 +971,13 @@ bool build_scaled_cached_game_trigger_effect(
         return true;
     }
 
-    // Re-send an explicit zero reduction when returning to 100%, in case an
-    // earlier capped report left the controller with a reduced trigger power.
-    if (!motor_power_valid) {
+    // Re-send an explicit zero reduction only when returning from a capped
+    // intensity. If the game never supplied motor power, preserve that absence
+    // for normal 100% forwarding so bridge output stays closer to direct USB.
+    if (!motor_power_valid && trigger_power_reset_pending) {
         motor_power = 0;
+        motor_power_valid = true;
     }
-    motor_power_valid = true;
     return true;
 }
 
@@ -939,6 +1017,10 @@ bool valid_trigger_target(uint8_t target) {
     return target <= kTriggerTargetRight;
 }
 
+bool valid_trigger_percent(uint8_t percent) {
+    return percent <= 100;
+}
+
 bool valid_button_remap_payload(uint8_t const *payload, uint16_t len) {
     if (payload == nullptr || len < RemapButtonCount) {
         return false;
@@ -968,19 +1050,175 @@ bool schedule_adaptive_trigger_test(uint8_t mode, uint8_t target) {
     return true;
 }
 
+bool schedule_custom_adaptive_trigger_test(
+    uint8_t mode,
+    uint8_t target,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    if (
+        !bt_is_controller_connected()
+        || game_trigger_update_recent()
+        || adaptive_trigger_test_active
+    ) {
+        return false;
+    }
+
+    adaptive_trigger_test_mode = mode;
+    adaptive_trigger_test_target = target;
+    bt_set_custom_adaptive_trigger_effect(mode, start_percent, wall_percent, force_percent, target);
+    adaptive_trigger_test_active = force_percent > 0;
+    adaptive_trigger_test_until_us = time_us_32() + kAdaptiveTriggerTestDurationUs;
+    return true;
+}
+
+void clear_persistent_trigger_effect() {
+    persistent_trigger_effect_left = {};
+    persistent_trigger_effect_right = {};
+    persistent_trigger_effect_last_apply_us = 0;
+}
+
+bool persistent_trigger_effect_any_active() {
+    return persistent_trigger_effect_left.active || persistent_trigger_effect_right.active;
+}
+
+bool strip_persistent_trigger_effect_fields(uint8_t *payload, uint16_t len, uint8_t trigger_flags) {
+    if (payload == nullptr || len == 0 || !persistent_trigger_effect_any_active()) {
+        return false;
+    }
+
+    bool changed = false;
+    if (persistent_trigger_effect_right.active && (trigger_flags & kTriggerRightEffectFlag) != 0) {
+        payload[0] &= static_cast<uint8_t>(~kTriggerRightEffectFlag);
+        changed = true;
+    }
+    if (persistent_trigger_effect_left.active && (trigger_flags & kTriggerLeftEffectFlag) != 0) {
+        payload[0] &= static_cast<uint8_t>(~kTriggerLeftEffectFlag);
+        changed = true;
+    }
+    if (len > 1 && (payload[1] & kTriggerMotorPowerFlag) != 0) {
+        payload[1] &= static_cast<uint8_t>(~kTriggerMotorPowerFlag);
+        changed = true;
+    }
+    return changed;
+}
+
+void set_persistent_trigger_effect_state(
+    PersistentTriggerEffect &effect,
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    effect.mode = mode;
+    effect.start_percent = start_percent;
+    effect.wall_percent = wall_percent;
+    effect.force_percent = force_percent;
+    effect.active = force_percent > 0;
+}
+
+void apply_persistent_trigger_effect(bool force = false) {
+    if (!persistent_trigger_effect_any_active() || !bt_is_controller_connected()) {
+        return;
+    }
+
+    const uint32_t now = time_us_32();
+    if (
+        !force
+        && persistent_trigger_effect_last_apply_us != 0
+        && static_cast<uint32_t>(now - persistent_trigger_effect_last_apply_us) < kPersistentTriggerReapplyIntervalUs
+    ) {
+        return;
+    }
+
+    bt_set_custom_adaptive_trigger_effects(
+        persistent_trigger_effect_right.mode,
+        persistent_trigger_effect_right.start_percent,
+        persistent_trigger_effect_right.wall_percent,
+        persistent_trigger_effect_right.force_percent,
+        persistent_trigger_effect_right.active,
+        persistent_trigger_effect_left.mode,
+        persistent_trigger_effect_left.start_percent,
+        persistent_trigger_effect_left.wall_percent,
+        persistent_trigger_effect_left.force_percent,
+        persistent_trigger_effect_left.active
+    );
+    persistent_trigger_effect_last_apply_us = now;
+}
+
+bool set_persistent_trigger_effect(
+    uint8_t mode,
+    uint8_t target,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    if (!bt_is_controller_connected()) {
+        return false;
+    }
+
+    if (target == kTriggerTargetLeft || target == kTriggerTargetBoth) {
+        set_persistent_trigger_effect_state(
+            persistent_trigger_effect_left,
+            mode,
+            start_percent,
+            wall_percent,
+            force_percent
+        );
+    }
+    if (target == kTriggerTargetRight || target == kTriggerTargetBoth) {
+        set_persistent_trigger_effect_state(
+            persistent_trigger_effect_right,
+            mode,
+            start_percent,
+            wall_percent,
+            force_percent
+        );
+    }
+    persistent_trigger_effect_last_apply_us = 0;
+
+    if (persistent_trigger_effect_any_active()) {
+        adaptive_trigger_test_active = false;
+        apply_persistent_trigger_effect(true);
+    } else {
+        bt_reset_adaptive_triggers();
+    }
+    return true;
+}
+
+void submit_classic_rumble_test_output(uint8_t right, uint8_t left) {
+    if (!bt_is_controller_connected()) {
+        return;
+    }
+
+    uint8_t payload[ds5::output::kCommonPayloadSize]{};
+    payload[ds5::output::kValidFlag0Offset] = static_cast<uint8_t>(
+        ds5::output::kFlag0CompatibleVibration | ds5::output::kFlag0HapticsSelect
+    );
+    payload[ds5::output::kMotorRightOffset] = right;
+    payload[ds5::output::kMotorLeftOffset] = left;
+    controller_output_submit_usb_payload(payload, sizeof(payload));
+}
+
 bool schedule_classic_rumble_test() {
     if (
         !bt_is_controller_connected()
-        || usb_host_hid_output_recent()
         || classic_rumble_test_active
     ) {
         return false;
     }
 
-    bt_set_classic_rumble_output(kClassicRumbleTestAmplitude, kClassicRumbleTestAmplitude);
+    submit_classic_rumble_test_output(kClassicRumbleTestAmplitude, kClassicRumbleTestAmplitude);
     classic_rumble_test_active = true;
     classic_rumble_test_until_us = time_us_32() + kClassicRumbleTestDurationUs;
     return true;
+}
+
+void stop_classic_rumble_test() {
+    classic_rumble_test_active = false;
+    classic_rumble_test_until_us = 0;
+    submit_classic_rumble_test_output(0, 0);
 }
 
 void classic_rumble_test_loop() {
@@ -988,13 +1226,13 @@ void classic_rumble_test_loop() {
         return;
     }
     if (!bt_is_controller_connected() || static_cast<int32_t>(time_us_32() - classic_rumble_test_until_us) >= 0) {
-        classic_rumble_test_active = false;
-        bt_set_classic_rumble_output(0, 0);
+        stop_classic_rumble_test();
     }
 }
 
 void reset_adaptive_trigger_test() {
     adaptive_trigger_test_active = false;
+    clear_persistent_trigger_effect();
     bt_reset_adaptive_triggers();
 }
 
@@ -1092,7 +1330,7 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[9] = raw_power_state;
     buffer[10] = audio_recent() ? 1 : 0;
     buffer[11] = audio_haptics_ready() ? 1 : 0;
-    write_u16(buffer + 12, static_cast<uint16_t>(std::clamp(volume[1], 0.0f, 2.0f) * 100.0f));
+    write_u16(buffer + 12, static_cast<uint16_t>(std::clamp(volume[1], 0.0f, kMaxHapticsGain) * 100.0f));
     buffer[14] = mute[0] ? 0 : 1;
     buffer[15] = mute[1] ? 0 : 1;
     write_u16(buffer + 16, settings_revision);
@@ -1150,6 +1388,17 @@ uint16_t build_ack(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+uint16_t build_shortcut_event(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    buffer[0] = take_shortcut_event();
+    return COMPANION_PAYLOAD_SIZE;
+}
+
+#if DS5_AUDIO_DEBUG_ENABLED
 uint16_t build_audio_debug(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
         return 0;
@@ -1192,6 +1441,7 @@ uint16_t build_audio_stats(uint8_t *buffer, uint16_t reqlen) {
     write_u32(fields + 52, bt_stats.critical_starving_audio_count);
     return COMPANION_PAYLOAD_SIZE;
 }
+#endif
 
 uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
@@ -1205,30 +1455,32 @@ uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
     audio_get_host_status(&status);
     buffer[6] = status.mode;
     buffer[7] = status.fallback_reason;
-    buffer[8] = status.host_requested ? 1 : 0;
-    buffer[9] = status.heartbeat_healthy ? 1 : 0;
-    buffer[10] = status.stream_active ? 1 : 0;
-    buffer[11] = status.stream_healthy ? 1 : 0;
-    buffer[12] = status.duplex_requested ? 1 : 0;
-    buffer[13] = (status.duplex_active ? 0x01 : 0x00)
-        | (status.headset_plugged ? 0x02 : 0x00)
-        | (status.headset_audio_route ? 0x04 : 0x00)
-        | (status.controller_state_ready ? 0x08 : 0x00);
-    write_u16(buffer + 14, status.stream_generation);
-    write_u32(buffer + 16, status.heartbeat_age_ms);
-    write_u32(buffer + 20, status.frame_age_ms);
-    write_u32(buffer + 24, status.host_frames_received);
-    write_u32(buffer + 28, status.host_frames_dropped);
-    write_u32(buffer + 32, status.mic_packets_received);
-    write_u32(buffer + 36, status.mic_packets_dropped);
-    write_u32(buffer + 40, status.mic_decode_success);
-    write_u32(buffer + 44, status.mic_decode_fail);
-    write_u32(buffer + 48, status.mic_usb_write_success);
-    write_u32(buffer + 52, status.mic_usb_write_short);
+    buffer[8] = (status.host_requested ? 0x01 : 0x00)
+        | (status.heartbeat_healthy ? 0x02 : 0x00)
+        | (status.stream_active ? 0x04 : 0x00)
+        | (status.stream_healthy ? 0x08 : 0x00)
+        | (status.duplex_requested ? 0x10 : 0x00)
+        | (status.duplex_active ? 0x20 : 0x00)
+        | (status.controller_state_ready ? 0x40 : 0x00)
+        | (status.mic_usb_streaming ? 0x80 : 0x00);
+    buffer[9] = (status.headset_plugged ? 0x01 : 0x00)
+        | (status.headset_audio_route ? 0x02 : 0x00);
+    write_u16(buffer + 10, status.stream_generation);
+    write_u16(buffer + 12, status_age_to_u16(status.heartbeat_age_ms));
+    write_u16(buffer + 14, status_age_to_u16(status.frame_age_ms));
+    write_u32(buffer + 16, status.host_frames_received);
+    write_u32(buffer + 20, status.host_frames_dropped);
+    write_u32(buffer + 24, status.mic_packets_received);
+    write_u32(buffer + 28, status.mic_packets_dropped);
+    write_u32(buffer + 32, status.mic_decode_success);
+    write_u32(buffer + 36, status.mic_decode_fail);
+    write_u32(buffer + 40, status.mic_usb_write_success);
+    write_u32(buffer + 44, status.mic_usb_write_short);
+    write_u32(buffer + 48, status.mic_usb_conceal_count);
+    write_u32(buffer + 52, status.mic_plc_count);
     write_u16(buffer + 56, status.mic_last_decoded_samples);
     write_u16(buffer + 58, status.mic_last_written_bytes);
     write_u16(buffer + 60, status.mic_peak_permille);
-    buffer[62] = status.mic_usb_streaming ? 1 : 0;
     return COMPANION_PAYLOAD_SIZE;
 }
 
@@ -1378,7 +1630,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     const uint16_t value = read_u16(buffer + 8);
     switch (command_id) {
         case CommandSetHapticsGain:
-            if (value > 200) {
+            if (value > kMaxFeedbackGainPercent) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
@@ -1411,7 +1663,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             companion_mic_volume_percent = static_cast<uint8_t>(value);
             audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
-            bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -1423,7 +1674,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             companion_mic_muted = value == 1;
             audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
-            bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -1476,15 +1726,13 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
 
         case CommandSetClassicRumbleGain:
-            if (value > 200) {
+            if (value > kMaxFeedbackGainPercent) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            bt_set_classic_rumble_gain(static_cast<uint8_t>(value));
+            bt_set_classic_rumble_gain(value);
             if (value == 0) {
-                classic_rumble_test_active = false;
-                classic_rumble_test_until_us = 0;
-                bt_set_classic_rumble_output(0, 0);
+                stop_classic_rumble_test();
             }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
@@ -1511,6 +1759,9 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
+            if (trigger_effect_intensity_percent < 100 && value >= 100) {
+                trigger_power_reset_pending = true;
+            }
             trigger_effect_intensity_percent = static_cast<uint8_t>(value);
             if (adaptive_trigger_test_active) {
                 bt_set_adaptive_trigger_effect(
@@ -1520,6 +1771,9 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 );
             } else {
                 replay_cached_game_trigger_effect();
+            }
+            if (trigger_effect_intensity_percent >= 100) {
+                trigger_power_reset_pending = false;
             }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
@@ -1545,12 +1799,66 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
             }
 
+        case CommandPreviewAdaptiveTriggerEffect:
+            {
+            const uint8_t mode = static_cast<uint8_t>(value & 0xff);
+            const uint8_t target = static_cast<uint8_t>((value >> 8) & 0xff);
+            const uint8_t start_percent = buffer[10];
+            const uint8_t wall_percent = buffer[11];
+            const uint8_t force_percent = buffer[12];
+            if (
+                !valid_trigger_test_mode(mode)
+                || !valid_trigger_target(target)
+                || !valid_trigger_percent(start_percent)
+                || !valid_trigger_percent(wall_percent)
+                || !valid_trigger_percent(force_percent)
+            ) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!bt_is_controller_connected()) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            if (!schedule_custom_adaptive_trigger_test(mode, target, start_percent, wall_percent, force_percent)) {
+                set_ack(command_id, sequence, AckBusy);
+                return;
+            }
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
+
+        case CommandApplyAdaptiveTriggerEffect:
+            {
+            const uint8_t mode = static_cast<uint8_t>(value & 0xff);
+            const uint8_t target = static_cast<uint8_t>((value >> 8) & 0xff);
+            const uint8_t start_percent = buffer[10];
+            const uint8_t wall_percent = buffer[11];
+            const uint8_t force_percent = buffer[12];
+            if (
+                !valid_trigger_test_mode(mode)
+                || !valid_trigger_target(target)
+                || !valid_trigger_percent(start_percent)
+                || !valid_trigger_percent(wall_percent)
+                || !valid_trigger_percent(force_percent)
+            ) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!set_persistent_trigger_effect(mode, target, start_percent, wall_percent, force_percent)) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
+
         case CommandResetAdaptiveTriggers:
             if (value != 0) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            if (game_trigger_update_recent()) {
+            if (game_trigger_update_recent() && !persistent_trigger_effect_any_active()) {
                 set_ack(command_id, sequence, AckBusy);
                 return;
             }
@@ -1617,7 +1925,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             speaker_volume_shortcut_enabled = value == 1;
             std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
             std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
-            pending_shortcut_event = 0;
+            clear_shortcut_events();
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -1789,7 +2097,7 @@ void process_shortcut_bindings(uint8_t *report) {
                 : (!shortcut_binding_last_pressed[i]
                     || static_cast<uint32_t>(now - shortcut_binding_last_step_us[i]) >= kShortcutRepeatUs);
             if (should_emit) {
-                pending_shortcut_event = binding.event;
+                queue_shortcut_event(binding.event);
                 shortcut_binding_last_step_us[i] = now;
             }
         } else {
@@ -1834,6 +2142,7 @@ void apply_button_remap(uint8_t *report, uint16_t len) {
     bool source_pressed[RemapButtonCount]{};
     uint8_t source_analog[RemapButtonCount]{};
     const uint8_t dpad_direction = report[7] & kDpadMask;
+    const bool has_edge_buttons = len > 9;
 
     source_pressed[RemapL2] = (report[8] & kL2ButtonBit) != 0;
     source_pressed[RemapL1] = (report[8] & kL1ButtonBit) != 0;
@@ -1851,6 +2160,12 @@ void apply_button_remap(uint8_t *report, uint16_t len) {
     source_pressed[RemapCross] = (report[7] & kCrossButtonBit) != 0;
     source_pressed[RemapSquare] = (report[7] & kSquareButtonBit) != 0;
     source_pressed[RemapR3] = (report[8] & kR3ButtonBit) != 0;
+    if (has_edge_buttons) {
+        source_pressed[RemapLb] = (report[9] & kLeftBackButtonBit) != 0;
+        source_pressed[RemapRb] = (report[9] & kRightBackButtonBit) != 0;
+        source_pressed[RemapLfn] = (report[9] & kLeftFunctionButtonBit) != 0;
+        source_pressed[RemapRfn] = (report[9] & kRightFunctionButtonBit) != 0;
+    }
 
     for (uint8_t i = 0; i < RemapButtonCount; i++) {
         source_analog[i] = source_pressed[i] ? 0xFF : 0;
@@ -1891,6 +2206,14 @@ void apply_button_remap(uint8_t *report, uint16_t len) {
     if (target_pressed[RemapOptions]) report[8] |= kOptionsButtonBit;
     if (target_pressed[RemapL3]) report[8] |= kL3ButtonBit;
     if (target_pressed[RemapR3]) report[8] |= kR3ButtonBit;
+
+    if (has_edge_buttons) {
+        report[9] &= static_cast<uint8_t>(~kDualSenseEdgeButtonMask);
+        if (target_pressed[RemapLfn]) report[9] |= kLeftFunctionButtonBit;
+        if (target_pressed[RemapRfn]) report[9] |= kRightFunctionButtonBit;
+        if (target_pressed[RemapLb]) report[9] |= kLeftBackButtonBit;
+        if (target_pressed[RemapRb]) report[9] |= kRightBackButtonBit;
+    }
 }
 
 } // namespace
@@ -1902,16 +2225,11 @@ void companion_init() {
 }
 
 void companion_loop() {
-    if (pending_shortcut_event != 0 && tud_hid_n_ready(COMPANION_HID_INSTANCE)) {
-        const uint8_t event = pending_shortcut_event;
-        if (tud_hid_n_report(COMPANION_HID_INSTANCE, COMPANION_REPORT_INPUT, &event, 1)) {
-            pending_shortcut_event = 0;
-        }
-    }
     audio_test_haptics_loop();
     classic_rumble_test_loop();
     mute_keyboard_loop();
     adaptive_trigger_test_loop();
+    apply_persistent_trigger_effect();
 }
 
 void companion_process_controller_report(uint8_t *report, uint16_t len) {
@@ -2068,13 +2386,18 @@ bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len) {
     }
 
     cache_game_trigger_effects(payload, len);
-    if (trigger_effect_intensity_percent >= 100) {
-        return false;
-    }
-
+    const uint8_t original_trigger_flags = len > 0 ? payload[0] & kTriggerEffectFlags : 0;
+    const bool persistentOverrideChanged = strip_persistent_trigger_effect_fields(payload, len, original_trigger_flags);
     const uint8_t trigger_flags = len > 0 ? payload[0] & kTriggerEffectFlags : 0;
     if (trigger_flags == 0) {
-        return false;
+        return persistentOverrideChanged;
+    }
+
+    if (
+        (persistent_trigger_effect_left.active && persistent_trigger_effect_right.active)
+        || trigger_effect_intensity_percent >= 100
+    ) {
+        return persistentOverrideChanged;
     }
 
     const bool right_trigger_active = trigger_effect_block_active(
@@ -2146,14 +2469,6 @@ bool companion_lightbar_override_enabled() {
 }
 
 uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
-    if (report_type == HID_REPORT_TYPE_INPUT && report_id == COMPANION_REPORT_INPUT) {
-        if (reqlen < 1) {
-            return 0;
-        }
-        buffer[0] = 0;
-        return 1;
-    }
-
     if (report_type != HID_REPORT_TYPE_FEATURE) {
         return 0;
     }
@@ -2163,10 +2478,14 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_status(buffer, reqlen);
         case COMPANION_REPORT_ACK:
             return build_ack(buffer, reqlen);
+        case COMPANION_REPORT_INPUT:
+            return build_shortcut_event(buffer, reqlen);
+#if DS5_AUDIO_DEBUG_ENABLED
         case COMPANION_REPORT_AUDIO_DEBUG:
             return build_audio_debug(buffer, reqlen);
         case COMPANION_REPORT_AUDIO_STATS:
             return build_audio_stats(buffer, reqlen);
+#endif
         case COMPANION_REPORT_HOST_AUDIO_STATUS:
             return build_host_audio_status(buffer, reqlen);
 #if DS5_TRIGGER_TRACE_ENABLED

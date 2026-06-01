@@ -14,6 +14,7 @@ import {
   MAGIC,
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
+  ProtocolError,
   REPORT_ID,
   buildButtonRemapPayload,
   buildCommandReport,
@@ -24,6 +25,7 @@ import {
   parseAudioStatsReport,
   parseAckReport,
   parseFeedbackTraceReport,
+  parseHostAudioStatusReport,
   parseTriggerTraceReport,
   parseStatusReport
 } from './protocol';
@@ -53,6 +55,58 @@ function writeU16(report: number[], offset: number, value: number): void {
 }
 
 describe('companion protocol', () => {
+  it('rejects malformed report envelopes with protocol-specific errors', () => {
+    const cases: Array<{
+      name: string;
+      report: number[];
+      parse: (report: number[]) => unknown;
+      code: string;
+    }> = [
+      {
+        name: 'bad length',
+        report: baseReport(REPORT_ID.STATUS).slice(0, 63),
+        parse: parseStatusReport,
+        code: 'bad-length'
+      },
+      {
+        name: 'bad report id',
+        report: baseReport(REPORT_ID.ACK),
+        parse: parseStatusReport,
+        code: 'bad-report-id'
+      },
+      {
+        name: 'bad magic',
+        report: (() => {
+          const report = baseReport(REPORT_ID.STATUS);
+          report[1] = 'N'.charCodeAt(0);
+          return report;
+        })(),
+        parse: parseStatusReport,
+        code: 'bad-magic'
+      },
+      {
+        name: 'bad version',
+        report: (() => {
+          const report = baseReport(REPORT_ID.STATUS);
+          report[5] = PROTOCOL_MAJOR + 1;
+          return report;
+        })(),
+        parse: parseStatusReport,
+        code: 'bad-version'
+      }
+    ];
+
+    for (const testCase of cases) {
+      try {
+        testCase.parse(testCase.report);
+        throw new Error(`Expected ${testCase.name} to throw`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ProtocolError);
+        expect((error as ProtocolError).code).toBe(testCase.code);
+      }
+    }
+  });
+
   it('parses a status report', () => {
     const report = baseReport(REPORT_ID.STATUS);
     report[7] = 1;
@@ -326,12 +380,14 @@ describe('companion protocol', () => {
   it('builds a button remap command payload', () => {
     const payload = buildButtonRemapPayload({
       ...DEFAULT_BUTTON_REMAP_PROFILE.mappings,
-      cross: 'circle'
+      cross: 'circle',
+      lb: 'square'
     });
     const report = buildCommandReport(COMMAND_ID.SET_BUTTON_REMAP, 7, 0, payload);
-    expect(payload).toHaveLength(16);
+    expect(payload).toHaveLength(20);
     expect(report[7]).toBe(COMMAND_ID.SET_BUTTON_REMAP);
     expect(report[11 + 13]).toBe(12);
+    expect(report[11 + 16]).toBe(14);
   });
 
   it('builds sleep controller command reports', () => {
@@ -341,6 +397,166 @@ describe('companion protocol', () => {
     expect(keybindReport[9]).toBe(1);
     expect(sleepReport[7]).toBe(COMMAND_ID.SLEEP_CONTROLLER);
     expect(sleepReport[9]).toBe(0);
+  });
+
+  it('rejects undersized variable-length diagnostic records', () => {
+    const cases: Array<{
+      reportId: number;
+      recordSize: number;
+      parse: (report: number[]) => unknown;
+      code: string;
+    }> = [
+      {
+        reportId: REPORT_ID.AUDIO_DEBUG,
+        recordSize: 13,
+        parse: parseAudioDebugReport,
+        code: 'bad-audio-debug-record'
+      },
+      {
+        reportId: REPORT_ID.TRIGGER_TRACE,
+        recordSize: 37,
+        parse: parseTriggerTraceReport,
+        code: 'bad-trigger-trace-record'
+      },
+      {
+        reportId: REPORT_ID.FEEDBACK_TRACE,
+        recordSize: 23,
+        parse: parseFeedbackTraceReport,
+        code: 'bad-feedback-trace-record'
+      }
+    ];
+
+    for (const testCase of cases) {
+      const report = baseReport(testCase.reportId);
+      report[7] = 1;
+      report[8] = testCase.recordSize;
+
+      try {
+        testCase.parse(report);
+        throw new Error(`Expected report 0x${testCase.reportId.toString(16)} to throw`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ProtocolError);
+        expect((error as ProtocolError).code).toBe(testCase.code);
+      }
+    }
+  });
+
+  it('stops parsing audio debug records at the report boundary', () => {
+    const report = baseReport(REPORT_ID.AUDIO_DEBUG);
+    report[7] = 5;
+    report[8] = 14;
+    writeU32(report, 9, 9);
+
+    for (let index = 0; index < 3; index += 1) {
+      const offset = 15 + index * 14;
+      writeU32(report, offset, index + 7);
+      writeU32(report, offset + 4, 1000 + index);
+      report[offset + 8] = AUDIO_DEBUG_EVENT.AUDIO_START;
+      report[offset + 9] = index;
+    }
+
+    const debug = parseAudioDebugReport(report);
+
+    expect(debug.events.map((event) => event.sequence)).toEqual([7, 8, 9]);
+  });
+
+  it('parses host audio mic concealment counters', () => {
+    const report = baseReport(REPORT_ID.HOST_AUDIO_STATUS);
+    report[7] = 1;
+    report[8] = 0;
+    report[9] = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80;
+    report[10] = 0x01 | 0x02;
+    writeU16(report, 11, 42);
+    writeU16(report, 13, 1234);
+    writeU16(report, 15, 56);
+    writeU32(report, 17, 100);
+    writeU32(report, 21, 2);
+    writeU32(report, 25, 22540);
+    writeU32(report, 29, 0);
+    writeU32(report, 33, 22540);
+    writeU32(report, 37, 0);
+    writeU32(report, 41, 225802);
+    writeU32(report, 45, 0);
+    writeU32(report, 49, 402);
+    writeU32(report, 53, 7);
+    writeU16(report, 57, 480);
+    writeU16(report, 59, 96);
+    writeU16(report, 61, 47);
+
+    expect(parseHostAudioStatusReport(report)).toMatchObject({
+      mode: 'host-encoded-active',
+      fallbackReason: 'none',
+      hostRequested: true,
+      heartbeatHealthy: true,
+      streamActive: true,
+      streamHealthy: true,
+      duplexRequested: true,
+      duplexActive: true,
+      controllerStateReady: true,
+      headsetPlugged: true,
+      headsetAudioRoute: true,
+      micUsbStreaming: true,
+      streamGeneration: 42,
+      heartbeatAgeMs: 1234,
+      frameAgeMs: 56,
+      micPacketsReceived: 22540,
+      micUsbWriteSuccess: 225802,
+      micUsbConcealCount: 402,
+      micPlcCount: 7,
+      micLastDecodedSamples: 480,
+      micLastWrittenBytes: 96,
+      micPeakPermille: 47
+    });
+  });
+
+  it('parses legacy host audio status reports with nullable ages', () => {
+    const report = baseReport(REPORT_ID.HOST_AUDIO_STATUS);
+    report[6] = 2;
+    report[7] = 1;
+    report[8] = 3;
+    report[9] = 1;
+    report[10] = 1;
+    report[11] = 0;
+    report[12] = 1;
+    report[13] = 1;
+    report[14] = 0x01 | 0x02 | 0x04 | 0x08;
+    writeU16(report, 15, 77);
+    writeU32(report, 17, 0xffffffff);
+    writeU32(report, 21, 345);
+    writeU32(report, 25, 10);
+    writeU32(report, 29, 2);
+    writeU32(report, 33, 100);
+    writeU32(report, 37, 4);
+    writeU32(report, 41, 88);
+    writeU32(report, 45, 5);
+    writeU32(report, 49, 82);
+    writeU32(report, 53, 6);
+    writeU16(report, 57, 480);
+    writeU16(report, 59, 96);
+    writeU16(report, 61, 33);
+    report[63] = 1;
+
+    expect(parseHostAudioStatusReport(report)).toMatchObject({
+      mode: 'host-encoded-active',
+      fallbackReason: 'stream-timeout',
+      hostRequested: true,
+      heartbeatHealthy: true,
+      streamActive: false,
+      streamHealthy: true,
+      duplexRequested: true,
+      duplexActive: true,
+      headsetPlugged: true,
+      headsetAudioRoute: true,
+      controllerStateReady: true,
+      streamGeneration: 77,
+      heartbeatAgeMs: null,
+      frameAgeMs: 345,
+      hostFramesReceived: 10,
+      micUsbConcealCount: 0,
+      micPlcCount: 0,
+      micUsbStreaming: true,
+      protocolVersion: '1.2'
+    });
   });
 
   it('chunks a synthetic host audio frame for the companion OUT stream', () => {
@@ -367,6 +583,28 @@ describe('companion protocol', () => {
     expect(reports.at(-1)?.[15]).toBe(HOST_AUDIO_REPORT_FRAME_LENGTH % HOST_AUDIO_PAYLOAD_LENGTH);
   });
 
+  it('round-trips host audio frame chunks without dropping or reordering payload bytes', () => {
+    const frame = Array.from(
+      { length: HOST_AUDIO_REPORT_FRAME_LENGTH },
+      (_, index) => (index * 17 + 3) & 0xff
+    );
+    const reports = buildHostAudioFrameChunkReports({
+      streamGeneration: 0x1234,
+      frameSequence: 0x5678,
+      frame
+    });
+
+    const reconstructed: number[] = [];
+    reports.forEach((report, chunkIndex) => {
+      expect(report[13]).toBe(chunkIndex);
+      expect(report[14]).toBe(reports.length);
+      expect(report[15]).toBeLessThanOrEqual(HOST_AUDIO_PAYLOAD_LENGTH);
+      reconstructed.push(...report.slice(17, 17 + report[15]));
+    });
+
+    expect(reconstructed).toEqual(frame);
+  });
+
   it('chunks compact host audio frames with the fast stream format', () => {
     const frame = new Array<number>(HOST_AUDIO_COMPACT_FRAME_LENGTH).fill(0).map((_, index) => index & 0xff);
     const reports = buildHostAudioFastFrameReports({ frame, frameSequence: 42 });
@@ -380,6 +618,39 @@ describe('companion protocol', () => {
     expect(reports[0][6]).toBe(HOST_AUDIO_FAST_PAYLOAD_LENGTH);
     expect(reports[0][7]).toBe(0);
     expect(reports.at(-1)?.[6]).toBe(HOST_AUDIO_COMPACT_FRAME_LENGTH % HOST_AUDIO_FAST_PAYLOAD_LENGTH);
+  });
+
+  it('round-trips compact fast host audio fragments without byte loss', () => {
+    const frame = Array.from(
+      { length: HOST_AUDIO_COMPACT_FRAME_LENGTH },
+      (_, index) => (255 - index * 11) & 0xff
+    );
+    const reports = buildHostAudioFastFrameReports({ frame, frameSequence: 0xbeef });
+
+    const reconstructed: number[] = [];
+    reports.forEach((report, fragmentIndex) => {
+      expect(report[2]).toBe(0xef);
+      expect(report[3]).toBe(0xbe);
+      expect(report[4]).toBe(fragmentIndex);
+      expect(report[5]).toBe(reports.length);
+      expect(report[6]).toBeLessThanOrEqual(HOST_AUDIO_FAST_PAYLOAD_LENGTH);
+      reconstructed.push(...report.slice(7, 7 + report[6]));
+    });
+
+    expect(reconstructed).toEqual(frame);
+  });
+
+  it('masks command header bytes and truncates oversized extra payloads', () => {
+    const payload = Array.from({ length: 100 }, (_, index) => index + 1);
+    const report = buildCommandReport(0x123, 0x1ff, 0x1234, payload);
+
+    expect(report).toHaveLength(64);
+    expect(report[7]).toBe(0x23);
+    expect(report[8]).toBe(0xff);
+    expect(report[9]).toBe(0x34);
+    expect(report[10]).toBe(0x12);
+    expect(report[11]).toBe(1);
+    expect(report[63]).toBe(53);
   });
 
   it('builds polling rate command reports', () => {

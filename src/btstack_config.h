@@ -4,6 +4,8 @@
 #ifndef BTSTACK_CONFIG_H
 #define BTSTACK_CONFIG_H
 
+#include "debug_config.h"
+
 #ifndef ENABLE_CLASSIC
 #define ENABLE_CLASSIC
 #endif
@@ -34,10 +36,10 @@
 #define HAVE_EMBEDDED_TIME_MS
 
 // Required by the Pico SDK's linked BTstack stdout dump source. Firmware
-// hexdump calls still compile out unless DS5_ENABLE_DEBUG_LOGS is set.
+// hexdump calls still compile out unless DS5_DEBUG_LOGS_ENABLED is set.
 #define ENABLE_PRINTF_HEXDUMP
 
-#ifdef DS5_ENABLE_DEBUG_LOGS
+#if DS5_DEBUG_LOGS_ENABLED
 #define ENABLE_LOG_INFO
 #define ENABLE_LOG_ERROR
 #endif

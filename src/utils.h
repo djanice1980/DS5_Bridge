@@ -7,9 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "debug_config.h"
 #include "hci_cmd.h"
 
-#ifdef DS5_ENABLE_DEBUG_LOGS
+#if DS5_DEBUG_LOGS_ENABLED
 #include <cstdio>
 #define DS5_LOG(...) do { printf(__VA_ARGS__); } while (0)
 #define DS5_HEXDUMP(data, size) do { printf_hexdump((data), (size)); } while (0)
@@ -162,58 +163,6 @@ inline bool fill_feature_report_checksum(uint8_t *data, const size_t len) {
     data[len - 1] = static_cast<uint8_t>((crc >> 24) & 0xFF);
 
     return true;
-}
-
-inline bool sanitize_dualsense_host_output_payload(uint8_t *payload, uint16_t len, bool lightbar_override = false) {
-    bool changed = false;
-
-    if (lightbar_override && len > 1) {
-        constexpr uint8_t host_led_control_mask = 0x04 | 0x08 | 0x10;
-        const uint8_t sanitized = payload[1] & static_cast<uint8_t>(~host_led_control_mask);
-        if (payload[1] != sanitized) {
-            payload[1] = sanitized;
-            changed = true;
-        }
-    }
-
-    if (lightbar_override && len > 38) {
-        constexpr uint8_t host_lightbar_setup_mask = 0x01 | 0x02;
-        const uint8_t sanitized = payload[38] & static_cast<uint8_t>(~host_lightbar_setup_mask);
-        if (payload[38] != sanitized) {
-            payload[38] = sanitized;
-            changed = true;
-        }
-    }
-
-    return changed;
-}
-
-inline bool dualsense_host_output_clears_leds(uint8_t const *payload, uint16_t len) {
-    if (len <= 1) {
-        return false;
-    }
-
-    constexpr uint8_t host_lightbar_control = 0x04;
-    constexpr uint8_t host_release_leds = 0x08;
-    constexpr uint8_t host_player_indicator_control = 0x10;
-    const uint8_t led_flags = payload[1] & (
-        host_lightbar_control | host_release_leds | host_player_indicator_control
-    );
-    if (led_flags == 0) {
-        return false;
-    }
-
-    const bool releases_leds = (payload[1] & host_release_leds) != 0;
-    const bool clears_player_indicator = (payload[1] & host_player_indicator_control) != 0
-        && len > 43
-        && payload[43] == 0;
-    const bool clears_lightbar = (payload[1] & host_lightbar_control) != 0
-        && len > 46
-        && payload[44] == 0
-        && payload[45] == 0
-        && payload[46] == 0;
-
-    return releases_leds || clears_player_indicator || clears_lightbar;
 }
 
 enum PowerState : uint8_t {

@@ -21,6 +21,7 @@ import type { CompanionSettings, UiScalePercent } from '../shared/types';
 const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   hapticsEnabled: true,
   hapticsGainPercent: 100,
+  feedbackBoostEnabled: false,
   classicRumbleEnabled: true,
   classicRumbleGainPercent: 100,
   adaptiveTriggersEnabled: true,
@@ -29,7 +30,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerEnabled: true,
   speakerVolumePercent: 100,
   micVolumePercent: 100,
-  micMuted: false,
+  micMuted: true,
   lightbarEnabled: true,
   lightbarColor: '#0000ff',
   lightbarBrightnessPercent: 100,
@@ -42,7 +43,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerVolumeShortcutEnabled: false,
   pollingRateMode: '1000',
   hostEncodedAudioEnabled: true,
-  duplexMicEnabled: true,
+  duplexMicEnabled: false,
   controllerPowerSavingEnabled: false
 };
 
@@ -68,6 +69,7 @@ const CUSTOM_BUTTON_REMAP_PROFILE: ButtonRemapProfile = {
 const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>([
   'hapticsEnabled',
   'hapticsGainPercent',
+  'feedbackBoostEnabled',
   'classicRumbleEnabled',
   'classicRumbleGainPercent',
   'adaptiveTriggersEnabled',
@@ -99,6 +101,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   launchAtStartupEnabled: false,
   hapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsEnabled,
   hapticsGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsGainPercent,
+  feedbackBoostEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.feedbackBoostEnabled,
   hapticsBufferLength: 64,
   classicRumbleEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleEnabled,
   classicRumbleGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleGainPercent,
@@ -174,6 +177,7 @@ export function controllerProfileSettingsFrom(settings: CompanionSettings): Cont
   return {
     hapticsEnabled: settings.hapticsEnabled,
     hapticsGainPercent: settings.hapticsGainPercent,
+    feedbackBoostEnabled: settings.feedbackBoostEnabled,
     classicRumbleEnabled: settings.classicRumbleEnabled,
     classicRumbleGainPercent: settings.classicRumbleGainPercent,
     adaptiveTriggersEnabled: settings.adaptiveTriggersEnabled,
@@ -207,13 +211,16 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
       ? candidate.hapticsEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsEnabled,
     hapticsGainPercent: Number.isFinite(candidate.hapticsGainPercent)
-      ? Math.max(0, Math.min(200, Math.round(candidate.hapticsGainPercent!)))
+      ? Math.max(0, Math.min(500, Math.round(candidate.hapticsGainPercent!)))
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsGainPercent,
+    feedbackBoostEnabled: typeof candidate.feedbackBoostEnabled === 'boolean'
+      ? candidate.feedbackBoostEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.feedbackBoostEnabled,
     classicRumbleEnabled: typeof candidate.classicRumbleEnabled === 'boolean'
       ? candidate.classicRumbleEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleEnabled,
     classicRumbleGainPercent: Number.isFinite(candidate.classicRumbleGainPercent)
-      ? Math.max(0, Math.min(200, Math.round(candidate.classicRumbleGainPercent!)))
+      ? Math.max(0, Math.min(500, Math.round(candidate.classicRumbleGainPercent!)))
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleGainPercent,
     adaptiveTriggersEnabled: typeof candidate.adaptiveTriggersEnabled === 'boolean'
       ? candidate.adaptiveTriggersEnabled
@@ -464,7 +471,48 @@ function cloneSettings(settings: CompanionSettings): CompanionSettings {
 
 type PersistedSettings = Partial<CompanionSettings> & {
   customProfile?: Partial<CompanionSettings>;
+  settingsSchemaVersion?: number;
 };
+
+const CURRENT_SETTINGS_SCHEMA_VERSION = 2;
+
+function migratePersistedSettings(value: PersistedSettings): PersistedSettings {
+  const version = Number.isFinite(value.settingsSchemaVersion)
+    ? Math.max(0, Math.floor(value.settingsSchemaVersion!))
+    : 0;
+  if (version >= CURRENT_SETTINGS_SCHEMA_VERSION) {
+    return value;
+  }
+
+  const next: PersistedSettings = {
+    ...value,
+    settingsSchemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION
+  };
+  if (version < 2) {
+    next.duplexMicEnabled = false;
+    next.micMuted = true;
+    next.controllerProfiles = Array.isArray(value.controllerProfiles)
+      ? value.controllerProfiles.map((profile) => ({
+        ...profile,
+        settings: profile?.settings
+          ? {
+            ...profile.settings,
+            duplexMicEnabled: false,
+            micMuted: true
+          }
+          : profile?.settings
+      }))
+      : value.controllerProfiles;
+    next.customProfile = value.customProfile
+      ? {
+        ...value.customProfile,
+        duplexMicEnabled: false,
+        micMuted: true
+      }
+      : value.customProfile;
+  }
+  return next;
+}
 
 function normalizeSettings(value: Partial<CompanionSettings> | null | undefined): CompanionSettings {
   const selectedPresetId = normalizePresetId(value?.selectedPresetId);
@@ -489,8 +537,11 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       ? value.hapticsEnabled
       : DEFAULT_SETTINGS.hapticsEnabled,
     hapticsGainPercent: Number.isFinite(value?.hapticsGainPercent)
-      ? Math.max(0, Math.min(200, Math.round(value!.hapticsGainPercent!)))
+      ? Math.max(0, Math.min(500, Math.round(value!.hapticsGainPercent!)))
       : DEFAULT_SETTINGS.hapticsGainPercent,
+    feedbackBoostEnabled: typeof value?.feedbackBoostEnabled === 'boolean'
+      ? value.feedbackBoostEnabled
+      : DEFAULT_SETTINGS.feedbackBoostEnabled,
     hapticsBufferLength: Number.isFinite(value?.hapticsBufferLength)
       ? Math.max(64, Math.min(255, Math.round(value!.hapticsBufferLength!)))
       : DEFAULT_SETTINGS.hapticsBufferLength,
@@ -498,7 +549,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       ? value.classicRumbleEnabled
       : DEFAULT_SETTINGS.classicRumbleEnabled,
     classicRumbleGainPercent: Number.isFinite(value?.classicRumbleGainPercent)
-      ? Math.max(0, Math.min(200, Math.round(value!.classicRumbleGainPercent!)))
+      ? Math.max(0, Math.min(500, Math.round(value!.classicRumbleGainPercent!)))
       : DEFAULT_SETTINGS.classicRumbleGainPercent,
     adaptiveTriggersEnabled: typeof value?.adaptiveTriggersEnabled === 'boolean'
       ? value.adaptiveTriggersEnabled
@@ -813,7 +864,7 @@ export class SettingsStore {
   private read(): { settings: CompanionSettings; customSettings: CompanionSettings } {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw) as PersistedSettings;
+      const parsed = migratePersistedSettings(JSON.parse(raw) as PersistedSettings);
       const settings = normalizeSettings(parsed);
       const fallbackCustom = settings.selectedPresetId === 'custom' ? settings : DEFAULT_SETTINGS;
       return {
@@ -852,6 +903,7 @@ export class SettingsStore {
   private write(): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     fs.writeFileSync(this.filePath, `${JSON.stringify({
+      settingsSchemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION,
       ...this.settings,
       customProfile: this.customSettings
     }, null, 2)}\n`, 'utf8');

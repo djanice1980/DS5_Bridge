@@ -25,27 +25,41 @@
 
 #include "bsp/board_api.h"
 #include "tusb.h"
+#include "debug_config.h"
+#include "host_bridge.h"
+#include "host_pcm_iso.h"
 
 extern uint8_t usb_hid_polling_interval_ms_value;
-
-#ifndef DS5_AUDIO_DEBUG_ENABLED
-#define DS5_AUDIO_DEBUG_ENABLED 0
-#endif
-#ifndef DS5_TRIGGER_TRACE_ENABLED
-#define DS5_TRIGGER_TRACE_ENABLED 0
-#endif
-#ifndef DS5_FEEDBACK_TRACE_ENABLED
-#define DS5_FEEDBACK_TRACE_ENABLED 0
+#ifdef ENABLE_COMPANION
+extern uint16_t host_bridge_get_report(uint8_t report_id, uint8_t *buffer, uint16_t reqlen);
+extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #endif
 
-#define CONFIG_TOTAL_LEN_STANDARD 0x00E3
-#define CONFIG_TOTAL_LEN_COMPANION 0x011C
-#define COMPANION_HID_REPORT_DESC_LEN \
-    (0x0040 \
-        + (DS5_TRIGGER_TRACE_ENABLED ? 0x0008 : 0) \
-        + (DS5_FEEDBACK_TRACE_ENABLED ? 0x0008 : 0) \
-        + (DS5_AUDIO_DEBUG_ENABLED ? 0x0010 : 0))
+#define CONFIG_TOTAL_LEN_STANDARD 0x0148
+#define RAW_PCM_RETURN_DESC_LEN 0x0065
+#define KEYBOARD_HID_DESC_LEN 0x0019
+#define VENDOR_PCM_DESC_LEN 0x0010
+#define VENDOR_BRIDGE_DESC_LEN 0x0010
+#define CONFIG_TOTAL_LEN_COMPANION (CONFIG_TOTAL_LEN_STANDARD - RAW_PCM_RETURN_DESC_LEN + KEYBOARD_HID_DESC_LEN + VENDOR_PCM_DESC_LEN + VENDOR_BRIDGE_DESC_LEN)
+#define VENDOR_PCM_INTERFACE_NUMBER HOST_PCM_ISO_INTERFACE_NUMBER
+#define VENDOR_BRIDGE_INTERFACE_NUMBER HOST_BRIDGE_INTERFACE_NUMBER
+#define VENDOR_PCM_EP_IN HOST_PCM_ISO_EP_IN
+#define VENDOR_BRIDGE_EP_OUT HOST_BRIDGE_EP_OUT
+#define VENDOR_MS_OS_VENDOR_REQUEST 0x20
+#define VENDOR_BRIDGE_CONTROL_GET_REPORT 0x31
+#define VENDOR_BRIDGE_CONTROL_SET_REPORT 0x32
+#define MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN 0x0084
+#define MS_OS_20_BRIDGE_FUNCTION_DESC_LEN 0x00A0
+#define VENDOR_MS_OS_20_DESC_LEN (0x00B2 + MS_OS_20_BRIDGE_FUNCTION_DESC_LEN)
+#define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
 #define KEYBOARD_HID_REPORT_DESC_LEN 0x002D
+
+#ifdef ENABLE_COMPANION
+#define GAMEPAD_INTERFACE_NUMBER 0x03
+#define KEYBOARD_HID_INTERFACE_NUMBER 0x04
+#else
+#define GAMEPAD_INTERFACE_NUMBER 0x05
+#endif
 
 //--------------------------------------------------------------------+
 // Device Descriptors
@@ -54,7 +68,11 @@ static tusb_desc_device_t const desc_device =
 {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
+#ifdef ENABLE_COMPANION
+    .bcdUSB = 0x0210,
+#else
     .bcdUSB = 0x0200,
+#endif
 
     // Use Interface Association Descriptor (IAD) for Audio
     // As required by USB Specs IAD's subclass must be common class (2) and protocol must be IAD (1)
@@ -101,11 +119,11 @@ uint8_t descriptor_configuration[] = {
     0x09, // bLength
     0x02, // bDescriptorType (CONFIGURATION)
 #ifdef ENABLE_COMPANION
-    CONFIG_TOTAL_LEN_COMPANION & 0xFF, (CONFIG_TOTAL_LEN_COMPANION >> 8) & 0xFF, // wTotalLength: 277
-    0x06, // bNumInterfaces: 6
+    CONFIG_TOTAL_LEN_COMPANION & 0xFF, (CONFIG_TOTAL_LEN_COMPANION >> 8) & 0xFF,
+    0x07, // bNumInterfaces: 7
 #else
-    CONFIG_TOTAL_LEN_STANDARD & 0xFF, (CONFIG_TOTAL_LEN_STANDARD >> 8) & 0xFF, // wTotalLength: 227
-    0x04, // bNumInterfaces: 4
+    CONFIG_TOTAL_LEN_STANDARD & 0xFF, (CONFIG_TOTAL_LEN_STANDARD >> 8) & 0xFF, // wTotalLength: 328
+    0x06, // bNumInterfaces: 6
 #endif
     0x01, // bConfigurationValue: 1
     0x00, // iConfiguration: 0
@@ -287,7 +305,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bDelay: 1 frame
     0x01, 0x00, // wFormatTag: PCM (0x0001)
 
-    // Format Type Descriptor (1-channel, 16-bit, 48kHz)
+    // Format Type Descriptor (1-channel, 16-bit mic)
     0x0B, // bLength: 11
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: FORMAT_TYPE
@@ -296,14 +314,17 @@ uint8_t descriptor_configuration[] = {
     0x02, // bSubframeSize: 2
     0x10, // bBitResolution: 16
     0x01, // bSamFreqType: 1
-    0x80, 0xBB, 0x00, // tSamFreq: 48000 Hz
+    CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_TX & 0xFF,
+    (CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_TX >> 8) & 0xFF,
+    (CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE_TX >> 16) & 0xFF,
 
     // Endpoint Descriptor (Audio IN: EP2)
     0x09, // bLength
     0x05, // bDescriptorType (ENDPOINT)
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
-    0x62, 0x00, // wMaxPacketSize: 98 bytes
+    CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN & 0xFF,
+    (CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN >> 8) & 0xFF,
     0x01, // bInterval: 1
     0x00, // bRefresh
     0x00, // bSynchAddress
@@ -316,10 +337,127 @@ uint8_t descriptor_configuration[] = {
     0x00, // Lock Delay Units
     0x00, 0x00, // Lock Delay
 
-    // --- INTERFACE DESCRIPTOR (3.0): HID (DualSense 5 Gamepad + Touchpad) ---
+#ifndef ENABLE_COMPANION
+    // --- INTERFACE DESCRIPTOR (3.0): Audio Control (Raw PCM Return) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
     0x03, // bInterfaceNumber: 3
+    0x00, // bAlternateSetting: 0
+    0x00, // bNumEndpoints: 0
+    0x01, // bInterfaceClass: Audio (0x01)
+    0x01, // bInterfaceSubClass: Audio Control (0x01)
+    0x00, // bInterfaceProtocol: 0x00
+    0x04, // iInterface: DS5 Bridge Raw PCM
+
+    // Class-specific AC Interface Header Descriptor
+    0x09, // bLength: 9
+    0x24, // bDescriptorType: CS_INTERFACE (0x24)
+    0x01, // bDescriptorSubtype: Header (0x01)
+    0x00, 0x01, // bcdADC: 1.00
+    0x28, 0x00, // wTotalLength: 40 (0x0028)
+    0x01, // bInCollection: 1 streaming interface
+    0x04, // baInterfaceNr(1): Interface 4
+
+    // Input Terminal Descriptor (Terminal ID 7: Raw PCM return)
+    0x0C, // bLength: 12
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x02, // bDescriptorSubtype: Input Terminal
+    0x07, // bTerminalID: 7
+    0x03, 0x06, // wTerminalType: Line Connector (0x0603)
+    0x00, // bAssocTerminal: 0
+    0x02, // bNrChannels: 2
+    0x03, 0x00, // wChannelConfig: L/R Front (0x0003)
+    0x00, // iChannelNames: 0
+    0x04, // iTerminal: DS5 Bridge Raw PCM
+
+    // Feature Unit Descriptor (Unit ID 8 <- from Terminal 7)
+    0x0A, // bLength: 10
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x06, // bDescriptorSubtype: Feature Unit
+    0x08, // bUnitID: 8
+    0x07, // bSourceID: 7
+    0x01, // bControlSize: 1
+    0x03, // bmaControls[0]: Master - Mute, Volume
+    0x00, // bmaControls[1]: Ch1 - no controls
+    0x00, // bmaControls[2]: Ch2 - no controls
+    0x00, // iFeature: 0
+
+    // Output Terminal Descriptor (Terminal ID 9: USB Streaming <- from Unit 8)
+    0x09, // bLength: 9
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x03, // bDescriptorSubtype: Output Terminal
+    0x09, // bTerminalID: 9
+    0x01, 0x01, // wTerminalType: USB Streaming (0x0101)
+    0x00, // bAssocTerminal: 0
+    0x08, // bSourceID: 8
+    0x00, // iTerminal: 0
+
+    // --- INTERFACE DESCRIPTOR (4.0): Audio Streaming IN (Raw PCM Return - Alternate 0) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    0x04, // bInterfaceNumber: 4
+    0x00, // bAlternateSetting: 0
+    0x00, // bNumEndpoints: 0
+    0x01, // bInterfaceClass: Audio
+    0x02, // bInterfaceSubClass: Audio Streaming
+    0x00, // bInterfaceProtocol
+    0x04, // iInterface: DS5 Bridge Raw PCM
+
+    // --- INTERFACE DESCRIPTOR (4.1): Audio Streaming IN (Raw PCM Return - Alternate 1) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    0x04, // bInterfaceNumber: 4
+    0x01, // bAlternateSetting: 1
+    0x01, // bNumEndpoints: 1
+    0x01, // bInterfaceClass: Audio
+    0x02, // bInterfaceSubClass: Audio Streaming
+    0x00, // bInterfaceProtocol
+    0x04, // iInterface: DS5 Bridge Raw PCM
+
+    // AS General Descriptor (for Interface 4.1)
+    0x07, // bLength: 7
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x01, // bDescriptorSubtype: AS_GENERAL
+    0x09, // bTerminalLink: connected to Terminal ID 9
+    0x01, // bDelay: 1 frame
+    0x01, 0x00, // wFormatTag: PCM (0x0001)
+
+    // Format Type Descriptor (2-channel, 16-bit, 48kHz)
+    0x0B, // bLength: 11
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x02, // bDescriptorSubtype: FORMAT_TYPE
+    0x01, // bFormatType: TYPE_I
+    0x02, // bNrChannels: 2
+    0x02, // bSubframeSize: 2
+    0x10, // bBitResolution: 16
+    0x01, // bSamFreqType: 1
+    0x80, 0xBB, 0x00, // tSamFreq: 48000 Hz
+
+    // Endpoint Descriptor (Raw PCM Return IN: EP8)
+    0x09, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    0x88, // bEndpointAddress: IN EP8
+    0x05, // bmAttributes: Isochronous, Asynchronous
+    0xC4, 0x00, // wMaxPacketSize: 196 bytes
+    0x01, // bInterval: 1
+    0x00, // bRefresh
+    0x00, // bSynchAddress
+
+    // Class-specific Audio Streaming Endpoint Descriptor (EP8)
+    0x07, // bLength
+    0x25, // bDescriptorType: CS_ENDPOINT
+    0x01, // bDescriptorSubtype: GENERAL
+    0x00, // Attributes: No controls
+    0x00, // Lock Delay Units
+    0x00, 0x00, // Lock Delay
+
+    // --- INTERFACE DESCRIPTOR (5.0): HID (DualSense 5 Gamepad + Touchpad) ---
+#else
+    // --- INTERFACE DESCRIPTOR (3.0): HID (DualSense 5 Gamepad + Touchpad) ---
+#endif
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    GAMEPAD_INTERFACE_NUMBER,
     0x00, // bAlternateSetting: 0
     0x02, // bNumEndpoints: 2 (IN + OUT)
     0x03, // bInterfaceClass: HID
@@ -357,52 +495,16 @@ uint8_t descriptor_configuration[] = {
     0x01, // bInterval: 1 (polling every 4ms -> 1ms)
 
 #ifdef ENABLE_COMPANION
-    // --- INTERFACE DESCRIPTOR (4.0): HID (DS5 Bridge Companion) ---
+    // --- INTERFACE DESCRIPTOR (4.0): HID (Bridge Keyboard) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
-    0x04, // bInterfaceNumber: 4
-    0x00, // bAlternateSetting: 0
-    0x02, // bNumEndpoints: 2 (IN + OUT)
-    0x03, // bInterfaceClass: HID
-    0x00, // bInterfaceSubClass: None
-    0x00, // bInterfaceProtocol: None
-    0x00, // iInterface
-
-    // HID Descriptor
-    0x09, // bLength
-    0x21, // bDescriptorType (HID)
-    0x11, 0x01, // bcdHID: 1.11
-    0x00, // bCountryCode: Not localized
-    0x01, // bNumDescriptors: 1 report descriptor
-    0x22, // bDescriptorType: Report
-    COMPANION_HID_REPORT_DESC_LEN & 0xFF, (COMPANION_HID_REPORT_DESC_LEN >> 8) & 0xFF,
-
-    // Endpoint Descriptor (Companion HID IN: EP5)
-    0x07, // bLength
-    0x05, // bDescriptorType (ENDPOINT)
-    0x85, // bEndpointAddress: IN EP5
-    0x03, // bmAttributes: Interrupt
-    0x40, 0x00, // wMaxPacketSize: 64
-    0x01, // bInterval: 1
-
-    // Endpoint Descriptor (Companion HID OUT: EP7)
-    0x07, // bLength
-    0x05, // bDescriptorType (ENDPOINT)
-    0x07, // bEndpointAddress: OUT EP7
-    0x03, // bmAttributes: Interrupt
-    0x40, 0x00, // wMaxPacketSize: 64
-    0x01, // bInterval: 1
-
-    // --- INTERFACE DESCRIPTOR (5.0): HID (Bridge Keyboard) ---
-    0x09, // bLength
-    0x04, // bDescriptorType (INTERFACE)
-    0x05, // bInterfaceNumber: 5
+    KEYBOARD_HID_INTERFACE_NUMBER,
     0x00, // bAlternateSetting: 0
     0x01, // bNumEndpoints: 1 (IN)
     0x03, // bInterfaceClass: HID
     0x01, // bInterfaceSubClass: Boot
     0x01, // bInterfaceProtocol: Keyboard
-    0x00, // iInterface
+    0x06, // iInterface: DS5 Bridge Keyboard
 
     // HID Descriptor
     0x09, // bLength
@@ -420,8 +522,50 @@ uint8_t descriptor_configuration[] = {
     0x03, // bmAttributes: Interrupt
     0x08, 0x00, // wMaxPacketSize: 8
     0x01, // bInterval: 1
+
+    // --- INTERFACE DESCRIPTOR (5.0): Vendor Bulk OUT (companion/control bridge) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    VENDOR_BRIDGE_INTERFACE_NUMBER,
+    0x00, // bAlternateSetting
+    0x01, // bNumEndpoints: Bulk OUT
+    0xFF, // bInterfaceClass: Vendor Specific
+    0x00, // bInterfaceSubClass
+    0x00, // bInterfaceProtocol
+    0x07, // iInterface: DS5 Bridge Control
+
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    VENDOR_BRIDGE_EP_OUT,
+    0x02, // bmAttributes: Bulk
+    0x40, 0x00, // wMaxPacketSize: 64
+    0x00, // bInterval: ignored for bulk
+
+    // --- INTERFACE DESCRIPTOR (6.0): Vendor Isochronous IN (PCM mirror) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    VENDOR_PCM_INTERFACE_NUMBER,
+    0x00, // bAlternateSetting
+    0x01, // bNumEndpoints: Iso IN
+    0xFF, // bInterfaceClass: Vendor Specific
+    0x00, // bInterfaceSubClass
+    0x00, // bInterfaceProtocol
+    0x05, // iInterface: DS5 Bridge PCM Iso
+
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    VENDOR_PCM_EP_IN,
+    0x05, // bmAttributes: Isochronous, asynchronous
+    HOST_PCM_ISO_PACKET_BYTES & 0xFF, (HOST_PCM_ISO_PACKET_BYTES >> 8) & 0xFF,
+    0x01, // bInterval: 1ms
 #endif
 };
+
+#ifdef ENABLE_COMPANION
+TU_VERIFY_STATIC(sizeof(descriptor_configuration) == CONFIG_TOTAL_LEN_COMPANION, "Incorrect companion config descriptor size");
+#else
+TU_VERIFY_STATIC(sizeof(descriptor_configuration) == CONFIG_TOTAL_LEN_STANDARD, "Incorrect standard config descriptor size");
+#endif
 
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
@@ -444,6 +588,158 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     }
     return descriptor_configuration;
 }
+
+#ifdef ENABLE_COMPANION
+//--------------------------------------------------------------------+
+// BOS / Microsoft OS 2.0 descriptors for automatic WinUSB binding
+//--------------------------------------------------------------------+
+
+uint8_t const desc_bos[] = {
+    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+    TUD_BOS_MS_OS_20_DESCRIPTOR(VENDOR_MS_OS_20_DESC_LEN, VENDOR_MS_OS_VENDOR_REQUEST)
+};
+
+uint8_t const *tud_descriptor_bos_cb(void) {
+    return desc_bos;
+}
+
+uint8_t const desc_ms_os_20[] = {
+    // Set header: length, type, Windows version, total length.
+    U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR),
+    U32_TO_U8S_LE(0x06030000), U16_TO_U8S_LE(VENDOR_MS_OS_20_DESC_LEN),
+
+    // Configuration subset header.
+    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION),
+    0, 0, U16_TO_U8S_LE(VENDOR_MS_OS_20_DESC_LEN - 0x0A),
+
+    // Function subset header for the vendor PCM interface.
+    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),
+    VENDOR_PCM_INTERFACE_NUMBER, 0,
+    U16_TO_U8S_LE(MS_OS_20_BRIDGE_FUNCTION_DESC_LEN),
+
+    // Compatible ID: bind this interface to WinUSB.
+    U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
+    'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+    // Registry property: DeviceInterfaceGUIDs = {D5B7C5F4-8A68-4A86-9E31-1E5FA7B1D5B0}.
+    U16_TO_U8S_LE(MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN),
+    U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
+    U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A),
+    'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00,
+    'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
+    'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00,
+    'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00,
+    0x00, 0x00,
+    U16_TO_U8S_LE(0x0050),
+    '{', 0x00, 'D', 0x00, '5', 0x00, 'B', 0x00, '7', 0x00,
+    'C', 0x00, '5', 0x00, 'F', 0x00, '4', 0x00, '-', 0x00,
+    '8', 0x00, 'A', 0x00, '6', 0x00, '8', 0x00, '-', 0x00,
+    '4', 0x00, 'A', 0x00, '8', 0x00, '6', 0x00, '-', 0x00,
+    '9', 0x00, 'E', 0x00, '3', 0x00, '1', 0x00, '-', 0x00,
+    '1', 0x00, 'E', 0x00, '5', 0x00, 'F', 0x00, 'A', 0x00,
+    '7', 0x00, 'B', 0x00, '1', 0x00, 'D', 0x00, '5', 0x00,
+    'B', 0x00, '0', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00,
+
+    // Function subset header for the companion/control bridge interface.
+    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),
+    VENDOR_BRIDGE_INTERFACE_NUMBER, 0,
+    U16_TO_U8S_LE(MS_OS_20_BRIDGE_FUNCTION_DESC_LEN),
+
+    // Compatible ID: bind this interface to WinUSB.
+    U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
+    'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+    // Registry property: DeviceInterfaceGUIDs = {E4C8B2A9-87F5-4C4C-9E52-2B4C1B8B4F62}.
+    U16_TO_U8S_LE(MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN),
+    U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
+    U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A),
+    'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00,
+    'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
+    'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00,
+    'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00,
+    0x00, 0x00,
+    U16_TO_U8S_LE(0x0050),
+    '{', 0x00, 'E', 0x00, '4', 0x00, 'C', 0x00, '8', 0x00,
+    'B', 0x00, '2', 0x00, 'A', 0x00, '9', 0x00, '-', 0x00,
+    '8', 0x00, '7', 0x00, 'F', 0x00, '5', 0x00, '-', 0x00,
+    '4', 0x00, 'C', 0x00, '4', 0x00, 'C', 0x00, '-', 0x00,
+    '9', 0x00, 'E', 0x00, '5', 0x00, '2', 0x00, '-', 0x00,
+    '2', 0x00, 'B', 0x00, '4', 0x00, 'C', 0x00, '1', 0x00,
+    'B', 0x00, '8', 0x00, 'B', 0x00, '4', 0x00, 'F', 0x00,
+    '6', 0x00, '2', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == VENDOR_MS_OS_20_DESC_LEN, "Incorrect MS OS 2.0 descriptor size");
+
+static CFG_TUD_MEM_ALIGN uint8_t vendor_bridge_control_buffer[64];
+static uint16_t vendor_bridge_control_len = 0;
+
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+    if (request == NULL || request->bmRequestType_bit.type != TUSB_REQ_TYPE_VENDOR) {
+        return false;
+    }
+
+    if (
+        stage == CONTROL_STAGE_ACK
+        && request->bRequest == VENDOR_BRIDGE_CONTROL_SET_REPORT
+        && request->wIndex == VENDOR_BRIDGE_INTERFACE_NUMBER
+        && request->bmRequestType_bit.direction == TUSB_DIR_OUT
+    ) {
+        host_bridge_set_report(vendor_bridge_control_buffer, vendor_bridge_control_len);
+        vendor_bridge_control_len = 0;
+        return true;
+    }
+
+    if (stage != CONTROL_STAGE_SETUP) {
+        return true;
+    }
+
+    if (request->bRequest == VENDOR_MS_OS_VENDOR_REQUEST && request->wIndex == 7) {
+        return tud_control_xfer(
+            rhport,
+            request,
+            (void *)(uintptr_t)desc_ms_os_20,
+            VENDOR_MS_OS_20_DESC_LEN
+        );
+    }
+
+    if (request->wIndex != VENDOR_BRIDGE_INTERFACE_NUMBER) {
+        return false;
+    }
+
+    if (
+        request->bRequest == VENDOR_BRIDGE_CONTROL_GET_REPORT
+        && request->bmRequestType_bit.direction == TUSB_DIR_IN
+    ) {
+        const uint16_t max_len = request->wLength < sizeof(vendor_bridge_control_buffer)
+            ? request->wLength
+            : sizeof(vendor_bridge_control_buffer);
+        const uint16_t report_len = host_bridge_get_report(
+            (uint8_t)(request->wValue & 0xff),
+            vendor_bridge_control_buffer,
+            max_len
+        );
+        if (report_len == 0) {
+            return false;
+        }
+        return tud_control_xfer(rhport, request, vendor_bridge_control_buffer, report_len);
+    }
+
+    if (
+        request->bRequest == VENDOR_BRIDGE_CONTROL_SET_REPORT
+        && request->bmRequestType_bit.direction == TUSB_DIR_OUT
+    ) {
+        vendor_bridge_control_len = request->wLength < sizeof(vendor_bridge_control_buffer)
+            ? request->wLength
+            : sizeof(vendor_bridge_control_buffer);
+        return tud_control_xfer(rhport, request, vendor_bridge_control_buffer, vendor_bridge_control_len);
+    }
+
+    return false;
+}
+#endif
 
 //--------------------------------------------------------------------+
 // HID Report Descriptor
@@ -598,62 +894,6 @@ uint8_t const desc_hid_report_ds[] = {
 #endif
 
 #ifdef ENABLE_COMPANION
-uint8_t const desc_hid_report_companion[] = {
-    0x06, 0x5D, 0xFF, // Usage Page (Vendor Defined 0xFF5D)
-    0x0A, 0x01, 0x00, // Usage (0x0001)
-    0xA1, 0x01, // Collection (Application)
-    0x15, 0x00, //   Logical Minimum (0)
-    0x26, 0xFF, 0x00, //   Logical Maximum (255)
-    0x75, 0x08, //   Report Size (8)
-    0x85, 0x01, //   Report ID (1)
-    0x09, 0x01, //   Usage (Status)
-    0x95, 0x3F, //   Report Count (63)
-    0xB1, 0x02, //   Feature (Data,Var,Abs)
-    0x85, 0x02, //   Report ID (2)
-    0x09, 0x02, //   Usage (Command)
-    0x95, 0x3F, //   Report Count (63)
-    0xB1, 0x02, //   Feature (Data,Var,Abs)
-    0x85, 0x03, //   Report ID (3)
-    0x09, 0x03, //   Usage (Ack)
-    0x95, 0x3F, //   Report Count (63)
-    0xB1, 0x02, //   Feature (Data,Var,Abs)
-    0x85, 0x08, //   Report ID (8)
-    0x09, 0x08, //   Usage (Host Audio Status)
-    0x95, 0x3F, //   Report Count (63)
-    0xB1, 0x02, //   Feature (Data,Var,Abs)
-#if DS5_TRIGGER_TRACE_ENABLED
-    0x85, 0x09, //   Report ID (9)
-    0x09, 0x09, //   Usage (Trigger Trace)
-    0x95, 0x3F, //   Report Count (63)
-    0xB1, 0x02, //   Feature (Data,Var,Abs)
-#endif
-#if DS5_FEEDBACK_TRACE_ENABLED
-    0x85, 0x0A, //   Report ID (10)
-    0x09, 0x0A, //   Usage (Feedback Trace)
-    0x95, 0x3F, //   Report Count (63)
-    0xB1, 0x02, //   Feature (Data,Var,Abs)
-#endif
-#if DS5_AUDIO_DEBUG_ENABLED
-    0x85, 0x05, //   Report ID (5)
-    0x09, 0x05, //   Usage (Audio Debug)
-    0x95, 0x3F, //   Report Count (63)
-    0xB1, 0x02, //   Feature (Data,Var,Abs)
-    0x85, 0x06, //   Report ID (6)
-    0x09, 0x06, //   Usage (Audio Stats)
-    0x95, 0x3F, //   Report Count (63)
-    0xB1, 0x02, //   Feature (Data,Var,Abs)
-#endif
-    0x85, 0x04, //   Report ID (4)
-    0x09, 0x04, //   Usage (Compatibility Input)
-    0x95, 0x01, //   Report Count (1)
-    0x81, 0x02, //   Input (Data,Var,Abs)
-    0x85, 0x07, //   Report ID (7)
-    0x09, 0x07, //   Usage (Host Audio Stream)
-    0x95, 0x3F, //   Report Count (63)
-    0x91, 0x02, //   Output (Data,Var,Abs)
-    0xC0, // End Collection
-};
-
 uint8_t const desc_hid_report_keyboard[] = {
     0x05, 0x01, // Usage Page (Generic Desktop)
     0x09, 0x06, // Usage (Keyboard)
@@ -893,9 +1133,6 @@ uint8_t const desc_hid_report_dse[] = {
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
 #ifdef ENABLE_COMPANION
     if (itf == 1) {
-        return desc_hid_report_companion;
-    }
-    if (itf == 2) {
         return desc_hid_report_keyboard;
     }
 #else
@@ -918,6 +1155,8 @@ enum {
     STRID_MANUFACTURER,
     STRID_PRODUCT,
     STRID_SERIAL,
+    STRID_RAW_PCM,
+    STRID_BULK_PCM,
 };
 
 // array of pointer to string descriptors
@@ -931,6 +1170,10 @@ static char const *string_desc_arr[] =
     "DualSense Wireless Controller", // 2: Product
 #endif
     NULL, // 3: Serials will use unique ID if possible
+    "DS5 Bridge Raw PCM", // 4: Raw PCM Line endpoint
+    "DS5 Bridge PCM Iso", // 5: WinUSB PCM interface
+    "DS5 Bridge Keyboard", // 6: Keyboard HID interface
+    "DS5 Bridge Control", // 7: WinUSB companion/control interface
 };
 
 static uint16_t _desc_str[60 + 1];

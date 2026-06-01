@@ -5,6 +5,11 @@
     <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <ApplicationIcon>Assets\ds5-audio-bridge.ico</ApplicationIcon>
+    <AssemblyTitle>DS5 Bridge Host Audio</AssemblyTitle>
+    <Description>DS5 Bridge Host Audio</Description>
+    <Product>DS5 Bridge Host Audio</Product>
+    <Company>DS5 Bridge</Company>
   </PropertyGroup>
 
   <ItemGroup>

@@ -5,7 +5,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BridgeService } from './bridge-service';
 import { SettingsStore } from './settings-store';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
+import type {
+  AdaptiveTriggerPreviewEffect,
+  BridgePresetId,
+  MuteButtonMode,
+  MuteKeyboardBehavior,
+  PollingRateMode,
+  RemapButtonId,
+  TriggerTestMode,
+  TriggerTestTarget
+} from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
 import type { UiScalePercent } from '../shared/types';
 
@@ -51,6 +60,14 @@ function createImageAsset(relativePath: string): Electron.NativeImage {
 
 function createRuntimeIcon(): Electron.NativeImage {
   return createImageAsset(APP_MARK_PNG);
+}
+
+function sendToMainWindow(channel: string, ...args: unknown[]): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+    return;
+  }
+  window.webContents.send(channel, ...args);
 }
 
 async function createTrayIcon(): Promise<Electron.NativeImage> {
@@ -511,6 +528,9 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:setHapticsGain', (_event, value: number) => service.setHapticsGain(value));
   ipcMain.handle('bridge:setHapticsEnabled', (_event, value: boolean) => service.setHapticsEnabled(value));
+  ipcMain.handle('bridge:setFeedbackBoostEnabled', (_event, value: boolean) => (
+    service.setFeedbackBoostEnabled(value)
+  ));
   ipcMain.handle('bridge:setHapticsBufferLength', (_event, value: number) => service.setHapticsBufferLength(value));
   ipcMain.handle('bridge:setClassicRumbleGain', (_event, value: number) => service.setClassicRumbleGain(value));
   ipcMain.handle('bridge:setClassicRumbleEnabled', (_event, value: boolean) => service.setClassicRumbleEnabled(value));
@@ -588,6 +608,12 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:testClassicRumble', () => service.testClassicRumble());
   ipcMain.handle('bridge:testAdaptiveTriggers', (_event, value?: TriggerTestMode, target?: TriggerTestTarget) => (
     service.testAdaptiveTriggers(value, target)
+  ));
+  ipcMain.handle('bridge:previewAdaptiveTriggerEffect', (_event, effect: AdaptiveTriggerPreviewEffect) => (
+    service.previewAdaptiveTriggerEffect(effect)
+  ));
+  ipcMain.handle('bridge:applyAdaptiveTriggerEffect', (_event, effect: AdaptiveTriggerPreviewEffect) => (
+    service.applyAdaptiveTriggerEffect(effect)
   ));
   ipcMain.handle('bridge:resetAdaptiveTriggers', () => service.resetAdaptiveTriggers());
   ipcMain.handle('bridge:restoreDefaults', async () => {
@@ -668,7 +694,7 @@ app.whenReady().then(async () => {
   tray.on('click', showWindowCentered);
 
   bridgeService.on('snapshot', (snapshot) => {
-    mainWindow?.webContents.send('bridge:snapshot', snapshot);
+    sendToMainWindow('bridge:snapshot', snapshot);
   });
   bridgeService.on('toast', (toast) => {
     showBridgeNotification(toast);

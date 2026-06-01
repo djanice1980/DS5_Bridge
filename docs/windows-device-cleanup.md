@@ -79,6 +79,7 @@ By default, the script lists or removes non-present instances matching:
 - `VID_054C&PID_0CE6`.
 - `VID_054C&PID_0DF2`.
 - DualSense-named Windows audio endpoints.
+- DS5 Bridge-named Windows audio endpoints and System devices.
 
 It does not remove currently present `Status = OK` entries unless
 `-IncludePresent` is supplied.

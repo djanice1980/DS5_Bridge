@@ -21,6 +21,7 @@ export interface CompanionSettings {
   launchAtStartupEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
+  feedbackBoostEnabled: boolean;
   hapticsBufferLength: number;
   classicRumbleEnabled: boolean;
   classicRumbleGainPercent: number;
@@ -85,6 +86,8 @@ export interface BridgeDiagnostics {
   lastError: string | null;
   lastPollAt: number | null;
   rawDevices: HidDeviceSummary[];
+  hostAudioCaptureIssue: HostAudioCaptureIssue | null;
+  hostAudioCaptureRetry: HostAudioCaptureRetry | null;
   audioDebugLogPath: string | null;
   audioDebugLogLines: string[];
   audioDebugDroppedCount: number;
@@ -94,6 +97,18 @@ export interface BridgeDiagnostics {
   feedbackTraceLines: string[];
   feedbackTraceDroppedCount: number;
   hostAudioStatus: HostAudioStatusPayload | null;
+}
+
+export interface HostAudioCaptureIssue {
+  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'start-timeout' | 'helper-exit';
+  message: string;
+  retryAt: number;
+}
+
+export interface HostAudioCaptureRetry {
+  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'start-timeout' | 'helper-exit';
+  message: string;
+  retryAt: number;
 }
 
 export interface BridgeSnapshot {
