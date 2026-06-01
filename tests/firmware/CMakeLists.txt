@@ -19,6 +19,14 @@ target_include_directories(firmware_logic_tests PRIVATE
     ../../src
 )
 
+add_executable(usb_descriptor_migration_test
+    usb_descriptor_migration_test.cpp
+)
+
+target_compile_definitions(usb_descriptor_migration_test PRIVATE
+    DS5_SOURCE_ROOT="${CMAKE_CURRENT_LIST_DIR}/../.."
+)
+
 if(MSVC)
     target_compile_options(firmware_logic_tests PRIVATE /W4)
 else()
@@ -27,3 +35,4 @@ endif()
 
 enable_testing()
 add_test(NAME firmware_logic_tests COMMAND firmware_logic_tests)
+add_test(NAME usb_descriptor_migration_test COMMAND usb_descriptor_migration_test)
