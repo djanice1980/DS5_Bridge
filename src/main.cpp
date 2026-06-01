@@ -382,6 +382,7 @@ int main() {
         audio_loop();
         bt_lightbar_loop();
         bt_signal_strength_loop();
+        bt_inquiry_loop();
         bt_connection_recovery_loop();
 #ifdef ENABLE_COMPANION
         companion_loop();

@@ -109,6 +109,8 @@
 #define OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET 46
 #define RSSI_POLL_INTERVAL_US 2000000u
 #define RSSI_REQUEST_TIMEOUT_US 1000000u
+#define INQUIRY_RETRY_DELAY_US 2000000u
+#define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
 #define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
 
@@ -232,8 +234,12 @@ static bool audio_output_route_protected();
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
-static bool device_found = false;
+static bool device_found = false; // Outbound inquiry target found; do not set for incoming ACL requests.
 static bool new_pair = false; // Only newly paired devices create channels; auto-reconnect uses the services.
+static bool inquiry_active = false;
+static uint32_t inquiry_retry_at_us = 0;
+static bool acl_connection_pending = false;
+static uint32_t acl_connection_pending_at_us = 0;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
@@ -349,6 +355,46 @@ static void update_queue_depth_counters_locked() {
 
 static uint32_t packet_age_us(uint32_t now, uint32_t enqueue_time_us) {
     return static_cast<uint32_t>(now - enqueue_time_us);
+}
+
+static bool bt_time_reached(uint32_t now, uint32_t target) {
+    return static_cast<int32_t>(now - target) >= 0;
+}
+
+static void clear_acl_connection_pending() {
+    acl_connection_pending = false;
+    acl_connection_pending_at_us = 0;
+}
+
+static void mark_acl_connection_pending() {
+    acl_connection_pending = true;
+    acl_connection_pending_at_us = time_us_32();
+}
+
+static void clear_outbound_inquiry_target() {
+    device_found = false;
+    new_pair = false;
+}
+
+static void schedule_inquiry_retry(uint32_t delay_us = INQUIRY_RETRY_DELAY_US) {
+    inquiry_active = false;
+    inquiry_retry_at_us = time_us_32() + delay_us;
+}
+
+static void start_inquiry_if_needed() {
+    if (
+        inquiry_active
+        || device_found
+        || acl_connection_pending
+        || acl_handle != HCI_CON_HANDLE_INVALID
+        || usb_pm_should_pause_inquiry()
+    ) {
+        return;
+    }
+
+    DS5_LOG("[HCI] Start inquiry\n");
+    gap_inquiry_start(30);
+    inquiry_active = true;
 }
 
 static uint8_t clamp_output_trace_u8(uint32_t value) {
@@ -1085,6 +1131,34 @@ void bt_connection_recovery_loop() {
     schedule_hid_channel_recovery();
 }
 
+void bt_inquiry_loop() {
+    const uint32_t now = time_us_32();
+    if (
+        acl_connection_pending
+        && acl_handle == HCI_CON_HANDLE_INVALID
+        && bt_time_reached(now, acl_connection_pending_at_us + ACL_CONNECTION_PENDING_TIMEOUT_US)
+    ) {
+        DS5_LOG("[HCI] ACL connection pending timed out, restart inquiry\n");
+        clear_outbound_inquiry_target();
+        clear_acl_connection_pending();
+        schedule_inquiry_retry(0);
+    }
+
+    if (
+        inquiry_active
+        || device_found
+        || acl_connection_pending
+        || acl_handle != HCI_CON_HANDLE_INVALID
+        || usb_pm_should_pause_inquiry()
+    ) {
+        return;
+    }
+
+    if (inquiry_retry_at_us == 0 || bt_time_reached(now, inquiry_retry_at_us)) {
+        start_inquiry_if_needed();
+    }
+}
+
 int bt_init() {
     critical_section_init(&queue_lock);
 
@@ -1116,8 +1190,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t state = btstack_event_state_get_state(packet);
             DS5_LOG("[BT] State: %u\n", state);
             if (state == HCI_STATE_WORKING) {
-                DS5_LOG("[BT] Stack ready, start inquiry\n");
-                gap_inquiry_start(30);
+                DS5_LOG("[BT] Stack ready\n");
+                schedule_inquiry_retry(0);
+                start_inquiry_if_needed();
             }
             break;
         }
@@ -1139,10 +1214,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             }
 
             // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
-            if ((cod & 0x000F00) == 0x000500) {
+            if (
+                (cod & 0x000F00) == 0x000500
+                && !acl_connection_pending
+                && acl_handle == HCI_CON_HANDLE_INVALID
+            ) {
                 DS5_LOG("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
                 bd_addr_copy(current_device_addr, addr);
                 device_found = true;
+                inquiry_active = false;
                 gap_inquiry_stop();
             }
             break;
@@ -1151,11 +1231,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case GAP_EVENT_INQUIRY_COMPLETE:
         case HCI_EVENT_INQUIRY_COMPLETE: {
             DS5_LOG("[HCI] Inquiry complete\n");
-            if (device_found) {
+            inquiry_active = false;
+            if (device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
+                mark_acl_connection_pending();
                 HCI_SEND_CMD_LOGGED(&hci_create_connection, current_device_addr,
                              hci_usable_acl_packet_types(), 0, 0, 0, 1);
+            } else if (!device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
+                schedule_inquiry_retry();
             }
             break;
         }
@@ -1163,11 +1247,14 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t status = hci_event_command_status_get_status(packet);
             const uint16_t opcode = hci_event_command_status_get_command_opcode(packet);
             DS5_LOG("[HCI] CmdStatus %s(0x%04X) status=0x%02X\n", opcode_to_str(opcode), opcode, status);
-            if (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION && status != ERROR_CODE_SUCCESS) {
-                device_found = false;
-                new_pair = false;
-                DS5_LOG("[HCI] Create connection rejected, restart inquiry\n");
-                // gap_inquiry_start(30);
+            if (
+                (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION || opcode == HCI_OPCODE_HCI_ACCEPT_CONNECTION_REQUEST)
+                && status != ERROR_CODE_SUCCESS
+            ) {
+                clear_outbound_inquiry_target();
+                clear_acl_connection_pending();
+                DS5_LOG("[HCI] ACL connection command rejected, restart inquiry\n");
+                schedule_inquiry_retry();
             }
             break;
         }
@@ -1188,15 +1275,17 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 bt_rssi_known = false;
                 bt_rssi_request_pending = false;
                 bt_rssi_last_request_us = 0;
+                clear_acl_connection_pending();
+                device_found = false;
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
                 DS5_LOG("[HCI] ACL connected handle=0x%04X\n", handle);
                 DS5_LOG("[HCI] Request authentication on handle=0x%04X\n", handle);
                 HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
             } else {
-                device_found = false;
-                new_pair = false;
+                clear_outbound_inquiry_target();
+                clear_acl_connection_pending();
                 DS5_LOG("[HCI] ACL connect failed status=0x%02X, restart inquiry\n", status);
-                // gap_inquiry_start(30);
+                schedule_inquiry_retry();
             }
             break;
         }
@@ -1241,7 +1330,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (status != ERROR_CODE_SUCCESS) {
                 DS5_LOG("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
                 gap_drop_link_key_for_bd_addr(current_device_addr);
-                gap_inquiry_start(30);
+                clear_outbound_inquiry_target();
+                clear_acl_connection_pending();
+                schedule_inquiry_retry();
             } else {
                 HCI_SEND_CMD_LOGGED(&hci_set_connection_encryption, handle, 1);
             }
@@ -1270,6 +1361,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             DS5_LOG("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
+                clear_outbound_inquiry_target();
+                mark_acl_connection_pending();
+                inquiry_active = false;
                 gap_inquiry_stop();
                 HCI_SEND_CMD_LOGGED(&hci_accept_connection_request, addr, 0x01);
             }
@@ -1282,8 +1376,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             gap_connectable_control(1);
             gap_discoverable_control(1);
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
-            device_found = false;
-            new_pair = false;
+            clear_outbound_inquiry_target();
+            clear_acl_connection_pending();
+            inquiry_active = false;
             acl_handle = HCI_CON_HANDLE_INVALID;
             bt_rssi = 0;
             bt_rssi_known = false;
@@ -1597,7 +1692,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 hid_interrupt_ready = false;
                 hid_channel_recovery_pending = false;
                 hid_channel_recovery_attempts = 0;
-                device_found = false;
+                clear_outbound_inquiry_target();
                 DS5_LOG("[L2CAP] Open failed psm=0x%04X status=0x%02X\n", psm, status);
                 bt_disconnect();
             }

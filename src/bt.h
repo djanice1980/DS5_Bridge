@@ -88,6 +88,7 @@ void bt_reset_adaptive_triggers();
 void bt_schedule_lightbar_restore(uint32_t delay_ms);
 void bt_lightbar_loop();
 void bt_signal_strength_loop();
+void bt_inquiry_loop();
 void bt_connection_recovery_loop();
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
