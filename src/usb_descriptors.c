@@ -94,7 +94,9 @@ static tusb_desc_device_t const desc_device =
 #else
     .idProduct = 0x0CE6,
 #endif
-    .bcdDevice = 0x0100,
+    // v1.5 changed the interface layout enough that Windows upgrade installs
+    // can keep stale v1.0.x bindings unless the USB device revision changes.
+    .bcdDevice = 0x0151,
 
     .iManufacturer = 0x01,
     .iProduct = 0x02,
