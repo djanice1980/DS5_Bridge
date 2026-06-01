@@ -12,6 +12,7 @@
 #include "controller_output_state.h"
 #include "controller_packet_compositor.h"
 #include "dualsense_output.h"
+#include "haptics_test_signal.h"
 #include "host_audio_runtime.h"
 #include "output_scheduler.h"
 
@@ -86,10 +87,41 @@ void expect_false(bool condition, char const *expr, char const *file, int line) 
 using Payload = std::array<uint8_t, kCommonPayloadSize>;
 using AudioSnapshot = std::array<uint8_t, kAudioStateSnapshotSize>;
 using BtReport = std::array<uint8_t, kBtOutputReportSize>;
+using HapticFrame = std::array<int8_t, 64>;
 
 Payload empty_payload() {
     Payload payload{};
     return payload;
+}
+
+uint8_t haptic_frame_peak(HapticFrame const &frame) {
+    uint8_t peak = 0;
+    for (int8_t sample : frame) {
+        const uint8_t magnitude = sample < 0
+            ? static_cast<uint8_t>(-static_cast<int16_t>(sample))
+            : static_cast<uint8_t>(sample);
+        if (magnitude > peak) {
+            peak = magnitude;
+        }
+    }
+    return peak;
+}
+
+uint8_t haptic_frame_left_sign_flips(HapticFrame const &frame) {
+    uint8_t flips = 0;
+    int8_t previous_sign = 0;
+    for (uint8_t index = 0; index < frame.size(); index += 2) {
+        const int8_t sample = frame[index];
+        const int8_t sign = sample > 0 ? 1 : (sample < 0 ? -1 : 0);
+        if (sign == 0) {
+            continue;
+        }
+        if (previous_sign != 0 && sign != previous_sign) {
+            flips++;
+        }
+        previous_sign = sign;
+    }
+    return flips;
 }
 
 void reset_policy_state() {
@@ -405,6 +437,45 @@ void output_state_clear_triggers_removes_effect_bytes_flags_and_power() {
     }
 }
 
+void haptics_test_signal_matches_original_main_packet_flip_pattern() {
+    HapticFrame first{};
+    HapticFrame second{};
+    HapticFrame boosted{};
+
+    haptics_test_signal_fill(first.data(), first.size(), 0, 36, 72, 100);
+    haptics_test_signal_fill(second.data(), second.size(), 1, 36, 72, 100);
+    haptics_test_signal_fill(boosted.data(), boosted.size(), 8, 36, 72, 500);
+
+    EXPECT_EQ(haptic_frame_peak(first), 72);
+    EXPECT_EQ(haptic_frame_peak(second), 72);
+    EXPECT_EQ(haptic_frame_peak(boosted), 127);
+    EXPECT_EQ(first[0], -72);
+    EXPECT_EQ(first[1], 72);
+    EXPECT_EQ(second[0], 72);
+    EXPECT_EQ(second[1], -72);
+}
+
+void haptics_test_signal_is_constant_inside_each_original_packet() {
+    HapticFrame sustain{};
+    haptics_test_signal_fill(sustain.data(), sustain.size(), 8, 36, 72, 100);
+
+    EXPECT_EQ(haptic_frame_left_sign_flips(sustain), 0);
+}
+
+void haptics_test_signal_drives_left_and_right_actuators_opposite_phase() {
+    HapticFrame frame{};
+    haptics_test_signal_fill(frame.data(), frame.size(), 8, 36, 72, 100);
+
+    for (uint8_t index = 0; index < frame.size(); index += 2) {
+        EXPECT_EQ(frame[index], static_cast<int8_t>(-frame[index + 1]));
+    }
+
+    haptics_test_signal_fill(frame.data(), frame.size(), 8, 36, 72, 0);
+    for (int8_t sample : frame) {
+        EXPECT_EQ(sample, 0);
+    }
+}
+
 void host_audio_runtime_heartbeat_and_start_grace_are_strict_windows() {
     HostAudioRuntimeState runtime{};
     EXPECT_FALSE(runtime.heartbeat_healthy(1'000, 500));
@@ -466,17 +537,21 @@ void host_audio_runtime_blocks_local_haptics_only_while_stream_owns_audio_path()
     EXPECT_FALSE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
 
     runtime.mode = AudioRuntimeHostEncodedActive;
-    EXPECT_TRUE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
+    runtime.stream_active = true;
+    runtime.stream_started_us = 30'000;
+    runtime.last_frame_us = 0;
+    EXPECT_TRUE(runtime.blocks_local_haptics_test(30'500, kFrameRecentUs, kStartGraceUs));
+    EXPECT_FALSE(runtime.blocks_local_haptics_test(30'000 + kStartGraceUs, kFrameRecentUs, kStartGraceUs));
+
+    runtime.last_frame_us = 40'000;
+    runtime.stream_started_us = 0;
+    EXPECT_TRUE(runtime.blocks_local_haptics_test(40'000 + kFrameRecentUs - 1, kFrameRecentUs, kStartGraceUs));
+    EXPECT_FALSE(runtime.blocks_local_haptics_test(40'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
 
     runtime.mode = AudioRuntimeFallbackPicoLocal;
-    runtime.stream_active = true;
-    EXPECT_TRUE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
-
     runtime.requested = false;
-    EXPECT_TRUE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
-
     runtime.stream_active = false;
-    EXPECT_FALSE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
+    EXPECT_FALSE(runtime.blocks_local_haptics_test(40'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
 }
 
 struct TestCase {
@@ -499,6 +574,9 @@ std::vector<TestCase> tests{
     {"output state lightbar override is scaled and survives audio snapshot", output_state_lightbar_override_is_scaled_and_survives_audio_snapshot},
     {"output state clears zero rumble flags but preserves nonzero rumble", output_state_clears_zero_rumble_flags_but_preserves_nonzero_rumble},
     {"output state clear triggers removes effect bytes flags and power", output_state_clear_triggers_removes_effect_bytes_flags_and_power},
+    {"haptics test signal matches original main packet flip pattern", haptics_test_signal_matches_original_main_packet_flip_pattern},
+    {"haptics test signal is constant inside each original packet", haptics_test_signal_is_constant_inside_each_original_packet},
+    {"haptics test signal drives left and right actuators opposite phase", haptics_test_signal_drives_left_and_right_actuators_opposite_phase},
     {"host audio runtime heartbeat and start grace are strict windows", host_audio_runtime_heartbeat_and_start_grace_are_strict_windows},
     {"host audio runtime last contact uses newest timestamp across wraparound", host_audio_runtime_last_contact_uses_newest_timestamp_across_wraparound},
     {"host audio runtime generation never wraps to zero", host_audio_runtime_generation_never_wraps_to_zero},

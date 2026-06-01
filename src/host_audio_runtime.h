@@ -27,17 +27,15 @@ struct HostAudioRuntimeState {
         return started != 0 && static_cast<uint32_t>(now - started) < grace_us;
     }
 
+    bool frame_recent(uint32_t now, uint32_t frame_recent_us) const {
+        return last_frame_us != 0 && static_cast<uint32_t>(now - last_frame_us) < frame_recent_us;
+    }
+
     bool blocks_local_haptics_test(uint32_t now, uint32_t frame_recent_us, uint32_t start_grace_us) const {
-        if (mode == AudioRuntimeHostEncodedActive || stream_active) {
-            return true;
-        }
-        if (!requested) {
+        if (!requested && !stream_active && mode != AudioRuntimeHostEncodedActive) {
             return false;
         }
-        if (start_grace_active(now, start_grace_us)) {
-            return true;
-        }
-        return last_frame_us != 0 && static_cast<uint32_t>(now - last_frame_us) < frame_recent_us;
+        return start_grace_active(now, start_grace_us) || frame_recent(now, frame_recent_us);
     }
 
     uint32_t last_contact_us() const {

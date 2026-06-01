@@ -8,6 +8,7 @@
 #include "controller_packet_compositor.h"
 #include "controller_output_state.h"
 #include "dualsense_output.h"
+#include "haptics_test_signal.h"
 #include "host_audio_runtime.h"
 #include "host_pcm_iso.h"
 #ifdef ENABLE_COMPANION
@@ -467,6 +468,11 @@ static bool time_reached(uint32_t now, uint32_t target) {
 
 static uint8_t clamp_debug_u8(uint32_t value) {
     return value > 255 ? 255 : static_cast<uint8_t>(value);
+}
+
+static uint16_t current_haptics_gain_percent() {
+    const float gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
+    return static_cast<uint16_t>(gain * 100.0f + 0.5f);
 }
 
 static uint8_t percent_debug_u8(uint32_t part, uint32_t total) {
@@ -1311,16 +1317,15 @@ static bool merge_test_haptics_overlay(int8_t *destination) {
     if (sent_preroll_packet) {
         test_haptics_preroll_packets_remaining--;
     } else if (test_haptics_packets_remaining != 0) {
-        const bool positive_phase = (test_haptics_packets_remaining & 1) != 0;
-        const int amplitude = clamp(
-            static_cast<int>(TEST_HAPTICS_BASE_AMPLITUDE * clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN)),
-            0,
-            127
+        const uint8_t packet_index = static_cast<uint8_t>(TEST_HAPTICS_PACKET_COUNT - test_haptics_packets_remaining);
+        haptics_test_signal_fill(
+            overlay,
+            SAMPLE_SIZE,
+            packet_index,
+            TEST_HAPTICS_PACKET_COUNT,
+            TEST_HAPTICS_BASE_AMPLITUDE,
+            current_haptics_gain_percent()
         );
-        for (int i = 0; i < SAMPLE_SIZE; i += 2) {
-            overlay[i] = positive_phase ? amplitude : -amplitude;
-            overlay[i + 1] = positive_phase ? -amplitude : amplitude;
-        }
     }
 
     mix_haptics_overlay(destination, overlay);
@@ -1411,7 +1416,6 @@ bool audio_schedule_test_haptics() {
         && !time_reached(now, test_haptics_cooldown_until_us);
     if (
         quiet_mode_enabled
-        || usb_host_hid_output_recent()
         || test_haptics_active
         || haptics_cooling_down
     ) {

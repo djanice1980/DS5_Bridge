@@ -6,6 +6,8 @@
 
 #include "audio.h"
 #include "bt.h"
+#include "controller_output_submit.h"
+#include "dualsense_output.h"
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
@@ -326,6 +328,7 @@ LastAck last_ack;
 void clear_cached_game_trigger_effects();
 void reset_adaptive_trigger_test();
 bool persistent_trigger_effect_any_active();
+void stop_classic_rumble_test();
 
 uint16_t read_u16(uint8_t const *data) {
     return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
@@ -664,8 +667,7 @@ void restore_defaults() {
     volume[0] = DEFAULT_COMPANION_SPEAKER_GAIN;
     volume[1] = 1.0f;
     bt_set_classic_rumble_gain(100);
-    classic_rumble_test_active = false;
-    bt_set_classic_rumble_output(0, 0);
+    stop_classic_rumble_test();
     audio_set_haptics_buffer_length(64);
     trigger_effect_intensity_percent = 100;
     adaptive_trigger_test_mode = kTriggerTestModeFeedback;
@@ -1185,19 +1187,38 @@ bool set_persistent_trigger_effect(
     return true;
 }
 
+void submit_classic_rumble_test_output(uint8_t right, uint8_t left) {
+    if (!bt_is_controller_connected()) {
+        return;
+    }
+
+    uint8_t payload[ds5::output::kCommonPayloadSize]{};
+    payload[ds5::output::kValidFlag0Offset] = static_cast<uint8_t>(
+        ds5::output::kFlag0CompatibleVibration | ds5::output::kFlag0HapticsSelect
+    );
+    payload[ds5::output::kMotorRightOffset] = right;
+    payload[ds5::output::kMotorLeftOffset] = left;
+    controller_output_submit_usb_payload(payload, sizeof(payload));
+}
+
 bool schedule_classic_rumble_test() {
     if (
         !bt_is_controller_connected()
-        || usb_host_hid_output_recent()
         || classic_rumble_test_active
     ) {
         return false;
     }
 
-    bt_set_classic_rumble_output(kClassicRumbleTestAmplitude, kClassicRumbleTestAmplitude);
+    submit_classic_rumble_test_output(kClassicRumbleTestAmplitude, kClassicRumbleTestAmplitude);
     classic_rumble_test_active = true;
     classic_rumble_test_until_us = time_us_32() + kClassicRumbleTestDurationUs;
     return true;
+}
+
+void stop_classic_rumble_test() {
+    classic_rumble_test_active = false;
+    classic_rumble_test_until_us = 0;
+    submit_classic_rumble_test_output(0, 0);
 }
 
 void classic_rumble_test_loop() {
@@ -1205,8 +1226,7 @@ void classic_rumble_test_loop() {
         return;
     }
     if (!bt_is_controller_connected() || static_cast<int32_t>(time_us_32() - classic_rumble_test_until_us) >= 0) {
-        classic_rumble_test_active = false;
-        bt_set_classic_rumble_output(0, 0);
+        stop_classic_rumble_test();
     }
 }
 
@@ -1712,9 +1732,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             bt_set_classic_rumble_gain(value);
             if (value == 0) {
-                classic_rumble_test_active = false;
-                classic_rumble_test_until_us = 0;
-                bt_set_classic_rumble_output(0, 0);
+                stop_classic_rumble_test();
             }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);

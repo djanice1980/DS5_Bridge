@@ -2379,7 +2379,6 @@ export function App() {
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || testLocked
-    || gameStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy)
     || Boolean(snapshot?.status?.testHapticsCooldown);
   const testRumbleUnavailable = !connected
@@ -2388,38 +2387,33 @@ export function App() {
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || testLocked
-    || gameStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy);
   const hapticsTestReady = !testHapticsUnavailable;
   const rumbleTestReady = !testRumbleUnavailable;
   const hapticsStatusLabel = testLocked || snapshot?.status?.testHapticsBusy
     ? 'Testing'
-    : snapshot?.status?.testHapticsCooldown
-      ? 'Cooling Down'
+      : snapshot?.status?.testHapticsCooldown
+        ? 'Cooling Down'
       : hapticsTestReady
         ? 'Ready'
-        : connected && gameStreamActive
-          ? 'Game Active'
-          : connected && pendingAction !== null
-            ? 'Command Pending'
-            : 'Unavailable';
+        : connected && pendingAction !== null
+          ? 'Command Pending'
+          : 'Unavailable';
   const rumbleStatusLabel = testLocked
     ? 'Testing'
     : rumbleTestReady
       ? 'Ready'
-      : connected && gameStreamActive
-        ? 'Game Active'
-        : connected && pendingAction !== null
-          ? 'Command Pending'
-          : 'Unavailable';
+      : connected && pendingAction !== null
+        ? 'Command Pending'
+        : 'Unavailable';
   const hapticsStatusTone = testLocked || snapshot?.status?.testHapticsBusy || hapticsTestReady
     ? 'good'
-    : connected && (snapshot?.status?.testHapticsCooldown || gameStreamActive || pendingAction !== null)
+    : connected && (snapshot?.status?.testHapticsCooldown || pendingAction !== null)
       ? 'warn'
       : 'idle';
   const rumbleStatusTone = testLocked || rumbleTestReady
     ? 'good'
-    : connected && (gameStreamActive || pendingAction !== null)
+    : connected && pendingAction !== null
       ? 'warn'
       : 'idle';
   const activeFeedbackTestUnavailable = showClassicRumbleControl ? testRumbleUnavailable : testHapticsUnavailable;
@@ -4879,14 +4873,10 @@ export function App() {
                   <button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable} onClick={runFeedbackTest}>
                     <Play size={15} />
                     {showClassicRumbleControl
-                      ? connected && gameStreamActive
-                        ? 'Game Active'
-                        : connected && testLocked
-                          ? 'Testing'
-                          : 'Test Rumble'
-                    : connected && gameStreamActive
-                      ? 'Game Active'
-                      : connected && testLocked
+                      ? connected && testLocked
+                        ? 'Testing'
+                        : 'Test Rumble'
+                    : connected && testLocked
                         ? 'Testing'
                       : connected && snapshot.status?.testHapticsCooldown
                         ? 'Cooling Down'
