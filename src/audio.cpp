@@ -68,6 +68,7 @@
 #define HOST_RAW_PCM_RETURN_PACKET_BYTES (HOST_RAW_PCM_RETURN_FRAMES * INPUT_CHANNELS * sizeof(int16_t))
 #define HOST_RAW_PCM_RETURN_LINE_BYTES (HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS * sizeof(int16_t))
 #define HOST_USB_HAPTIC_LATCH_US 50000
+#define HAPTIC_DOWNSAMPLE_FRAMES 16
 #define HOST_MIC_OPUS_SIZE 71
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
@@ -169,7 +170,6 @@ struct audio_debug_event {
     uint8_t arg4;
 };
 
-static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
 static bool plug_headset = false;
@@ -227,6 +227,9 @@ static float audio_buf[512 * 2];
 static uint audio_buf_pos = 0;
 static int8_t audio_haptic_buf[SAMPLE_SIZE];
 static int audio_haptic_buf_pos = 0;
+static int32_t audio_haptic_bucket_l = 0;
+static int32_t audio_haptic_bucket_r = 0;
+static uint8_t audio_haptic_bucket_frames = 0;
 static int8_t host_usb_haptic_buf[SAMPLE_SIZE]{};
 static bool host_usb_haptic_pending = false;
 static uint32_t host_usb_haptic_us = 0;
@@ -281,6 +284,7 @@ static uint8_t clamp_debug_u8(uint32_t value);
 static bool haptic_block_has_signal(uint8_t const *data);
 static bool copy_latest_host_usb_haptics(uint8_t *destination);
 static void store_latest_host_usb_haptics(int8_t const *data);
+static bool append_averaged_haptic_frame(int16_t left, int16_t right, float gain);
 #if DS5_AUDIO_DEBUG_ENABLED
 static void audio_debug_log_impl(
     AudioDebugEventCode code,
@@ -972,10 +976,12 @@ static void audio_host_poll() {
 static void clear_partial_audio_state() {
     audio_buf_pos = 0;
     audio_haptic_buf_pos = 0;
+    audio_haptic_bucket_l = 0;
+    audio_haptic_bucket_r = 0;
+    audio_haptic_bucket_frames = 0;
     audio_silence_tail_logged = false;
     memset(audio_buf, 0, sizeof(audio_buf));
     memset(audio_haptic_buf, 0, sizeof(audio_haptic_buf));
-    resampler.Reset();
 }
 
 static void schedule_speaker_silence_preroll() {
@@ -1155,6 +1161,36 @@ static bool haptic_block_has_signal(uint8_t const *data) {
         }
     }
     return false;
+}
+
+static int8_t quantize_haptic_average(int32_t sample_sum, float gain) {
+    const float clamped_gain = clamp(gain, 0.0f, MAX_HAPTICS_GAIN);
+    const float scaled = static_cast<float>(sample_sum) * 127.0f * clamped_gain
+        / (static_cast<float>(HAPTIC_DOWNSAMPLE_FRAMES) * 32768.0f);
+    return static_cast<int8_t>(clamp(static_cast<int>(scaled), -128, 127));
+}
+
+static bool append_averaged_haptic_frame(int16_t left, int16_t right, float gain) {
+    audio_haptic_bucket_l += left;
+    audio_haptic_bucket_r += right;
+    audio_haptic_bucket_frames++;
+
+    if (audio_haptic_bucket_frames < HAPTIC_DOWNSAMPLE_FRAMES) {
+        return false;
+    }
+
+    audio_haptic_buf[audio_haptic_buf_pos++] = quantize_haptic_average(audio_haptic_bucket_l, gain);
+    audio_haptic_buf[audio_haptic_buf_pos++] = quantize_haptic_average(audio_haptic_bucket_r, gain);
+    audio_haptic_bucket_l = 0;
+    audio_haptic_bucket_r = 0;
+    audio_haptic_bucket_frames = 0;
+
+    if (audio_haptic_buf_pos < SAMPLE_SIZE) {
+        return false;
+    }
+
+    audio_haptic_buf_pos = 0;
+    return true;
 }
 
 static void store_latest_host_usb_haptics(int8_t const *data) {
@@ -1935,12 +1971,9 @@ static bool process_usb_audio_packet() {
         last_audio_us = time_us_32();
     }
 
-    // 2. Extract ch3/ch4 from 4-channel audio as float resampler input.
-    WDL_ResampleSample *in_buf;
-    int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
-
     const float speaker_gain = usb_host_mute[0] ? 0.0f : clamp(volume[0], 0.0f, 1.0f) * usb_host_speaker_gain;
-    for (int i = 0; i < nframes; i++) {
+    const float haptic_gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
+    for (int i = 0; i < frames; i++) {
         const float transition_gain = next_fallback_speaker_gain();
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * speaker_gain * transition_gain;
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * speaker_gain * transition_gain;
@@ -1972,26 +2005,9 @@ static bool process_usb_audio_packet() {
             audio_buf_pos = 0;
         }
 
-        in_buf[i * 2] = (WDL_ResampleSample) raw[i * INPUT_CHANNELS + 2] / 32768.0f;
-        in_buf[i * 2 + 1] = (WDL_ResampleSample) raw[i * INPUT_CHANNELS + 3] / 32768.0f;
-    }
-
-    // 3. Resample 48 kHz to 3 kHz.
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE]; // 64 floats = 32 frames x 2 channels.
-    int out_frames = resampler.ResampleOut(out_buf, nframes, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
-
-    // 4. Convert to int8 and buffer until a 64-byte haptic packet is ready.
-    for (int i = 0; i < out_frames; i++) {
-        int val_l = (int) (out_buf[i * 2] * 127.0f * max(volume[1],0.0f));
-        int val_r = (int) (out_buf[i * 2 + 1] * 127.0f * max(volume[1],0.0f));
-        audio_haptic_buf[audio_haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127); // Clamp defensively.
-        audio_haptic_buf[audio_haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
-
-        if (audio_haptic_buf_pos != SAMPLE_SIZE) {
-            continue;
+        if (append_averaged_haptic_frame(raw[i * INPUT_CHANNELS + 2], raw[i * INPUT_CHANNELS + 3], haptic_gain)) {
+            send_audio_haptics_packet(audio_haptic_buf, true);
         }
-        send_audio_haptics_packet(audio_haptic_buf, true);
-        audio_haptic_buf_pos = 0;
     }
     return true;
 }
@@ -2014,28 +2030,13 @@ static bool process_usb_audio_raw_pcm_return_packet() {
     audio_stats_note_usb_read(now);
 
     alignas(4) int16_t line[HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS]{};
-    WDL_ResampleSample *in_buf;
-    const int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
-    for (int i = 0; i < nframes; i++) {
+    for (int i = 0; i < frames; i++) {
         line[i * HOST_RAW_PCM_RETURN_CHANNELS] = raw[i * INPUT_CHANNELS];
         line[i * HOST_RAW_PCM_RETURN_CHANNELS + 1] = raw[i * INPUT_CHANNELS + 1];
-        in_buf[i * 2] = static_cast<WDL_ResampleSample>(raw[i * INPUT_CHANNELS + 2]) / 32768.0f;
-        in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(raw[i * INPUT_CHANNELS + 3]) / 32768.0f;
-    }
 
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE];
-    const int out_frames = resampler.ResampleOut(out_buf, nframes, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
-    for (int i = 0; i < out_frames; i++) {
-        const int val_l = static_cast<int>(out_buf[i * 2] * 127.0f);
-        const int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
-        audio_haptic_buf[audio_haptic_buf_pos++] = static_cast<int8_t>(clamp(val_l, -128, 127));
-        audio_haptic_buf[audio_haptic_buf_pos++] = static_cast<int8_t>(clamp(val_r, -128, 127));
-
-        if (audio_haptic_buf_pos != SAMPLE_SIZE) {
-            continue;
+        if (append_averaged_haptic_frame(raw[i * INPUT_CHANNELS + 2], raw[i * INPUT_CHANNELS + 3], 1.0f)) {
+            store_latest_host_usb_haptics(audio_haptic_buf);
         }
-        store_latest_host_usb_haptics(audio_haptic_buf);
-        audio_haptic_buf_pos = 0;
     }
 
     if (host_usb_pcm_return_active()) {
@@ -2414,10 +2415,6 @@ void audio_init() {
     critical_section_init(&audio_debug_cs);
     audio_debug_cs_ready = true;
 #endif
-    resampler.SetMode(true, 0, false);
-    resampler.SetRates(48000, 3000);
-    resampler.SetFeedMode(true);
-    resampler.Prealloc(2, 24, 6);
     queue_init(&audio_fifo,sizeof(audio_raw_element),2);
     queue_init(&mic_fifo,sizeof(mic_packet_element),HOST_MIC_QUEUE_DEPTH);
     queue_init(&mic_decode_fifo,sizeof(mic_decode_element),HOST_MIC_QUEUE_DEPTH);
