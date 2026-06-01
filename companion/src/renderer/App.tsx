@@ -2273,7 +2273,6 @@ export function App() {
   const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const adaptiveTriggerOutputActive = Boolean(snapshot?.status?.adaptiveTriggerOutputRecent);
-  const audioStreamActive = Boolean(snapshot?.status?.audioRecent && pendingAction !== 'speaker' && !speakerTestLocked);
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
   const headsetOutputDetected = Boolean(hostAudioStatus?.headsetPlugged);
   const controllerPowerSavingActive = controllerPowerSavingActiveFromSnapshot(snapshot);
@@ -2332,12 +2331,6 @@ export function App() {
   const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
   const audioEnabled = speakerEnabled || duplexMicEnabled;
   const hostAudioActive = hostAudioStatus?.mode === 'host-encoded-active';
-  const feedbackAudioActive = audioStreamActive
-    || hostAudioActive
-    || Boolean(hostAudioEnabled && hostAudioStatus?.streamActive);
-  const feedbackAudioLabel = hostAudioActive || Boolean(hostAudioEnabled && hostAudioStatus?.streamActive)
-    ? 'Host Encoding Active'
-    : 'Audio Active';
   const hostAudioCaptureIssue = snapshot?.diagnostics.hostAudioCaptureIssue ?? null;
   const hostAudioCaptureRetry = snapshot?.diagnostics.hostAudioCaptureRetry ?? null;
   const hostAudioCaptureStatus = hostAudioCaptureIssue ?? hostAudioCaptureRetry;
@@ -2387,7 +2380,6 @@ export function App() {
     || lightbarCommitPending
     || testLocked
     || gameStreamActive
-    || feedbackAudioActive
     || Boolean(snapshot?.status?.testHapticsBusy)
     || Boolean(snapshot?.status?.testHapticsCooldown);
   const testRumbleUnavailable = !connected
@@ -2397,7 +2389,6 @@ export function App() {
     || lightbarCommitPending
     || testLocked
     || gameStreamActive
-    || feedbackAudioActive
     || Boolean(snapshot?.status?.testHapticsBusy);
   const hapticsTestReady = !testHapticsUnavailable;
   const rumbleTestReady = !testRumbleUnavailable;
@@ -2409,30 +2400,26 @@ export function App() {
         ? 'Ready'
         : connected && gameStreamActive
           ? 'Game Active'
-          : connected && feedbackAudioActive
-            ? feedbackAudioLabel
-            : connected && pendingAction !== null
-              ? 'Command Pending'
-              : 'Unavailable';
+          : connected && pendingAction !== null
+            ? 'Command Pending'
+            : 'Unavailable';
   const rumbleStatusLabel = testLocked
     ? 'Testing'
     : rumbleTestReady
       ? 'Ready'
       : connected && gameStreamActive
         ? 'Game Active'
-        : connected && feedbackAudioActive
-          ? feedbackAudioLabel
-          : connected && pendingAction !== null
-            ? 'Command Pending'
-            : 'Unavailable';
+        : connected && pendingAction !== null
+          ? 'Command Pending'
+          : 'Unavailable';
   const hapticsStatusTone = testLocked || snapshot?.status?.testHapticsBusy || hapticsTestReady
     ? 'good'
-    : connected && (snapshot?.status?.testHapticsCooldown || gameStreamActive || feedbackAudioActive || pendingAction !== null)
+    : connected && (snapshot?.status?.testHapticsCooldown || gameStreamActive || pendingAction !== null)
       ? 'warn'
       : 'idle';
   const rumbleStatusTone = testLocked || rumbleTestReady
     ? 'good'
-    : connected && (gameStreamActive || feedbackAudioActive || pendingAction !== null)
+    : connected && (gameStreamActive || pendingAction !== null)
       ? 'warn'
       : 'idle';
   const activeFeedbackTestUnavailable = showClassicRumbleControl ? testRumbleUnavailable : testHapticsUnavailable;
@@ -4896,8 +4883,6 @@ export function App() {
                         ? 'Game Active'
                         : connected && testLocked
                           ? 'Testing'
-                        : connected && feedbackAudioActive
-                          ? feedbackAudioLabel
                           : 'Test Rumble'
                     : connected && gameStreamActive
                       ? 'Game Active'
@@ -4905,8 +4890,6 @@ export function App() {
                         ? 'Testing'
                       : connected && snapshot.status?.testHapticsCooldown
                         ? 'Cooling Down'
-                      : connected && feedbackAudioActive
-                        ? feedbackAudioLabel
                         : 'Test Haptics'}
                   </button>
                   <button className="secondary-action" type="button" disabled={!testLocked} onClick={() => setTestLocked(false)}>

@@ -39,23 +39,25 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('paired directly to Windows over Bluetooth may need to be paired again');
   });
 
-  it('treats host encoded audio as haptic-test audio activity', () => {
-    expect(appSource).toContain('const feedbackAudioActive = audioStreamActive');
-    expect(appSource).toContain('|| hostAudioActive');
-    expect(appSource).toContain('Boolean(hostAudioEnabled && hostAudioStatus?.streamActive)');
-    expect(appSource).toContain('|| feedbackAudioActive');
+  it('does not block haptic testing just because audio is active', () => {
+    const start = appSource.indexOf('const testHapticsUnavailable =');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('const hapticsTestReady =', start);
+    const unavailableSource = appSource.slice(start, end);
+
+    expect(unavailableSource).not.toContain('audioRecent');
+    expect(unavailableSource).not.toContain('hostAudioActive');
+    expect(unavailableSource).not.toContain('streamActive');
   });
 
-  it('keeps haptic test and cooldown labels ahead of audio-busy labels', () => {
+  it('keeps haptic test and cooldown labels as real test state', () => {
     const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
     expect(start).toBeGreaterThanOrEqual(0);
     const end = appSource.indexOf('</button>', start);
     const buttonSource = appSource.slice(start, end);
 
-    expect(buttonSource).toContain('feedbackAudioLabel');
-    expect(buttonSource.indexOf('testLocked')).toBeLessThan(buttonSource.indexOf('feedbackAudioActive'));
-    expect(buttonSource.indexOf('snapshot.status?.testHapticsCooldown')).toBeLessThan(
-      buttonSource.lastIndexOf('feedbackAudioActive')
-    );
+    expect(buttonSource).not.toContain('Audio Active');
+    expect(buttonSource).toContain('testLocked');
+    expect(buttonSource).toContain('snapshot.status?.testHapticsCooldown');
   });
 });
