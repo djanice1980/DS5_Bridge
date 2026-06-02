@@ -7,6 +7,7 @@ import type {
   ControllerProfile,
   HostAudioStatusPayload,
   BridgePresetId,
+  HostPersonaMode,
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
@@ -47,6 +48,7 @@ export interface CompanionSettings {
   sleepKeybindEnabled: boolean;
   speakerVolumeShortcutEnabled: boolean;
   pollingRateMode: PollingRateMode;
+  hostPersonaMode: HostPersonaMode;
   notifyControllerConnection: boolean;
   notifyLowBattery: boolean;
   hostEncodedAudioEnabled: boolean;

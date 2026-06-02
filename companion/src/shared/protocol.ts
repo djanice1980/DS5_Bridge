@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 5;
+export const PROTOCOL_MINOR = 6;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -86,7 +86,8 @@ export const COMMAND_ID = {
   SET_SPEAKER_VOLUME_SHORTCUT_ENABLED: 0x1D,
   SET_BUTTON_REMAP: 0x1E,
   PREVIEW_ADAPTIVE_TRIGGER_EFFECT: 0x1F,
-  APPLY_ADAPTIVE_TRIGGER_EFFECT: 0x20
+  APPLY_ADAPTIVE_TRIGGER_EFFECT: 0x20,
+  SET_HOST_PERSONA: 0x21
 } as const;
 
 export const HOST_AUDIO_PACKET_TYPE = {
@@ -132,6 +133,7 @@ export interface AdaptiveTriggerPreviewEffect {
   forcePercent: number;
 }
 export type PollingRateMode = '250' | '500' | '1000';
+export type HostPersonaMode = 'dualsense' | 'xbox';
 export type HostAudioMode = 'fallback-pico-local' | 'host-encoded-active';
 export type HostAudioFallbackReason =
   | 'none'
@@ -308,7 +310,10 @@ export interface BridgeStatusPayload {
     usbSuspendDisconnectControl: boolean;
     sleepControllerControl: boolean;
     pollingRateControl: boolean;
+    hostPersonaControl: boolean;
   };
+  hostPersonaMode: HostPersonaMode;
+  supportedHostPersonaModes: HostPersonaMode[];
   protocolVersion: string;
 }
 
@@ -527,6 +532,25 @@ export function pollingRateModeValue(mode: PollingRateMode): number {
   return 2;
 }
 
+export function hostPersonaModeValue(mode: HostPersonaMode): number {
+  return mode === 'xbox' ? 1 : 0;
+}
+
+function hostPersonaMode(value: number): HostPersonaMode {
+  return value === 1 ? 'xbox' : 'dualsense';
+}
+
+function supportedHostPersonaModes(mask: number): HostPersonaMode[] {
+  const modes: HostPersonaMode[] = [];
+  if ((mask & 0x01) !== 0) {
+    modes.push('dualsense');
+  }
+  if ((mask & 0x02) !== 0) {
+    modes.push('xbox');
+  }
+  return modes.length === 0 ? ['dualsense'] : modes;
+}
+
 export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayload {
   assertReport(report, REPORT_ID.STATUS);
   assertVersion(report);
@@ -593,8 +617,11 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
       adaptiveTriggersControl: (firmwareFlags & 0x80) !== 0,
       usbSuspendDisconnectControl: (statusFlags & 0x20) !== 0,
       sleepControllerControl: (statusFlags & 0x80) !== 0,
-      pollingRateControl: true
+      pollingRateControl: true,
+      hostPersonaControl: report[49] !== 0
     },
+    hostPersonaMode: hostPersonaMode(report[48]),
+    supportedHostPersonaModes: supportedHostPersonaModes(report[49]),
     protocolVersion: `${report[5]}.${report[6]}`
   };
 }

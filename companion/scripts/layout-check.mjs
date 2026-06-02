@@ -9,7 +9,14 @@ const testButtonTabs = ['Haptics', 'Audio', 'Triggers'];
 const tolerancePx = 1;
 const buttonTolerancePx = 2;
 
-const app = await electron.launch({ args: ['.'], cwd: root });
+const app = await electron.launch({
+  args: ['.'],
+  cwd: root,
+  env: {
+    ...process.env,
+    DS5_BRIDGE_ALLOW_PARALLEL_AUTOMATION_INSTANCE: '1'
+  }
+});
 
 try {
   const page = await app.firstWindow();
@@ -31,7 +38,7 @@ try {
     await page.waitForTimeout(150);
 
     const measurement = await page.evaluate(() => {
-      const activePage = document.querySelector('.control-page:not([hidden])');
+      const activePage = document.querySelector('.control-page.active');
       const cards = activePage ? [...activePage.querySelectorAll('.feature-card-grid > section')] : [];
       return cards.map((card) => {
         const rect = card.getBoundingClientRect();
@@ -77,7 +84,7 @@ try {
     await page.waitForTimeout(150);
 
     const measurements = await page.evaluate(() => {
-      const activePage = document.querySelector('.control-page:not([hidden])');
+      const activePage = document.querySelector('.control-page.active');
       const buttons = [
         ...(activePage?.querySelectorAll(
           '.test-card > .primary-action, ' +
@@ -196,7 +203,7 @@ try {
   await page.waitForTimeout(150);
 
   const systemTypography = await page.evaluate(() => {
-    const activePage = document.querySelector('.control-page:not([hidden])');
+    const activePage = document.querySelector('.control-page.active');
 
     function read(selector) {
       return [...(activePage?.querySelectorAll(selector) ?? [])].map((element) => ({

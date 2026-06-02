@@ -26,6 +26,7 @@ import {
   HOST_AUDIO_PACKET_TYPE,
   SHORTCUT_EVENT,
   buildButtonRemapPayload,
+  hostPersonaModeValue,
   normalizeBridgePresetId,
   pollingRateModeValue
 } from '../shared/protocol';
@@ -35,6 +36,7 @@ import type {
   AudioDebugStatsPayload,
   BridgePresetId,
   RemapButtonId,
+  HostPersonaMode,
   HostAudioStatusPayload,
   TriggerTraceEventPayload,
   FeedbackTraceEventPayload,
@@ -406,6 +408,10 @@ function formatUsbDebugEvent(prefix: string, args: number[]): string {
     default:
       return `${prefix} [USB] type=${type} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
   }
+}
+
+function normalizeHostPersonaMode(mode: HostPersonaMode): HostPersonaMode {
+  return mode === 'xbox' ? 'xbox' : 'dualsense';
 }
 
 function formatHidDebugEvent(prefix: string, args: number[]): string {
@@ -1775,6 +1781,16 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setHostPersonaMode(mode: HostPersonaMode): Promise<BridgeSnapshot> {
+    const normalizedMode = normalizeHostPersonaMode(mode);
+    await this.sendSettingCommand(
+      COMMAND_ID.SET_HOST_PERSONA,
+      hostPersonaModeValue(normalizedMode),
+      { hostPersonaMode: normalizedMode }
+    );
+    return this.getSnapshot();
+  }
+
   async previewAdaptiveTriggerEffect(effect: AdaptiveTriggerPreviewEffect): Promise<BridgeSnapshot> {
     const normalized = normalizeAdaptiveTriggerPreviewEffect(effect);
     const value = triggerTestModeValue(normalized.mode) | (triggerTestTargetValue(normalized.target) << 8);
@@ -2610,6 +2626,11 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(
       COMMAND_ID.SET_POLLING_RATE_MODE,
       pollingRateModeValue(settings.pollingRateMode),
+      { expectSettingsRevisionChange }
+    );
+    await this.sendCommand(
+      COMMAND_ID.SET_HOST_PERSONA,
+      hostPersonaModeValue(settings.hostPersonaMode),
       { expectSettingsRevisionChange }
     );
   }

@@ -13,7 +13,14 @@ await mkdir(outputDir, { recursive: true });
 await rm(outputDir, { recursive: true, force: true });
 await mkdir(outputDir, { recursive: true });
 
-const app = await electron.launch({ args: ['.'], cwd: root });
+const app = await electron.launch({
+  args: ['.'],
+  cwd: root,
+  env: {
+    ...process.env,
+    DS5_BRIDGE_ALLOW_PARALLEL_AUTOMATION_INSTANCE: '1'
+  }
+});
 
 try {
   const page = await app.firstWindow();

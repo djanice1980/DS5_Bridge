@@ -88,6 +88,10 @@ static void usb_schedule_reconnect() {
     usb_reconnect_at_us = time_us_32() + USB_RECONNECT_DELAY_US;
 }
 
+void usb_request_reconnect() {
+    usb_schedule_reconnect();
+}
+
 static void usb_reset_audio_class_state() {
     usb_last_hid_output_us = 0;
     usb_speaker_streaming = false;

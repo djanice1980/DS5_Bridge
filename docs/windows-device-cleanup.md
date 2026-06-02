@@ -13,6 +13,8 @@ Common identity-changing fields in this project are:
 - Audio topology: no audio, speaker-only, speaker plus mic, or different audio
   interface ordering.
 - HID report descriptor shape and length.
+- Host persona: DualSense mode and Xbox compatibility mode intentionally expose
+  different game-facing interface descriptors.
 - Product string: for example `DualSense Wireless Controller`,
   `DualSense Edge Wireless Controller`, or `Wireless Controller`.
 - USB port/location when no serial number is exposed.
@@ -34,6 +36,9 @@ The current firmware intentionally exposes no USB serial number:
 - Audio interfaces come first, followed by the game-facing HID interface.
 - Companion firmware appends the companion vendor HID interface and bridge
   keyboard HID interface after the game-facing HID interface.
+- Xbox compatibility mode keeps the DS5 Bridge parent identity, bumps the USB
+  device revision for Windows cache separation, and advertises the game-facing
+  interface as XUSB-compatible.
 
 Avoid changing those fields during normal firmware work unless the task is
 explicit USB descriptor identity testing.
@@ -72,14 +77,22 @@ USB bridge identity.
 Use `-SkipAudioEndpoints` if you want to leave Windows audio endpoint records
 alone while cleaning only the USB/HID stack.
 
+Use `-SkipUsbFlags` if you want to leave Windows' USB descriptor cache entries
+alone. During persona/descriptor testing, stale `UsbFlags` entries can prevent
+Windows from querying updated Microsoft OS descriptors.
+
 ## What The Script Targets
 
 By default, the script lists or removes non-present instances matching:
 
 - `VID_054C&PID_0CE6`.
 - `VID_054C&PID_0DF2`.
+- The temporary Xbox persona test identity `VID_045E&PID_028E`.
 - DualSense-named Windows audio endpoints.
 - DS5 Bridge-named Windows audio endpoints and System devices.
+- DS5 Bridge USB descriptor cache keys for the historical `0x0100`, current
+  `0x0151`, and Xbox-persona `0x0152` USB device revisions.
+- The temporary Xbox persona test cache key `045E028E0114`.
 
 It does not remove currently present `Status = OK` entries unless
 `-IncludePresent` is supplied.

@@ -28,6 +28,7 @@
 #include "debug_config.h"
 #include "host_bridge.h"
 #include "host_pcm_iso.h"
+#include "persona/host_persona.h"
 
 extern uint8_t usb_hid_polling_interval_ms_value;
 #ifdef ENABLE_COMPANION
@@ -50,9 +51,20 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #define VENDOR_BRIDGE_CONTROL_SET_REPORT 0x32
 #define MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN 0x0084
 #define MS_OS_20_BRIDGE_FUNCTION_DESC_LEN 0x00A0
+#define MS_OS_20_XUSB_FUNCTION_DESC_LEN 0x001C
 #define VENDOR_MS_OS_20_DESC_LEN (0x00B2 + MS_OS_20_BRIDGE_FUNCTION_DESC_LEN)
+#define VENDOR_MS_OS_20_DESC_LEN_XUSB (VENDOR_MS_OS_20_DESC_LEN + MS_OS_20_XUSB_FUNCTION_DESC_LEN)
 #define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
 #define KEYBOARD_HID_REPORT_DESC_LEN 0x002D
+#define XUSB_MS_OS_VENDOR_REQUEST 0x21
+#define XUSB360_CONFIG_EXTRA_LEN 0x0007
+#define XUSB360_INTERFACE_DESC_LEN 0x0028
+#define XUSB360_EP_IN 0x84
+#define XUSB360_EP_OUT 0x03
+#define XUSB360_EP_SIZE 0x20
+#define XUSB360_EP_IN_INTERVAL 0x04
+#define XUSB360_EP_OUT_INTERVAL 0x08
+#define XUSB360_USB_BCD_DEVICE 0x0152
 
 #ifdef ENABLE_COMPANION
 #define GAMEPAD_INTERFACE_NUMBER 0x03
@@ -106,11 +118,16 @@ static tusb_desc_device_t const desc_device =
 
     .bNumConfigurations = 0x01
 };
+static tusb_desc_device_t desc_device_runtime;
 
 // Invoked when received GET DEVICE DESCRIPTOR
 // Application return pointer to descriptor
 uint8_t const *tud_descriptor_device_cb(void) {
-    return (uint8_t const *) &desc_device;
+    desc_device_runtime = desc_device;
+    if (host_persona_active() == HostPersonaModeXusb360) {
+        desc_device_runtime.bcdDevice = XUSB360_USB_BCD_DEVICE;
+    }
+    return (uint8_t const *) &desc_device_runtime;
 }
 
 //--------------------------------------------------------------------+
@@ -569,11 +586,122 @@ TU_VERIFY_STATIC(sizeof(descriptor_configuration) == CONFIG_TOTAL_LEN_COMPANION,
 TU_VERIFY_STATIC(sizeof(descriptor_configuration) == CONFIG_TOTAL_LEN_STANDARD, "Incorrect standard config descriptor size");
 #endif
 
+static CFG_TUD_MEM_ALIGN uint8_t descriptor_configuration_xusb[sizeof(descriptor_configuration) + XUSB360_CONFIG_EXTRA_LEN];
+static uint16_t descriptor_configuration_xusb_len = 0;
+
+static bool find_gamepad_descriptor_block(uint16_t *start, uint16_t *end) {
+    if (start == NULL || end == NULL) {
+        return false;
+    }
+
+    *start = 0;
+    *end = 0;
+    for (uint16_t offset = 0; offset + 9 <= sizeof(descriptor_configuration);) {
+        uint8_t const length = descriptor_configuration[offset];
+        if (length == 0 || offset + length > sizeof(descriptor_configuration)) {
+            return false;
+        }
+
+        if (
+            length >= 9
+            && descriptor_configuration[offset + 1] == TUSB_DESC_INTERFACE
+            && descriptor_configuration[offset + 2] == GAMEPAD_INTERFACE_NUMBER
+        ) {
+            *start = offset;
+            uint16_t next = offset + length;
+            while (next + 2 <= sizeof(descriptor_configuration)) {
+                uint8_t const next_length = descriptor_configuration[next];
+                if (next_length == 0 || next + next_length > sizeof(descriptor_configuration)) {
+                    return false;
+                }
+                if (descriptor_configuration[next + 1] == TUSB_DESC_INTERFACE) {
+                    *end = next;
+                    return true;
+                }
+                next = (uint16_t)(next + next_length);
+            }
+            *end = sizeof(descriptor_configuration);
+            return true;
+        }
+
+        offset = (uint16_t)(offset + length);
+    }
+
+    return false;
+}
+
+static uint16_t build_xusb_configuration_descriptor(void) {
+    uint16_t gamepad_start = 0;
+    uint16_t gamepad_end = 0;
+    if (!find_gamepad_descriptor_block(&gamepad_start, &gamepad_end)) {
+        return 0;
+    }
+
+    uint8_t const xusb_gamepad_descriptor[] = {
+        // --- INTERFACE DESCRIPTOR: XUSB 360-compatible gamepad ---
+        0x09, // bLength
+        0x04, // bDescriptorType (INTERFACE)
+        GAMEPAD_INTERFACE_NUMBER,
+        0x00, // bAlternateSetting
+        0x02, // bNumEndpoints: IN + OUT
+        0xFF, // bInterfaceClass: Vendor Specific
+        0x5D, // bInterfaceSubClass: XUSB
+        0x01, // bInterfaceProtocol
+        0x00, // iInterface
+
+        // XUSB class-specific interface descriptor.
+        0x11, 0x21, 0x00, 0x01,
+        0x01, 0x25, XUSB360_EP_IN, 0x14,
+        0x00, 0x00, 0x00, 0x00,
+        0x13, XUSB360_EP_OUT, 0x08, 0x00, 0x00,
+
+        // Interrupt IN.
+        0x07, // bLength
+        0x05, // bDescriptorType (ENDPOINT)
+        XUSB360_EP_IN,
+        0x03, // Interrupt
+        XUSB360_EP_SIZE, 0x00,
+        XUSB360_EP_IN_INTERVAL,
+
+        // Interrupt OUT.
+        0x07, // bLength
+        0x05, // bDescriptorType (ENDPOINT)
+        XUSB360_EP_OUT,
+        0x03, // Interrupt
+        XUSB360_EP_SIZE, 0x00,
+        XUSB360_EP_OUT_INTERVAL,
+    };
+    TU_VERIFY_STATIC(sizeof(xusb_gamepad_descriptor) == XUSB360_INTERFACE_DESC_LEN, "Incorrect XUSB descriptor size");
+
+    uint16_t dest = 0;
+    memcpy(descriptor_configuration_xusb, descriptor_configuration, gamepad_start);
+    dest = gamepad_start;
+    memcpy(descriptor_configuration_xusb + dest, xusb_gamepad_descriptor, sizeof(xusb_gamepad_descriptor));
+    dest = (uint16_t)(dest + sizeof(xusb_gamepad_descriptor));
+    const uint16_t suffix_len = (uint16_t)(sizeof(descriptor_configuration) - gamepad_end);
+    memcpy(descriptor_configuration_xusb + dest, descriptor_configuration + gamepad_end, suffix_len);
+    dest = (uint16_t)(dest + suffix_len);
+
+    descriptor_configuration_xusb[2] = (uint8_t)(dest & 0xff);
+    descriptor_configuration_xusb[3] = (uint8_t)((dest >> 8) & 0xff);
+    descriptor_configuration_xusb_len = dest;
+    return dest;
+}
+
 // Invoked when received GET CONFIGURATION DESCRIPTOR
 // Application return pointer to descriptor
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void) index; // for multiple configurations
+    if (host_persona_active() == HostPersonaModeXusb360) {
+        if (descriptor_configuration_xusb_len == 0) {
+            (void)build_xusb_configuration_descriptor();
+        }
+        if (descriptor_configuration_xusb_len != 0) {
+            return descriptor_configuration_xusb;
+        }
+    }
+
     for (uint16_t offset = 0; offset + 7 <= sizeof(descriptor_configuration);) {
         uint8_t const length = descriptor_configuration[offset];
         if (length == 0 || offset + length > sizeof(descriptor_configuration)) {
@@ -601,8 +729,13 @@ uint8_t const desc_bos[] = {
     TUD_BOS_MS_OS_20_DESCRIPTOR(VENDOR_MS_OS_20_DESC_LEN, VENDOR_MS_OS_VENDOR_REQUEST)
 };
 
+uint8_t const desc_bos_xusb[] = {
+    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+    TUD_BOS_MS_OS_20_DESCRIPTOR(VENDOR_MS_OS_20_DESC_LEN_XUSB, VENDOR_MS_OS_VENDOR_REQUEST)
+};
+
 uint8_t const *tud_descriptor_bos_cb(void) {
-    return desc_bos;
+    return host_persona_active() == HostPersonaModeXusb360 ? desc_bos_xusb : desc_bos;
 }
 
 uint8_t const desc_ms_os_20[] = {
@@ -675,6 +808,60 @@ uint8_t const desc_ms_os_20[] = {
 
 TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == VENDOR_MS_OS_20_DESC_LEN, "Incorrect MS OS 2.0 descriptor size");
 
+static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_xusb[VENDOR_MS_OS_20_DESC_LEN_XUSB];
+static bool desc_ms_os_20_xusb_ready = false;
+
+static uint16_t build_xusb_ms_os_20_descriptor(void) {
+    if (desc_ms_os_20_xusb_ready) {
+        return VENDOR_MS_OS_20_DESC_LEN_XUSB;
+    }
+
+    memcpy(desc_ms_os_20_xusb, desc_ms_os_20, sizeof(desc_ms_os_20));
+    desc_ms_os_20_xusb[8] = (uint8_t)(VENDOR_MS_OS_20_DESC_LEN_XUSB & 0xff);
+    desc_ms_os_20_xusb[9] = (uint8_t)((VENDOR_MS_OS_20_DESC_LEN_XUSB >> 8) & 0xff);
+    const uint16_t configuration_subset_len = (uint16_t)(VENDOR_MS_OS_20_DESC_LEN_XUSB - 0x0A);
+    desc_ms_os_20_xusb[16] = (uint8_t)(configuration_subset_len & 0xff);
+    desc_ms_os_20_xusb[17] = (uint8_t)((configuration_subset_len >> 8) & 0xff);
+
+    uint16_t offset = sizeof(desc_ms_os_20);
+    uint8_t const xusb_function[] = {
+        // Function subset header for the XUSB gamepad interface.
+        U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),
+        GAMEPAD_INTERFACE_NUMBER, 0,
+        U16_TO_U8S_LE(MS_OS_20_XUSB_FUNCTION_DESC_LEN),
+
+        // Compatible ID: bind this interface to the Xbox 360 controller stack.
+        U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
+        'X', 'U', 'S', 'B', '1', '0', 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    TU_VERIFY_STATIC(sizeof(xusb_function) == MS_OS_20_XUSB_FUNCTION_DESC_LEN, "Incorrect XUSB MS OS 2.0 descriptor size");
+    memcpy(desc_ms_os_20_xusb + offset, xusb_function, sizeof(xusb_function));
+    desc_ms_os_20_xusb_ready = true;
+    return VENDOR_MS_OS_20_DESC_LEN_XUSB;
+}
+
+uint8_t const desc_xusb_ms_os_compat_id[] = {
+    // Header section.
+    0x28, 0x00, 0x00, 0x00, // dwLength
+    0x00, 0x01,             // bcdVersion
+    0x04, 0x00,             // wIndex: Extended Compatible ID
+    0x01,                   // bCount
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00,       // Reserved
+
+    // Function section.
+    GAMEPAD_INTERFACE_NUMBER,
+    0x01,                   // bNumInterfaces
+    'X', 'U', 'S', 'B', '1', '0', 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00,
+};
+
+TU_VERIFY_STATIC(sizeof(desc_xusb_ms_os_compat_id) == 0x28, "Incorrect XUSB MS OS compatible ID size");
+
 static CFG_TUD_MEM_ALIGN uint8_t vendor_bridge_control_buffer[64];
 static uint16_t vendor_bridge_control_len = 0;
 
@@ -698,12 +885,35 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
         return true;
     }
 
-    if (request->bRequest == VENDOR_MS_OS_VENDOR_REQUEST && request->wIndex == 7) {
+    if (
+        host_persona_active() == HostPersonaModeXusb360
+        && request->bRequest == XUSB_MS_OS_VENDOR_REQUEST
+        && request->wIndex == 4
+    ) {
+        const uint16_t len = request->wLength < sizeof(desc_xusb_ms_os_compat_id)
+            ? request->wLength
+            : sizeof(desc_xusb_ms_os_compat_id);
         return tud_control_xfer(
             rhport,
             request,
-            (void *)(uintptr_t)desc_ms_os_20,
-            VENDOR_MS_OS_20_DESC_LEN
+            (void *)(uintptr_t)desc_xusb_ms_os_compat_id,
+            len
+        );
+    }
+
+    if (request->bRequest == VENDOR_MS_OS_VENDOR_REQUEST && request->wIndex == 7) {
+        uint8_t const *descriptor = desc_ms_os_20;
+        uint16_t descriptor_len = VENDOR_MS_OS_20_DESC_LEN;
+        if (host_persona_active() == HostPersonaModeXusb360) {
+            descriptor_len = build_xusb_ms_os_20_descriptor();
+            descriptor = desc_ms_os_20_xusb;
+        }
+        const uint16_t len = request->wLength < descriptor_len ? request->wLength : descriptor_len;
+        return tud_control_xfer(
+            rhport,
+            request,
+            (void *)(uintptr_t)descriptor,
+            len
         );
     }
 
@@ -1134,7 +1344,7 @@ uint8_t const desc_hid_report_dse[] = {
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
 #ifdef ENABLE_COMPANION
-    if (itf == 1) {
+    if (itf == host_persona_keyboard_hid_instance()) {
         return desc_hid_report_keyboard;
     }
 #else
@@ -1195,6 +1405,21 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
         case STRID_SERIAL:
             chr_count = board_usb_get_serial(_desc_str + 1, 32);
             break;
+
+        case 0xEE:
+            if (host_persona_active() != HostPersonaModeXusb360) {
+                return NULL;
+            }
+            _desc_str[0] = (uint16_t)((TUSB_DESC_STRING << 8) | 0x12);
+            _desc_str[1] = 'M';
+            _desc_str[2] = 'S';
+            _desc_str[3] = 'F';
+            _desc_str[4] = 'T';
+            _desc_str[5] = '1';
+            _desc_str[6] = '0';
+            _desc_str[7] = '0';
+            _desc_str[8] = XUSB_MS_OS_VENDOR_REQUEST;
+            return _desc_str;
 
         default:
             // Note: the 0xEE index string is a Microsoft OS 1.0 Descriptors.

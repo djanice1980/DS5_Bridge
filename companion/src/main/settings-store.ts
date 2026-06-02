@@ -14,6 +14,7 @@ import type {
   ButtonRemapProfile,
   ControllerProfile,
   ControllerProfileSettings,
+  HostPersonaMode,
   RemapButtonId
 } from '../shared/protocol';
 import type { CompanionSettings, UiScalePercent } from '../shared/types';
@@ -127,6 +128,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   sleepKeybindEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.sleepKeybindEnabled,
   speakerVolumeShortcutEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumeShortcutEnabled,
   pollingRateMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.pollingRateMode,
+  hostPersonaMode: 'dualsense',
   notifyControllerConnection: false,
   notifyLowBattery: false,
   hostEncodedAudioEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hostEncodedAudioEnabled,
@@ -159,6 +161,10 @@ function normalizePollingRateMode(value: unknown): CompanionSettings['pollingRat
     default:
       return DEFAULT_SETTINGS.pollingRateMode;
   }
+}
+
+function normalizeHostPersonaMode(value: unknown): HostPersonaMode {
+  return value === 'xbox' ? 'xbox' : 'dualsense';
 }
 
 export function normalizeUiScalePercent(value: unknown): UiScalePercent {
@@ -611,6 +617,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       ? value.speakerVolumeShortcutEnabled
       : DEFAULT_SETTINGS.speakerVolumeShortcutEnabled,
     pollingRateMode: normalizePollingRateMode(value?.pollingRateMode),
+    hostPersonaMode: normalizeHostPersonaMode(value?.hostPersonaMode),
     notifyControllerConnection: typeof value?.notifyControllerConnection === 'boolean'
       ? value.notifyControllerConnection
       : DEFAULT_SETTINGS.notifyControllerConnection,

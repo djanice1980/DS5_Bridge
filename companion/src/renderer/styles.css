@@ -3097,6 +3097,17 @@ button.feature-icon {
     0 0 16px rgba(40, 124, 255, 0.1);
 }
 
+.dual-selector button:disabled {
+  cursor: not-allowed;
+  color: rgba(217, 227, 242, 0.42);
+  background: transparent;
+}
+
+.dual-selector button.active:disabled {
+  color: rgba(247, 249, 255, 0.72);
+  background: rgba(22, 103, 220, 0.48);
+}
+
 .dual-selector button svg {
   width: 15px;
   height: 15px;
@@ -4223,6 +4234,11 @@ button.trigger-lab-chip {
 
 .device-control-row .custom-select {
   width: min(100%, 320px);
+  justify-self: end;
+}
+
+.device-control-row .host-persona-selector {
+  grid-auto-columns: 96px;
   justify-self: end;
 }
 

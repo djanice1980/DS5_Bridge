@@ -8,6 +8,7 @@ import { SettingsStore } from './settings-store';
 import type {
   AdaptiveTriggerPreviewEffect,
   BridgePresetId,
+  HostPersonaMode,
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
@@ -26,12 +27,13 @@ const APP_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_app-icon-til
 const BASE_WINDOW_WIDTH = 1120;
 const BASE_WINDOW_HEIGHT = 630;
 const START_IN_TRAY_ARG = '--start-in-tray';
+const ALLOW_PARALLEL_AUTOMATION_INSTANCE = process.env.DS5_BRIDGE_ALLOW_PARALLEL_AUTOMATION_INSTANCE === '1';
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let bridgeService: BridgeService | null = null;
 let isQuitting = false;
 let shutdownComplete = false;
-const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const hasSingleInstanceLock = ALLOW_PARALLEL_AUTOMATION_INSTANCE || app.requestSingleInstanceLock();
 
 function windowsAppUserModelId(): string {
   return WINDOWS_APP_USER_MODEL_ID;
@@ -594,6 +596,9 @@ function registerIpc(service: BridgeService): void {
   });
   ipcMain.handle('bridge:setPollingRateMode', (_event, value: PollingRateMode) => (
     service.setPollingRateMode(value)
+  ));
+  ipcMain.handle('bridge:setHostPersonaMode', (_event, value: HostPersonaMode) => (
+    service.setHostPersonaMode(value)
   ));
   ipcMain.handle('bridge:sleepController', () => service.sleepController());
   ipcMain.handle('bridge:setNotifyControllerConnection', (_event, value: boolean) => (

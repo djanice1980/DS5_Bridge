@@ -11,7 +11,7 @@
 namespace {
 
 constexpr uint16_t kExpectedUsbDeviceRevision = 0x0151;
-constexpr uint64_t kExpectedCompanionDescriptorHash = 0x0aafa7ebadf96bebull;
+constexpr uint64_t kExpectedCompanionDescriptorHash = 0x6770da2ccfc65c21ull;
 
 std::string read_text(std::filesystem::path const &path) {
     std::ifstream input(path, std::ios::binary);
@@ -111,11 +111,31 @@ uint16_t parse_bcd_device(std::string const &source) {
 
 uint64_t companion_descriptor_hash(std::string const &source) {
     std::string material;
-    material += extract_between(source, "static tusb_desc_device_t const desc_device", "\n};\n\n// Invoked");
-    material += extract_between(source, "uint8_t descriptor_configuration[] = {", "\n};\n\nTU_VERIFY_STATIC");
+    material += extract_between(source, "static tusb_desc_device_t const desc_device", "\n};\nstatic tusb_desc_device_t desc_device_runtime");
+    material += extract_between(source, "uint8_t descriptor_configuration[] = {", "\n};\n\n#ifdef ENABLE_COMPANION");
     material += extract_between(source, "uint8_t const desc_ms_os_20[]", "\n};\n\nTU_VERIFY_STATIC(sizeof(desc_ms_os_20)");
     material += extract_between(source, "char const *string_desc_arr[]", "\n};\n\nstatic uint16_t _desc_str");
     return fnv1a_64(normalize_for_hash(material));
+}
+
+void assert_xusb_descriptor_uses_endpoint_constants(std::string const &source) {
+    const std::string block = extract_between(
+        source,
+        "uint8_t const xusb_gamepad_descriptor[] = {",
+        "\n    };\n    TU_VERIFY_STATIC(sizeof(xusb_gamepad_descriptor)"
+    );
+
+    if (block.find("0x11, 0x21, 0x00, 0x01") == std::string::npos) {
+        throw std::runtime_error("XUSB class descriptor must use the 17-byte Xbox 360 interface shape");
+    }
+
+    if (block.find("0x01, 0x25, XUSB360_EP_IN, 0x14") == std::string::npos) {
+        throw std::runtime_error("XUSB class descriptor must advertise XUSB360_EP_IN");
+    }
+
+    if (block.find("0x13, XUSB360_EP_OUT, 0x08, 0x00, 0x00") == std::string::npos) {
+        throw std::runtime_error("XUSB class descriptor must advertise XUSB360_EP_OUT");
+    }
 }
 
 } // namespace
@@ -125,6 +145,7 @@ int main() {
         const auto source = read_text(std::filesystem::path(DS5_SOURCE_ROOT) / "src" / "usb_descriptors.c");
         const uint16_t bcd_device = parse_bcd_device(source);
         const uint64_t descriptor_hash = companion_descriptor_hash(source);
+        assert_xusb_descriptor_uses_endpoint_constants(source);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

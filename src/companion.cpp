@@ -8,6 +8,7 @@
 #include "bt.h"
 #include "controller_output_submit.h"
 #include "dualsense_output.h"
+#include "persona/host_persona.h"
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
@@ -17,7 +18,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 5;
+constexpr uint8_t kProtocolMinor = 6;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 5;
 constexpr uint8_t kFirmwarePatch = 1;
@@ -125,6 +126,7 @@ enum CommandId : uint8_t {
     CommandSetButtonRemap = 0x1E,
     CommandPreviewAdaptiveTriggerEffect = 0x1F,
     CommandApplyAdaptiveTriggerEffect = 0x20,
+    CommandSetHostPersona = 0x21,
 };
 
 enum AckResult : uint8_t {
@@ -705,6 +707,10 @@ void restore_defaults() {
     bt_set_idle_disconnect_timeout_minutes(15);
     usb_set_suspend_disconnect_enabled(true);
     usb_set_hid_polling_rate_mode(2);
+    if (host_persona_active() != HostPersonaModeDualSense) {
+        host_persona_set_active(HostPersonaModeDualSense);
+        usb_request_reconnect();
+    }
 }
 
 uint8_t controller_type() {
@@ -726,6 +732,17 @@ uint8_t firmware_flags() {
     flags |= 1 << 6;
     flags |= 1 << 7;
     return flags;
+}
+
+uint8_t supported_host_persona_mask() {
+    uint8_t mask = 0;
+    if (host_persona_is_supported(HostPersonaModeDualSense)) {
+        mask |= 1 << HostPersonaModeDualSense;
+    }
+    if (host_persona_is_supported(HostPersonaModeXusb360)) {
+        mask |= 1 << HostPersonaModeXusb360;
+    }
+    return mask;
 }
 
 bool valid_mute_button_action(uint16_t mode, uint8_t usage) {
@@ -1246,7 +1263,8 @@ void mute_keyboard_loop() {
         }
     }
 
-    if (!tud_hid_n_ready(KEYBOARD_HID_INSTANCE)) {
+    const uint8_t keyboard_hid_instance = host_persona_keyboard_hid_instance();
+    if (!tud_hid_n_ready(keyboard_hid_instance)) {
         return;
     }
 
@@ -1254,7 +1272,7 @@ void mute_keyboard_loop() {
         uint8_t keyboard_report[8]{};
         keyboard_report[0] = mute_keyboard_modifiers & kMuteKeyboardModifierMask;
         keyboard_report[2] = mute_keyboard_usage;
-        if (tud_hid_n_report(KEYBOARD_HID_INSTANCE, 0, keyboard_report, sizeof(keyboard_report))) {
+        if (tud_hid_n_report(keyboard_hid_instance, 0, keyboard_report, sizeof(keyboard_report))) {
             mute_keyboard_pending = false;
             mute_keyboard_pressed = true;
             mute_keyboard_release_at_us = mute_keyboard_hold_enabled() ? 0 : now + kKeyboardPressDurationUs;
@@ -1268,7 +1286,7 @@ void mute_keyboard_loop() {
         && static_cast<int32_t>(now - mute_keyboard_release_at_us) >= 0
     ) {
         uint8_t keyboard_report[8]{};
-        if (tud_hid_n_report(KEYBOARD_HID_INSTANCE, 0, keyboard_report, sizeof(keyboard_report))) {
+        if (tud_hid_n_report(keyboard_hid_instance, 0, keyboard_report, sizeof(keyboard_report))) {
             mute_keyboard_pressed = false;
         }
     }
@@ -1364,6 +1382,8 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[44] = static_cast<uint8_t>(bt_get_signal_strength());
     buffer[45] = bt_has_signal_strength() ? 1 : 0;
     buffer[46] = game_trigger_update_recent() ? 1 : 0;
+    buffer[47] = static_cast<uint8_t>(host_persona_active());
+    buffer[48] = supported_host_persona_mask();
     buffer[58] = lightbar_override_enabled ? 1 : 0;
     buffer[59] = mute_button_mode;
     buffer[60] = mute_keyboard_usage;
@@ -1948,6 +1968,26 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
+
+        case CommandSetHostPersona:
+            if (value > HostPersonaModeXusb360) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            {
+                const HostPersonaMode next_persona = static_cast<HostPersonaMode>(value);
+                const bool changed = host_persona_active() != next_persona;
+                if (!host_persona_set_active(next_persona)) {
+                    set_ack(command_id, sequence, AckInvalidValue);
+                    return;
+                }
+                settings_revision++;
+                if (changed) {
+                    usb_request_reconnect();
+                }
+                set_ack(command_id, sequence, AckOk);
+                return;
+            }
 
         case CommandSleepController:
             if (value != 0) {

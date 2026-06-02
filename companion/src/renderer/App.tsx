@@ -74,6 +74,7 @@ import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
 import { DEFAULT_BUTTON_REMAP_PROFILE_ID, DEFAULT_CONTROLLER_PROFILE_ID, REMAP_BUTTON_IDS, ackResultName } from '../shared/protocol';
 import type {
   ControllerProfileSettings,
+  HostPersonaMode,
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
@@ -278,6 +279,10 @@ const POLLING_RATE_OPTIONS: Array<[string, PollingRateMode]> = [
   ['1000 Hz / Real-time', '1000'],
   ['500 Hz', '500'],
   ['250 Hz', '250']
+];
+const HOST_PERSONA_OPTIONS: Array<[string, HostPersonaMode]> = [
+  ['DualSense', 'dualsense'],
+  ['Xbox', 'xbox']
 ];
 const TRIGGER_TARGET_OPTIONS: Array<[string, TriggerTestTarget]> = [
   ['L2', 'l2'],
@@ -2260,6 +2265,8 @@ export function App() {
   const usbSuspendDisconnectSupported = Boolean(snapshot?.status?.firmwareFlags.usbSuspendDisconnectControl);
   const sleepControllerSupported = Boolean(snapshot?.status?.firmwareFlags.sleepControllerControl);
   const pollingRateControlSupported = Boolean(snapshot?.status?.firmwareFlags.pollingRateControl);
+  const hostPersonaControlSupported = Boolean(snapshot?.status?.firmwareFlags.hostPersonaControl);
+  const supportedHostPersonaModes: HostPersonaMode[] = snapshot?.status?.supportedHostPersonaModes ?? ['dualsense'];
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const classicRumbleEnabled = Boolean(snapshot?.settings.classicRumbleEnabled);
   const activeHapticsFeatureEnabled = showClassicRumbleControl ? classicRumbleEnabled : hapticsEnabled;
@@ -3913,6 +3920,10 @@ export function App() {
 
   function setPollingRateMode(mode: PollingRateMode) {
     void runAction('polling-rate', () => window.bridge.setPollingRateMode(mode));
+  }
+
+  function setHostPersonaMode(mode: HostPersonaMode) {
+    void runAction('host-persona', () => window.bridge.setHostPersonaMode(mode));
   }
 
   function testNotifications() {
@@ -6076,6 +6087,28 @@ export function App() {
                           ariaLabel="Polling rate"
                           onChange={setPollingRateMode}
                         />
+                      </div>
+                      <div className="device-row device-control-row">
+                        <span>Host Controller</span>
+                        <div className="dual-selector host-persona-selector" role="tablist" aria-label="Host controller persona">
+                          {HOST_PERSONA_OPTIONS.map(([label, mode]) => {
+                            const active = snapshot.settings.hostPersonaMode === mode;
+                            const supported = supportedHostPersonaModes.includes(mode);
+                            return (
+                              <button
+                                key={mode}
+                                type="button"
+                                role="tab"
+                                aria-selected={active}
+                                className={active ? 'active' : undefined}
+                                disabled={!connected || !hostPersonaControlSupported || !supported || pendingAction !== null}
+                                onClick={() => setHostPersonaMode(mode)}
+                              >
+                                {label}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
                       <div className="device-row">
                         <span>Status</span>

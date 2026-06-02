@@ -11,10 +11,13 @@
 #include "controller_output_policy.h"
 #include "controller_output_state.h"
 #include "controller_packet_compositor.h"
+#include "dualsense_input_decoder.h"
 #include "dualsense_output.h"
 #include "haptics_test_signal.h"
 #include "host_audio_runtime.h"
 #include "output_scheduler.h"
+#include "persona/host_persona.h"
+#include "persona/xusb360_persona.h"
 
 using namespace ds5::output;
 
@@ -88,6 +91,7 @@ using Payload = std::array<uint8_t, kCommonPayloadSize>;
 using AudioSnapshot = std::array<uint8_t, kAudioStateSnapshotSize>;
 using BtReport = std::array<uint8_t, kBtOutputReportSize>;
 using HapticFrame = std::array<int8_t, 64>;
+using DualSenseInputReport = std::array<uint8_t, kDualSenseUsbInputReportSize>;
 
 Payload empty_payload() {
     Payload payload{};
@@ -132,6 +136,22 @@ void reset_output_state() {
     controller_output_state_reset_cached_triggers();
     Payload payload{};
     controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+}
+
+DualSenseInputReport sample_dualsense_input_report() {
+    DualSenseInputReport report{};
+    report[0] = 0x00;
+    report[1] = 0xff;
+    report[2] = 0x80;
+    report[3] = 0x40;
+    report[4] = 0x22;
+    report[5] = 0xcc;
+    report[7] = 0x20 | 0x02; // Cross + D-pad right.
+    report[8] = 0x01 | 0x08 | 0x10 | 0x80; // L1 + R2 + Create + R3.
+    report[9] = 0x01 | 0x02 | 0x40; // Home + touchpad + left paddle.
+    report[52] = 0x07;
+    report[53] = 0x01 | 0x04;
+    return report;
 }
 
 OutputSchedulerInputs scheduler_inputs() {
@@ -554,6 +574,94 @@ void host_audio_runtime_blocks_local_haptics_only_while_stream_owns_audio_path()
     EXPECT_FALSE(runtime.blocks_local_haptics_test(40'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
 }
 
+void dualsense_decoder_extracts_normalized_controller_state() {
+    const auto report = sample_dualsense_input_report();
+    BridgeControllerState state{};
+
+    EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+    EXPECT_EQ(state.left_stick_x, 0x00);
+    EXPECT_EQ(state.left_stick_y, 0xff);
+    EXPECT_EQ(state.right_stick_x, 0x80);
+    EXPECT_EQ(state.right_stick_y, 0x40);
+    EXPECT_EQ(state.left_trigger, 0x22);
+    EXPECT_EQ(state.right_trigger, 0xcc);
+    EXPECT_FALSE(state.dpad_up);
+    EXPECT_FALSE(state.dpad_down);
+    EXPECT_FALSE(state.dpad_left);
+    EXPECT_TRUE(state.dpad_right);
+    EXPECT_TRUE(state.cross);
+    EXPECT_FALSE(state.circle);
+    EXPECT_TRUE(state.l1);
+    EXPECT_TRUE(state.r2_pressed);
+    EXPECT_TRUE(state.create);
+    EXPECT_TRUE(state.r3);
+    EXPECT_TRUE(state.home);
+    EXPECT_TRUE(state.touchpad);
+    EXPECT_TRUE(state.edge_left_paddle);
+    EXPECT_EQ(state.battery_percent, 70);
+    EXPECT_TRUE(state.headset_plugged);
+    EXPECT_TRUE(state.microphone_muted);
+    EXPECT_EQ(state.dualsense_report_len, kDualSenseUsbInputReportSize);
+    EXPECT_EQ(state.dualsense_report[7], report[7]);
+}
+
+void dualsense_persona_preserves_native_report_bytes() {
+    const auto report = sample_dualsense_input_report();
+    BridgeControllerState state{};
+    HostPersonaInputReport encoded{};
+
+    EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+    EXPECT_TRUE(host_persona_encode_input(HostPersonaModeDualSense, state, encoded));
+    EXPECT_EQ(encoded.report_id, 0x01);
+    EXPECT_EQ(encoded.len, kDualSenseUsbInputReportSize);
+    for (uint8_t index = 0; index < kDualSenseUsbInputReportSize; index++) {
+        EXPECT_EQ(encoded.bytes[index], report[index]);
+    }
+}
+
+void xusb360_persona_maps_standard_gamepad_fields() {
+    const auto report = sample_dualsense_input_report();
+    BridgeControllerState state{};
+    HostPersonaInputReport encoded{};
+
+    EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+    EXPECT_TRUE(host_persona_encode_input(HostPersonaModeXusb360, state, encoded));
+    EXPECT_EQ(encoded.report_id, 0);
+    EXPECT_EQ(encoded.len, kXusb360InputReportSize);
+    EXPECT_EQ(encoded.bytes[0], 0x00);
+    EXPECT_EQ(encoded.bytes[1], kXusb360InputReportSize);
+    const uint16_t buttons = static_cast<uint16_t>(encoded.bytes[2] | (encoded.bytes[3] << 8));
+    EXPECT_TRUE((buttons & 0x0008) != 0); // D-pad right.
+    EXPECT_TRUE((buttons & 0x0020) != 0); // Back/View.
+    EXPECT_TRUE((buttons & 0x0080) != 0); // Right stick.
+    EXPECT_TRUE((buttons & 0x0100) != 0); // Left shoulder.
+    EXPECT_TRUE((buttons & 0x0400) != 0); // Guide.
+    EXPECT_TRUE((buttons & 0x1000) != 0); // A.
+    EXPECT_FALSE((buttons & 0x2000) != 0); // B.
+    EXPECT_EQ(encoded.bytes[4], 0x22);
+    EXPECT_EQ(encoded.bytes[5], 0xcc);
+}
+
+void xusb360_rumble_decodes_to_ds5_classic_rumble_payload() {
+    uint8_t output[kXusb360RumbleOutputSize] = {0x00, kXusb360RumbleOutputSize, 0x00, 0x90, 0x30, 0, 0, 0};
+    Payload payload{};
+    uint16_t payload_len = 0;
+
+    EXPECT_TRUE(host_persona_decode_output_to_ds5_payload(
+        HostPersonaModeXusb360,
+        output,
+        sizeof(output),
+        payload.data(),
+        payload.size(),
+        payload_len
+    ));
+    EXPECT_EQ(payload_len, kCommonPayloadSize);
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_EQ(payload[kMotorLeftOffset], 0x90);
+    EXPECT_EQ(payload[kMotorRightOffset], 0x30);
+}
+
 struct TestCase {
     char const *name;
     void (*run)();
@@ -581,6 +689,10 @@ std::vector<TestCase> tests{
     {"host audio runtime last contact uses newest timestamp across wraparound", host_audio_runtime_last_contact_uses_newest_timestamp_across_wraparound},
     {"host audio runtime generation never wraps to zero", host_audio_runtime_generation_never_wraps_to_zero},
     {"host audio runtime blocks local haptics only while stream owns audio path", host_audio_runtime_blocks_local_haptics_only_while_stream_owns_audio_path},
+    {"dualsense decoder extracts normalized controller state", dualsense_decoder_extracts_normalized_controller_state},
+    {"dualsense persona preserves native report bytes", dualsense_persona_preserves_native_report_bytes},
+    {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},
+    {"xusb360 rumble decodes to ds5 classic rumble payload", xusb360_rumble_decodes_to_ds5_classic_rumble_payload},
 };
 
 } // namespace

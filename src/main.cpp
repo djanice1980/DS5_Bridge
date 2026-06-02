@@ -14,6 +14,9 @@
 #include "audio.h"
 #include "usb.h"
 #include "controller_report.h"
+#include "dualsense_input_decoder.h"
+#include "persona/host_persona.h"
+#include "persona/xusb360_usb.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
@@ -165,6 +168,7 @@ uint8_t interrupt_in_data[63] = {
 
 critical_section_t report_cs;
 volatile bool report_dirty = false;
+BridgeControllerState interrupt_in_state{};
 
 void reset_controller_input_report_cache() {
     static constexpr uint8_t default_interrupt_in_data[63] = {
@@ -178,23 +182,32 @@ void reset_controller_input_report_cache() {
         0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b
     };
 
+    BridgeControllerState default_state{};
+    (void)dualsense_decode_usb_input_report(default_interrupt_in_data, sizeof(default_interrupt_in_data), default_state);
+
     critical_section_enter_blocking(&report_cs);
     memcpy(interrupt_in_data, default_interrupt_in_data, sizeof(interrupt_in_data));
+    interrupt_in_state = default_state;
     report_dirty = false;
     critical_section_exit(&report_cs);
 }
 
 void interrupt_loop() {
-    if (!tud_hid_ready()) return;
+    const HostPersonaMode persona = host_persona_active();
+    const bool native_hid = persona == HostPersonaModeDualSense;
+    if (native_hid) {
+        if (!tud_hid_ready()) return;
+    } else if (!xusb360_usb_ready()) {
+        return;
+    }
 
     bool should_send = false;
-    // Local buffer to hold the report data while we prepare it to send. 
-    uint8_t safe_report[63];
+    BridgeControllerState safe_state{};
 
 
     critical_section_enter_blocking(&report_cs);
     if (report_dirty) {
-        memcpy(safe_report, interrupt_in_data, 63);
+        safe_state = interrupt_in_state;
         report_dirty = false;
         should_send = true;
     }
@@ -202,8 +215,15 @@ void interrupt_loop() {
 
     // Only send to TinyUSB if we actually grabbed fresh data
     if (should_send) {
-        note_usb_input_report(safe_report, sizeof(safe_report));
-        if (!tud_hid_report(0x01, safe_report, 63)) {
+        HostPersonaInputReport safe_report{};
+        if (!host_persona_encode_input(persona, safe_state, safe_report)) {
+            return;
+        }
+        note_usb_input_report(safe_report.bytes, safe_report.len);
+        const bool queued = native_hid
+            ? tud_hid_report(safe_report.report_id, safe_report.bytes, safe_report.len)
+            : xusb360_usb_send_report(safe_report.bytes, safe_report.len);
+        if (!queued) {
             DS5_LOG("[USBHID] tud_hid_report error\n");
             
             // If the report failed to queue, restore the dirty flag 
@@ -237,6 +257,11 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     companion_process_controller_report(controller_report, sizeof(controller_report));
 #endif
 
+    BridgeControllerState controller_state{};
+    if (!dualsense_decode_usb_input_report(controller_report, sizeof(controller_report), controller_state)) {
+        return;
+    }
+
     // We add the critical section here to avoid any race conditions when writing to the interrupt_in_data buffer,
     // which is shared between the main loop and this callback.
     // The critical section ensures that only one thread can access the buffer at a time,
@@ -245,6 +270,7 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     //  and needs to be sent in the next interrupt report.
     critical_section_enter_blocking(&report_cs);
     memcpy(interrupt_in_data, controller_report, sizeof(controller_report));
+    interrupt_in_state = controller_state;
     report_dirty = true;
     critical_section_exit(&report_cs);
 #ifdef ENABLE_COMPANION
@@ -264,7 +290,7 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     (void) reqlen;
 
 #ifdef ENABLE_COMPANION
-    if (itf == KEYBOARD_HID_INSTANCE) {
+    if (itf == host_persona_keyboard_hid_instance()) {
         return 0;
     }
 #endif
@@ -301,7 +327,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     (void) bufsize;
 
 #ifdef ENABLE_COMPANION
-    if (itf == KEYBOARD_HID_INSTANCE) {
+    if (itf == host_persona_keyboard_hid_instance()) {
         return;
     }
 #endif

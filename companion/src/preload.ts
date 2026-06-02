@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AdaptiveTriggerPreviewEffect,
   BridgePresetId,
+  HostPersonaMode,
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
@@ -101,6 +102,9 @@ const api = {
   setUiScalePercent: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setUiScalePercent', value),
   setPollingRateMode: (value: PollingRateMode): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setPollingRateMode', value)
+  ),
+  setHostPersonaMode: (value: HostPersonaMode): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setHostPersonaMode', value)
   ),
   sleepController: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:sleepController'),
   setNotifyControllerConnection: (value: boolean): Promise<BridgeSnapshot> => (

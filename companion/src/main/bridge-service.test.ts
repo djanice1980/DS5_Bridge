@@ -106,7 +106,8 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED,
   COMMAND_ID.SET_SPEAKER_VOLUME_SHORTCUT_ENABLED,
   COMMAND_ID.SET_BUTTON_REMAP,
-  COMMAND_ID.SET_POLLING_RATE_MODE
+  COMMAND_ID.SET_POLLING_RATE_MODE,
+  COMMAND_ID.SET_HOST_PERSONA
 ];
 
 class MockHidDevice extends EventEmitter {
@@ -1087,6 +1088,22 @@ describe('BridgeService', () => {
     expect(command?.[7]).toBe(COMMAND_ID.SET_POLLING_RATE_MODE);
     expect(command?.[9]).toBe(1);
     expect(snapshot.settings.pollingRateMode).toBe('500');
+  });
+
+  it('sends and stores host persona settings', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setHostPersonaMode('xbox');
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_HOST_PERSONA);
+    expect(command?.[9]).toBe(1);
+    expect(snapshot.settings.hostPersonaMode).toBe('xbox');
   });
 
   it('sends manual sleep command without requiring a settings revision change', async () => {
