@@ -10,3 +10,5 @@ companion/dist-main
 companion/artifacts
 companion/native/**/bin
 companion/native/**/obj
+tools/**/bin
+tools/**/obj

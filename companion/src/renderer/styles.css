@@ -4532,12 +4532,19 @@ button.trigger-lab-chip {
 }
 
 .host-persona-option img,
-.host-persona-option svg {
+.host-persona-option svg,
+.host-persona-brand-icon {
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
   object-fit: contain;
   display: block;
+}
+
+.host-persona-brand-icon {
+  background: #ffffff;
+  -webkit-mask: var(--host-persona-brand-mask) center / contain no-repeat;
+  mask: var(--host-persona-brand-mask) center / contain no-repeat;
 }
 
 .host-persona-option svg {

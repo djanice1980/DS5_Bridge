@@ -4,6 +4,14 @@
 #include <cstdint>
 
 constexpr uint8_t kDualSenseUsbInputReportSize = 63;
+constexpr uint8_t kBridgeTouchPointCount = 2;
+
+struct BridgeTouchPoint {
+    bool active = false;
+    uint8_t contact_id = 0;
+    uint16_t x = 0;
+    uint16_t y = 0;
+};
 
 struct BridgeControllerState {
     uint8_t left_stick_x = 0x80;
@@ -44,6 +52,16 @@ struct BridgeControllerState {
     bool headset_plugged = false;
     bool microphone_plugged = false;
     bool microphone_muted = false;
+
+    bool motion_valid = false;
+    int16_t gyro_x = 0;
+    int16_t gyro_y = 0;
+    int16_t gyro_z = 0;
+    int16_t accel_x = 0;
+    int16_t accel_y = 0;
+    int16_t accel_z = 0;
+    uint32_t sensor_timestamp = 0;
+    BridgeTouchPoint touch_points[kBridgeTouchPointCount]{};
 
     uint8_t dualsense_report[kDualSenseUsbInputReportSize]{};
     uint8_t dualsense_report_len = 0;

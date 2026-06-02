@@ -25,8 +25,14 @@ type PendingRequest = {
   timeout: NodeJS.Timeout;
 };
 
+type OpenOptions = {
+  retryTimeoutMs?: number;
+  retryDelayMs?: number;
+};
+
 const REQUEST_TIMEOUT_MS = 1500;
 const START_TIMEOUT_MS = 2500;
+const DEFAULT_OPEN_RETRY_DELAY_MS = 50;
 const REPORT_LENGTH = 64;
 
 export class WinUsbCompanionTransport extends EventEmitter {
@@ -55,7 +61,27 @@ export class WinUsbCompanionTransport extends EventEmitter {
     });
   }
 
-  static async open(): Promise<WinUsbCompanionTransport> {
+  static async open(options: OpenOptions = {}): Promise<WinUsbCompanionTransport> {
+    const retryTimeoutMs = Math.max(0, options.retryTimeoutMs ?? 0);
+    const retryDelayMs = Math.max(1, options.retryDelayMs ?? DEFAULT_OPEN_RETRY_DELAY_MS);
+    const startedAt = Date.now();
+    let lastError: Error | null = null;
+
+    while (true) {
+      try {
+        return await WinUsbCompanionTransport.openOnce();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const elapsedMs = Date.now() - startedAt;
+        if (retryTimeoutMs <= 0 || elapsedMs >= retryTimeoutMs) {
+          throw lastError;
+        }
+        await delay(Math.min(retryDelayMs, retryTimeoutMs - elapsedMs));
+      }
+    }
+  }
+
+  private static async openOnce(): Promise<WinUsbCompanionTransport> {
     const helper = spawn(resolveHostAudioHelperPath(), ['--companion-transport'], {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
@@ -242,4 +268,8 @@ function normalizeReport(report: ArrayLike<number>): number[] {
     throw new Error(`Expected ${REPORT_LENGTH} report bytes, received ${report.length}.`);
   }
   return Array.from({ length: REPORT_LENGTH }, (_, index) => report[index] & 0xff);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

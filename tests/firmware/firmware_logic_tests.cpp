@@ -150,6 +150,27 @@ DualSenseInputReport sample_dualsense_input_report() {
     report[7] = 0x20 | 0x02; // Cross + D-pad right.
     report[8] = 0x01 | 0x08 | 0x10 | 0x80; // L1 + R2 + Create + R3.
     report[9] = 0x01 | 0x02 | 0x40; // Home + touchpad + left paddle.
+    report[15] = 0x34;
+    report[16] = 0x12;
+    report[17] = 0x78;
+    report[18] = 0x56;
+    report[19] = 0xbc;
+    report[20] = 0x9a;
+    report[21] = 0xef;
+    report[22] = 0xcd;
+    report[23] = 0x57;
+    report[24] = 0x13;
+    report[25] = 0x68;
+    report[26] = 0x24;
+    report[27] = 0x44;
+    report[28] = 0x33;
+    report[29] = 0x22;
+    report[30] = 0x11;
+    report[32] = 0x05; // Touch point 0: active contact id 5.
+    report[33] = 0xb0; // x = 1200.
+    report[34] = 0xc4; // x high nibble + y low nibble for y = 540.
+    report[35] = 0x21;
+    report[36] = 0x86; // Touch point 1: inactive contact id 6.
     report[52] = 0x07;
     report[53] = 0x01 | 0x04;
     return report;
@@ -602,6 +623,22 @@ void dualsense_decoder_extracts_normalized_controller_state() {
     EXPECT_EQ(state.battery_percent, 70);
     EXPECT_TRUE(state.headset_plugged);
     EXPECT_TRUE(state.microphone_muted);
+    EXPECT_TRUE(state.motion_valid);
+    EXPECT_EQ(state.gyro_x, 0x1234);
+    EXPECT_EQ(state.gyro_y, 0x5678);
+    EXPECT_EQ(state.gyro_z, static_cast<int16_t>(0x9abc));
+    EXPECT_EQ(state.accel_x, static_cast<int16_t>(0xcdef));
+    EXPECT_EQ(state.accel_y, 0x1357);
+    EXPECT_EQ(state.accel_z, 0x2468);
+    EXPECT_EQ(state.sensor_timestamp, 0x11223344u);
+    EXPECT_TRUE(state.touch_points[0].active);
+    EXPECT_EQ(state.touch_points[0].contact_id, 5);
+    EXPECT_EQ(state.touch_points[0].x, 1200);
+    EXPECT_EQ(state.touch_points[0].y, 540);
+    EXPECT_FALSE(state.touch_points[1].active);
+    EXPECT_EQ(state.touch_points[1].contact_id, 6);
+    EXPECT_EQ(state.touch_points[1].x, 0);
+    EXPECT_EQ(state.touch_points[1].y, 0);
     EXPECT_EQ(state.dualsense_report_len, kDualSenseUsbInputReportSize);
     EXPECT_EQ(state.dualsense_report[7], report[7]);
 }
@@ -681,10 +718,32 @@ void ds4_persona_maps_standard_gamepad_fields() {
     EXPECT_EQ(encoded.bytes[6] & 0x03, 0x03); // PS + touchpad click.
     EXPECT_EQ(encoded.bytes[7], 0x22);
     EXPECT_EQ(encoded.bytes[8], 0xcc);
+    EXPECT_EQ(encoded.bytes[9], 0x44);
+    EXPECT_EQ(encoded.bytes[10], 0x33);
     EXPECT_EQ(encoded.bytes[11], 0x09);
+    EXPECT_EQ(encoded.bytes[12], 0x34);
+    EXPECT_EQ(encoded.bytes[13], 0x12);
+    EXPECT_EQ(encoded.bytes[14], 0x78);
+    EXPECT_EQ(encoded.bytes[15], 0x56);
+    EXPECT_EQ(encoded.bytes[16], 0xbc);
+    EXPECT_EQ(encoded.bytes[17], 0x9a);
+    EXPECT_EQ(encoded.bytes[18], 0xef);
+    EXPECT_EQ(encoded.bytes[19], 0xcd);
+    EXPECT_EQ(encoded.bytes[20], 0x57);
+    EXPECT_EQ(encoded.bytes[21], 0x13);
+    EXPECT_EQ(encoded.bytes[22], 0x68);
+    EXPECT_EQ(encoded.bytes[23], 0x24);
     EXPECT_EQ(encoded.bytes[29], 0x1a);
-    EXPECT_EQ(encoded.bytes[34], 0x80);
-    EXPECT_EQ(encoded.bytes[38], 0x80);
+    EXPECT_EQ(encoded.bytes[32], 0x01);
+    EXPECT_EQ(encoded.bytes[33], 0x44);
+    EXPECT_EQ(encoded.bytes[34], 0x05);
+    EXPECT_EQ(encoded.bytes[35], 0xb0);
+    EXPECT_EQ(encoded.bytes[36], 0x74);
+    EXPECT_EQ(encoded.bytes[37], 0x1d);
+    EXPECT_EQ(encoded.bytes[38], 0x86);
+    EXPECT_EQ(encoded.bytes[39], 0x00);
+    EXPECT_EQ(encoded.bytes[40], 0x00);
+    EXPECT_EQ(encoded.bytes[41], 0x00);
 }
 
 void ds4_output_decodes_to_ds5_rumble_and_lightbar_payload() {

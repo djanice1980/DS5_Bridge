@@ -28,6 +28,9 @@ constexpr uint8_t kDs4ButtonTouchpad = 0x02;
 
 constexpr uint8_t kDs4BatteryFullyChargedUsb = 0x1a;
 constexpr int16_t kDs4DefaultAccelZ = -5023;
+constexpr uint16_t kDualSenseTouchpadHeight = 1080;
+constexpr uint16_t kDs4TouchpadWidth = 1920;
+constexpr uint16_t kDs4TouchpadHeight = 942;
 
 constexpr uint8_t kDs4FeatureCapabilities = 0x03;
 constexpr uint8_t kDs4FeatureCalibrationBt = 0x05;
@@ -54,6 +57,36 @@ void write_u16(uint8_t *data, uint16_t value) {
 
 void write_i16(uint8_t *data, int16_t value) {
     write_u16(data, static_cast<uint16_t>(value));
+}
+
+uint16_t clamp_u16(uint16_t value, uint16_t max_value) {
+    return value > max_value ? max_value : value;
+}
+
+uint16_t scale_touch_y_to_ds4(uint16_t y) {
+    const uint32_t clamped = clamp_u16(y, static_cast<uint16_t>(kDualSenseTouchpadHeight - 1));
+    return static_cast<uint16_t>(
+        std::min<uint32_t>(
+            kDs4TouchpadHeight - 1,
+            (clamped * static_cast<uint32_t>(kDs4TouchpadHeight) + kDualSenseTouchpadHeight / 2)
+                / kDualSenseTouchpadHeight
+        )
+    );
+}
+
+void write_ds4_touch_point(uint8_t *data, BridgeTouchPoint const &point) {
+    uint16_t x = 0;
+    uint16_t y = 0;
+    data[0] = static_cast<uint8_t>(point.contact_id & 0x7f);
+    if (point.active) {
+        x = clamp_u16(point.x, static_cast<uint16_t>(kDs4TouchpadWidth - 1));
+        y = scale_touch_y_to_ds4(point.y);
+    } else {
+        data[0] |= 0x80;
+    }
+    data[1] = static_cast<uint8_t>(x & 0xff);
+    data[2] = static_cast<uint8_t>(((x >> 8) & 0x0f) | ((y & 0x0f) << 4));
+    data[3] = static_cast<uint8_t>((y >> 4) & 0xff);
 }
 
 uint8_t dpad_hat(BridgeControllerState const &state) {
@@ -159,15 +192,32 @@ bool ds4_persona_encode_input(
 
     report.bytes[7] = state.left_trigger;
     report.bytes[8] = state.right_trigger;
-    write_u16(report.bytes + 9, ds4_timestamp++);
+    write_u16(
+        report.bytes + 9,
+        state.motion_valid
+            ? static_cast<uint16_t>(state.sensor_timestamp & 0xffff)
+            : ds4_timestamp++
+    );
     report.bytes[11] = 0x09;
 
-    write_i16(report.bytes + 18, kDs4DefaultAccelZ);
+    if (state.motion_valid) {
+        write_i16(report.bytes + 12, state.gyro_x);
+        write_i16(report.bytes + 14, state.gyro_y);
+        write_i16(report.bytes + 16, state.gyro_z);
+        write_i16(report.bytes + 18, state.accel_x);
+        write_i16(report.bytes + 20, state.accel_y);
+        write_i16(report.bytes + 22, state.accel_z);
+    } else {
+        write_i16(report.bytes + 22, kDs4DefaultAccelZ);
+    }
+
     report.bytes[29] = kDs4BatteryFullyChargedUsb;
     report.bytes[32] = 0x01;
-    report.bytes[33] = 0x01;
-    report.bytes[34] = 0x80;
-    report.bytes[38] = 0x80;
+    report.bytes[33] = state.motion_valid
+        ? static_cast<uint8_t>(state.sensor_timestamp & 0xff)
+        : static_cast<uint8_t>(ds4_report_counter & 0xff);
+    write_ds4_touch_point(report.bytes + 34, state.touch_points[0]);
+    write_ds4_touch_point(report.bytes + 38, state.touch_points[1]);
     return true;
 }
 

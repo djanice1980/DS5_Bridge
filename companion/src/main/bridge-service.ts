@@ -99,6 +99,9 @@ const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
 const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
 const HOST_PERSONA_TRANSITION_TIMEOUT_MS = 8000;
 const HOST_PERSONA_TRANSITION_SETTLE_MS = 1200;
+const HOST_PERSONA_TRANSITION_REDISCOVERY_POLL_MS = 100;
+const HOST_PERSONA_TRANSITION_OPEN_RETRY_MS = 1000;
+const HOST_PERSONA_RECONNECT_GRACE_MS = 5000;
 const MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES = 1;
 const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
@@ -132,6 +135,8 @@ type CommandOptions = {
 
 type HostPersonaTransitionState = HostPersonaTransition & {
   settlingUntil: number | null;
+  reconnectingUntil: number;
+  completedAt: number | null;
 };
 
 export type BridgeToast = {
@@ -873,6 +878,9 @@ export class BridgeService extends EventEmitter {
   private device: WinUsbCompanionTransport | null = null;
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
+  private hostPersonaTransitionPollTimer: NodeJS.Timeout | null = null;
+  private pollInFlight = false;
+  private pollAgainRequested = false;
   private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
   private readonly hostAudioEngine = new HostAudioEngine();
   private readonly micKeepaliveEngine = new MicKeepaliveEngine();
@@ -987,9 +995,9 @@ export class BridgeService extends EventEmitter {
   }
 
   start(): void {
-    this.poll().catch((error) => this.publishError(error));
+    this.runPoll();
     this.pollTimer = setInterval(() => {
-      this.poll().catch((error) => this.publishError(error));
+      this.runPoll();
     }, POLL_INTERVAL_MS);
     this.hostAudioHeartbeatTimer = setInterval(() => {
       this.pulseHostAudio().catch((error) => this.publishError(error));
@@ -1001,6 +1009,7 @@ export class BridgeService extends EventEmitter {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    this.clearHostPersonaTransitionPollTimer();
     if (this.hostAudioHeartbeatTimer) {
       clearInterval(this.hostAudioHeartbeatTimer);
       this.hostAudioHeartbeatTimer = null;
@@ -1050,6 +1059,45 @@ export class BridgeService extends EventEmitter {
     this.pollPausedUntil = Math.max(this.pollPausedUntil, Date.now() + milliseconds);
   }
 
+  private runPoll(): void {
+    if (this.pollInFlight) {
+      this.pollAgainRequested = true;
+      return;
+    }
+    this.pollInFlight = true;
+    this.poll()
+      .catch((error) => this.publishError(error))
+      .finally(() => {
+        this.pollInFlight = false;
+        if (this.pollAgainRequested && this.pollTimer) {
+          this.pollAgainRequested = false;
+          this.runPoll();
+        } else {
+          this.pollAgainRequested = false;
+        }
+      });
+  }
+
+  private scheduleHostPersonaTransitionPoll(): void {
+    if (!this.pollTimer || !this.isHostPersonaTransitionActive() || this.hostPersonaTransitionPollTimer) {
+      return;
+    }
+    this.hostPersonaTransitionPollTimer = setTimeout(() => {
+      this.hostPersonaTransitionPollTimer = null;
+      if (this.isHostPersonaTransitionActive()) {
+        this.runPoll();
+      }
+    }, HOST_PERSONA_TRANSITION_REDISCOVERY_POLL_MS);
+  }
+
+  private clearHostPersonaTransitionPollTimer(): void {
+    if (!this.hostPersonaTransitionPollTimer) {
+      return;
+    }
+    clearTimeout(this.hostPersonaTransitionPollTimer);
+    this.hostPersonaTransitionPollTimer = null;
+  }
+
   private withAudioDebugDiagnostics(diagnostics: BridgeDiagnosticsWithoutAudioLog): BridgeDiagnostics {
     const maskHostAudioCapture = this.isHostPersonaTransitionActive();
     return {
@@ -1068,15 +1116,39 @@ export class BridgeService extends EventEmitter {
     };
   }
 
-  private hostPersonaTransitionSnapshot(now = Date.now()): HostPersonaTransition | null {
+  private expireHostPersonaTransition(now = Date.now()): HostPersonaTransitionState | null {
     const transition = this.hostPersonaTransition;
     if (!transition) {
       return null;
     }
-    if (now >= transition.deadlineAt || (transition.settlingUntil !== null && now >= transition.settlingUntil)) {
+    if (now >= transition.reconnectingUntil) {
       this.hostPersonaTransition = null;
+      this.clearHostPersonaTransitionPollTimer();
       return null;
     }
+    return transition;
+  }
+
+  private hostPersonaTransitionSnapshot(now = Date.now()): HostPersonaTransition | null {
+    const transition = this.expireHostPersonaTransition(now);
+    if (!transition || transition.completedAt !== null) {
+      return null;
+    }
+    if (transition.settlingUntil !== null && now >= transition.settlingUntil) {
+      return null;
+    }
+    return this.hostPersonaTransitionPublicSnapshot(transition);
+  }
+
+  private hostPersonaTransitionMaskSnapshot(now = Date.now()): HostPersonaTransition | null {
+    const transition = this.expireHostPersonaTransition(now);
+    if (!transition) {
+      return null;
+    }
+    return this.hostPersonaTransitionPublicSnapshot(transition);
+  }
+
+  private hostPersonaTransitionPublicSnapshot(transition: HostPersonaTransitionState): HostPersonaTransition {
     return {
       from: transition.from,
       to: transition.to,
@@ -1086,10 +1158,22 @@ export class BridgeService extends EventEmitter {
   }
 
   private isHostPersonaTransitionActive(now = Date.now()): boolean {
-    return this.hostPersonaTransitionSnapshot(now) !== null;
+    return this.expireHostPersonaTransition(now) !== null;
   }
 
-  private hostPersonaTransitionMessage(transition: HostPersonaTransition): string {
+  private hostPersonaTransitionMessage(transition: HostPersonaTransition, forceReconnecting = false): string {
+    const activeTransition = this.hostPersonaTransition;
+    if (
+      forceReconnecting
+      || (
+        activeTransition
+        && activeTransition.to === transition.to
+        && activeTransition.settlingUntil === null
+        && Date.now() >= activeTransition.deadlineAt
+      )
+    ) {
+      return `Please wait, reconnecting to ${hostPersonaModeLabel(transition.to)} mode`;
+    }
     return `Switching to ${hostPersonaModeLabel(transition.to)} mode`;
   }
 
@@ -1100,18 +1184,30 @@ export class BridgeService extends EventEmitter {
       to,
       startedAt: now,
       deadlineAt: now + HOST_PERSONA_TRANSITION_TIMEOUT_MS,
-      settlingUntil: null
+      settlingUntil: null,
+      reconnectingUntil: now + HOST_PERSONA_TRANSITION_TIMEOUT_MS + HOST_PERSONA_RECONNECT_GRACE_MS,
+      completedAt: null
     };
   }
 
   private advanceHostPersonaTransition(status: BridgeStatusPayload, now = Date.now()): HostPersonaTransition | null {
-    const transition = this.hostPersonaTransition;
+    const transition = this.expireHostPersonaTransition(now);
     if (!transition) {
       return null;
     }
-    if (status.hostPersonaMode === transition.to && transition.settlingUntil === null) {
-      transition.settlingUntil = now + HOST_PERSONA_TRANSITION_SETTLE_MS;
-      this.clearHostAudioCaptureBackoff();
+    if (status.hostPersonaMode === transition.to) {
+      if (transition.settlingUntil === null) {
+        transition.settlingUntil = now + HOST_PERSONA_TRANSITION_SETTLE_MS;
+        this.clearHostAudioCaptureBackoff();
+      }
+      if (now >= transition.settlingUntil) {
+        if (transition.completedAt === null) {
+          transition.completedAt = now;
+          transition.reconnectingUntil = now + HOST_PERSONA_RECONNECT_GRACE_MS;
+          this.clearHostPersonaTransitionPollTimer();
+        }
+        return null;
+      }
     }
     return this.hostPersonaTransitionSnapshot(now);
   }
@@ -1126,18 +1222,22 @@ export class BridgeService extends EventEmitter {
   }
 
   private applyHostPersonaTransitionSnapshot(rawDevices: HidDeviceSummary[]): boolean {
-    const transition = this.hostPersonaTransitionSnapshot();
+    const now = Date.now();
+    const transition = this.hostPersonaTransitionMaskSnapshot(now);
     if (!transition) {
       return false;
     }
+    const activeTransition = this.hostPersonaTransition;
+    const forceReconnecting = Boolean(activeTransition?.completedAt !== null);
     this.snapshot = {
       ...this.snapshot,
       state: 'transitioning',
-      message: this.hostPersonaTransitionMessage(transition),
+      message: this.hostPersonaTransitionMessage(transition, forceReconnecting),
       settings: this.settingsStore.get(),
       diagnostics: this.transitionDiagnostics(rawDevices),
       personaTransition: transition
     };
+    this.scheduleHostPersonaTransitionPoll();
     return true;
   }
 
@@ -2566,12 +2666,13 @@ export class BridgeService extends EventEmitter {
   private async openAndReadStatus() {
     try {
       if (!this.device) {
-        this.device = await WinUsbCompanionTransport.open();
+        this.device = await WinUsbCompanionTransport.open({
+          retryTimeoutMs: this.isHostPersonaTransitionActive() ? HOST_PERSONA_TRANSITION_OPEN_RETRY_MS : 0
+        });
+        const openedDevice = this.device;
         this.device.on('error', (error: Error) => this.publishError(error));
         this.device.on('close', () => {
-          this.closeDevice();
-          this.markBridgeUnavailableAfterDisconnect([]);
-          this.emitSnapshot();
+          void this.handleCompanionTransportClose(openedDevice);
         });
         this.devicePath = this.device.path;
         this.shortcutFeaturePollingAvailable = true;
@@ -2589,6 +2690,22 @@ export class BridgeService extends EventEmitter {
       this.closeDevice();
     }
     return null;
+  }
+
+  private async handleCompanionTransportClose(closedDevice: WinUsbCompanionTransport): Promise<void> {
+    if (this.device !== closedDevice) {
+      return;
+    }
+    this.closeDevice();
+    let rawDevices: HidDeviceSummary[] = [];
+    try {
+      rawDevices = await this.hidDiscovery.listDevices();
+    } catch (error) {
+      this.publishError(error);
+    }
+    const normalFirmwarePresent = rawDevices.some(isDualSenseDevice);
+    this.markBridgeUnavailableAfterDisconnect(rawDevices, normalFirmwarePresent);
+    this.emitSnapshot();
   }
 
   private maybeEmitStatusToasts(status: BridgeStatusPayload): void {
@@ -2866,9 +2983,12 @@ export class BridgeService extends EventEmitter {
   }
 
   private emitSnapshot(): void {
+    const personaTransition = this.snapshot.state === 'transitioning'
+      ? this.hostPersonaTransitionMaskSnapshot()
+      : this.hostPersonaTransitionSnapshot();
     this.snapshot = {
       ...this.snapshot,
-      personaTransition: this.hostPersonaTransitionSnapshot()
+      personaTransition
     };
     const signature = JSON.stringify({
       state: this.snapshot.state,

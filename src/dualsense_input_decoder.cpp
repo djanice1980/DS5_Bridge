@@ -30,6 +30,35 @@ bool dpad_has_left(uint8_t direction) {
     return direction == kDpadLeft || direction == kDpadUpLeft || direction == kDpadDownLeft;
 }
 
+int16_t read_i16_le(uint8_t const *data) {
+    return static_cast<int16_t>(
+        static_cast<uint16_t>(data[0])
+        | (static_cast<uint16_t>(data[1]) << 8)
+    );
+}
+
+uint32_t read_u32_le(uint8_t const *data) {
+    return static_cast<uint32_t>(data[0])
+        | (static_cast<uint32_t>(data[1]) << 8)
+        | (static_cast<uint32_t>(data[2]) << 16)
+        | (static_cast<uint32_t>(data[3]) << 24);
+}
+
+BridgeTouchPoint read_touch_point(uint8_t const *data) {
+    BridgeTouchPoint point{};
+    point.active = (data[0] & 0x80) == 0;
+    point.contact_id = static_cast<uint8_t>(data[0] & 0x7f);
+    point.x = static_cast<uint16_t>(
+        static_cast<uint16_t>(data[1])
+        | (static_cast<uint16_t>(data[2] & 0x0f) << 8)
+    );
+    point.y = static_cast<uint16_t>(
+        static_cast<uint16_t>((data[2] >> 4) & 0x0f)
+        | (static_cast<uint16_t>(data[3]) << 4)
+    );
+    return point;
+}
+
 } // namespace
 
 bool dualsense_decode_usb_input_report(
@@ -88,6 +117,19 @@ bool dualsense_decode_usb_input_report(
     next.headset_plugged = (report[53] & 0x01) != 0;
     next.microphone_plugged = (report[53] & 0x02) != 0;
     next.microphone_muted = (report[53] & 0x04) != 0;
+
+    next.motion_valid = true;
+    next.gyro_x = read_i16_le(report + 15);
+    next.gyro_y = read_i16_le(report + 17);
+    next.gyro_z = read_i16_le(report + 19);
+    next.accel_x = read_i16_le(report + 21);
+    next.accel_y = read_i16_le(report + 23);
+    next.accel_z = read_i16_le(report + 25);
+    next.sensor_timestamp = read_u32_le(report + 27);
+    for (uint8_t index = 0; index < kBridgeTouchPointCount; index++) {
+        next.touch_points[index] = read_touch_point(report + 32 + index * 4);
+    }
+
     std::memcpy(next.dualsense_report, report, kDualSenseUsbInputReportSize);
     next.dualsense_report_len = kDualSenseUsbInputReportSize;
 

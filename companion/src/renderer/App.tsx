@@ -50,6 +50,7 @@ import {
   IconX as X
 } from '@tabler/icons-react';
 import kofiBadgeUrl from '../../../assets/brand/support_me_on_kofi_badge_dark.png';
+import playStationLogoUrl from '../../../assets/brand/playstation-logo.svg';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
 import remappingEdgeLayoutImage from '../../../assets/controllers/dualsense-edge-remapping-layout.svg';
@@ -1812,7 +1813,11 @@ function HostPersonaOption({ label, value }: { label: string; value: HostPersona
   return (
     <span className="host-persona-option">
       {sonyPersona ? (
-        <img src={psHomeGlyphUrl} alt="" aria-hidden="true" />
+        <span
+          className="host-persona-brand-icon"
+          style={{ '--host-persona-brand-mask': `url("${playStationLogoUrl}")` } as CSSProperties}
+          aria-hidden="true"
+        />
       ) : (
         <IconBrandXbox size={18} aria-hidden="true" />
       )}
@@ -2533,7 +2538,9 @@ export function App() {
     ? 'Please wait'
     : connected && controllerConnected
     ? 'Connected'
-    : 'Bridge not detected';
+    : connected
+      ? 'Controller not connected'
+      : 'Bridge not detected';
   const sidebarBatteryLabel = personaTransitionActive
     ? 'Reconnecting'
     : connected && controllerConnected

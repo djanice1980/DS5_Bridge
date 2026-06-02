@@ -498,6 +498,7 @@ describe('BridgeService', () => {
     await poll(service);
 
     device.emit('close');
+    await flushImmediate();
 
     expect(service.getSnapshot().state).toBe('no-bridge');
     expect(service.getSnapshot().message).toBe('No bridge detected');
@@ -1165,6 +1166,143 @@ describe('BridgeService', () => {
     expect(maskedSnapshot.personaTransition?.to).toBe('xbox');
   });
 
+  it('keeps transition status when the WinUSB helper closes during host persona re-enumeration', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.setHostPersonaMode('xbox');
+    device.emit('close');
+    await flushImmediate();
+
+    const maskedSnapshot = service.getSnapshot();
+    expect(maskedSnapshot.state).toBe('transitioning');
+    expect(maskedSnapshot.message).toBe('Switching to Xbox Controller mode');
+    expect(maskedSnapshot.diagnostics.lastError).toBeNull();
+    expect(maskedSnapshot.personaTransition?.to).toBe('xbox');
+  });
+
+  it('uses a short rediscovery retry while a host persona transition is active', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('xbox-path', device);
+
+    await poll(service);
+    await service.setHostPersonaMode('xbox');
+    device.statusReadError = new Error('WinUSB path vanished');
+    await poll(service);
+
+    device.statusReadError = null;
+    hidMock.state.devicesList = [companionDeviceInfo('xbox-path')];
+    await poll(service);
+
+    expect(winUsbTransportMock.open).toHaveBeenLastCalledWith({ retryTimeoutMs: 1000 });
+    expect(service.getSnapshot().state).toBe('transitioning');
+  });
+
+  it('keeps a reconnecting grace state before reporting no bridge after a host persona switch', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const service = serviceFixture();
+      const device = new MockHidDevice();
+      device.status = statusReport({
+        controllerConnected: false,
+        hostPersonaMode: 'dualsense',
+        supportedHostPersonaModesMask: 0x07
+      });
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+
+      await poll(service);
+      const switchingSnapshot = await service.setHostPersonaMode('xbox');
+      const deadlineAt = switchingSnapshot.personaTransition?.deadlineAt ?? 1_008_000;
+
+      device.statusReadError = new Error('WinUSB path vanished');
+      nowSpy.mockReturnValue(deadlineAt + 1);
+      await poll(service);
+
+      const reconnectingSnapshot = service.getSnapshot();
+      expect(reconnectingSnapshot.state).toBe('transitioning');
+      expect(reconnectingSnapshot.message).toBe('Please wait, reconnecting to Xbox Controller mode');
+      expect(reconnectingSnapshot.diagnostics.lastError).toBeNull();
+      expect(reconnectingSnapshot.personaTransition?.to).toBe('xbox');
+
+      nowSpy.mockReturnValue(deadlineAt + 5001);
+      await poll(service);
+
+      expect(service.getSnapshot().state).toBe('no-bridge');
+      expect(service.getSnapshot().message).toBe('No bridge detected');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('keeps reconnecting grace if the bridge drops after the target persona was seen', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      const service = serviceFixture();
+      const device = new MockHidDevice();
+      device.status = statusReport({
+        controllerConnected: false,
+        hostPersonaMode: 'dualsense',
+        supportedHostPersonaModesMask: 0x07
+      });
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+
+      await poll(service);
+      await service.setHostPersonaMode('xbox');
+
+      device.status = statusReport({
+        controllerConnected: false,
+        hostPersonaMode: 'xbox',
+        supportedHostPersonaModesMask: 0x07
+      });
+      nowSpy.mockReturnValue(1_000_500);
+      await poll(service);
+
+      expect(service.getSnapshot().state).toBe('transitioning');
+      expect(service.getSnapshot().message).toBe('Switching to Xbox Controller mode');
+
+      nowSpy.mockReturnValue(1_001_701);
+      await poll(service);
+
+      expect(service.getSnapshot().state).toBe('connected');
+      expect(service.getSnapshot().personaTransition).toBeNull();
+
+      device.statusReadError = new Error('WinUSB path vanished after target persona was seen');
+      nowSpy.mockReturnValue(1_001_800);
+      await poll(service);
+
+      const reconnectingSnapshot = service.getSnapshot();
+      expect(reconnectingSnapshot.state).toBe('transitioning');
+      expect(reconnectingSnapshot.message).toBe('Please wait, reconnecting to Xbox Controller mode');
+      expect(reconnectingSnapshot.diagnostics.lastError).toBeNull();
+      expect(reconnectingSnapshot.personaTransition?.to).toBe('xbox');
+
+      nowSpy.mockReturnValue(1_006_702);
+      await poll(service);
+
+      expect(service.getSnapshot().state).toBe('no-bridge');
+      expect(service.getSnapshot().message).toBe('No bridge detected');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('sends manual sleep command without requiring a settings revision change', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
@@ -1230,6 +1368,7 @@ describe('BridgeService', () => {
     expect(toasts).toEqual([]);
 
     device.emit('close');
+    await flushImmediate();
     expect(toasts.at(-1)?.body).toBe('Controller disconnected');
 
     device.status = statusReport({ controllerConnected: true, uptimeSeconds: 1 });
