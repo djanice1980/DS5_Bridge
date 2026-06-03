@@ -19,6 +19,8 @@ import {
   IconDeviceGamepad3,
   IconFlame,
   IconFlask2,
+  IconBrandDeezer,
+  IconDeviceAudioTape,
   IconBrandXbox,
   IconBrandGithub,
   IconDeviceMobileVibration as Vibrate,
@@ -35,7 +37,6 @@ import {
   IconPlayerPlay as Play,
   IconQuestionMark,
   IconRefresh as RefreshCcw,
-  IconRipple,
   IconSettings as SettingsIcon,
   IconBluetooth,
   IconSparkleHighlight,
@@ -917,9 +918,9 @@ function FeatureTipsPanel({
   } else if (tab === 'haptics' && audioHapticsOpen) {
     tips.push({
       key: 'audio-haptics',
-      icon: <IconRipple size={16} />,
+      icon: <IconDeviceAudioTape size={16} />,
       title: 'Audio Haptics',
-      text: 'Auto Route follows the active Windows output and avoids duplicating controller audio.'
+      text: 'Audio Haptics turns system audio into haptic feedback.'
     });
   } else if (tab === 'audio') {
     tips.push({
@@ -948,9 +949,9 @@ function FeatureTipsPanel({
   } else if (tab === 'haptics' && audioHapticsOpen) {
     tips.push({
       key: 'audio-haptics-mode',
-      icon: <Activity size={16} />,
+      icon: <IconBrandDeezer size={16} />,
       title: 'Mix / Replace',
-      text: 'Mix adds audio feedback to native haptics; Replace uses only the derived audio feel.'
+      text: 'Mix adds audio feedback to native haptics and rumble; Replace uses only the derived audio feel.'
     });
   } else if (tab === 'lighting') {
     tips.push({
@@ -5046,7 +5047,7 @@ export function App() {
               <div className="feature-heading">
                 <div>
                   <h2>{audioHapticsOpen ? 'Audio Haptics' : 'Haptics'}</h2>
-                  <p>{audioHapticsOpen ? 'Turn routed audio into optional haptic feedback.' : 'Adjust controller haptic feedback and run a quick test.'}</p>
+                  <p>{audioHapticsOpen ? 'Turn system audio into haptic feedback.' : 'Adjust controller haptic feedback and run a quick test.'}</p>
                 </div>
                 <div className="audio-heading-controls">
                   <div className="inline-switch audio-haptics-switch-control">
@@ -5100,7 +5101,7 @@ export function App() {
                         disabled={audioReactiveHapticsControlDisabled}
                         onClick={toggleAudioReactiveHapticsEnabled}
                       >
-                        <IconRipple size={20} />
+                        <IconDeviceAudioTape size={20} />
                       </button>
                       <div className="title-copy">
                         <h3>Audio Haptics</h3>
@@ -5180,7 +5181,7 @@ export function App() {
                   </section>
                   <section className="feature-card audio-haptics-card audio-haptics-response-card">
                     <div className="feature-card-title">
-                      <span className="feature-icon"><Activity size={20} /></span>
+                      <span className="feature-icon"><IconBrandDeezer size={20} /></span>
                       <div className="title-copy">
                         <h3>Response</h3>
                         <p>Frequency focus and strength</p>
