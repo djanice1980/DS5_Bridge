@@ -18,7 +18,7 @@ import type {
   TriggerTestTarget
 } from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
-import type { UiScalePercent } from '../shared/types';
+import type { AudioHapticsSession, UiScalePercent } from '../shared/types';
 
 const APP_NAME = 'DS5 Bridge';
 const WINDOWS_APP_USER_MODEL_ID = 'io.github.sundaymoments.ds5bridge';
@@ -512,9 +512,46 @@ function showBridgeNotification(toast: BridgeToast): void {
   }
 }
 
+async function addAudioHapticsSessionIcons(sessions: AudioHapticsSession[]): Promise<AudioHapticsSession[]> {
+  return Promise.all(sessions.map(async (session) => ({
+    ...session,
+    iconDataUrl: session.iconDataUrl ?? await audioHapticsSessionIconDataUrl(session)
+  })));
+}
+
+async function audioHapticsSessionIconDataUrl(session: AudioHapticsSession): Promise<string | null> {
+  const sessionIcon = nativeImageFromPath(session.iconPath);
+  if (sessionIcon && !sessionIcon.isEmpty()) {
+    return sessionIcon.resize({ width: 32, height: 32 }).toDataURL();
+  }
+  if (!session.processPath) {
+    return null;
+  }
+  try {
+    const image = await app.getFileIcon(session.processPath, { size: 'normal' });
+    return image.isEmpty() ? null : image.resize({ width: 32, height: 32 }).toDataURL();
+  } catch {
+    return null;
+  }
+}
+
+function nativeImageFromPath(filePath: string | null): Electron.NativeImage | null {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+  try {
+    return nativeImage.createFromPath(filePath);
+  } catch {
+    return null;
+  }
+}
+
 function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:getStatus', () => service.getSnapshot());
   ipcMain.handle('bridge:listDevices', () => service.listDevices());
+  ipcMain.handle('bridge:listAudioHapticsSessions', async () => (
+    addAudioHapticsSessionIcons(await service.listAudioHapticsSessions())
+  ));
   ipcMain.handle('bridge:applyPreset', (_event, value: BridgePresetId) => service.applyPreset(value));
   ipcMain.handle('bridge:selectControllerProfile', (_event, profileId: string) => (
     service.selectControllerProfile(profileId)

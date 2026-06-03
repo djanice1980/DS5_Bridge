@@ -17,7 +17,7 @@ const childProcessMock = vi.hoisted(() => {
   }
 
   class MockChildProcess extends EventEmitter {
-    stdout = new EventEmitter();
+    stdout = Object.assign(new EventEmitter(), { resume: vi.fn() });
     stderr = new EventEmitter();
     stdin = new MockWritable();
     killed = false;
@@ -55,6 +55,8 @@ vi.mock('node:fs', () => ({
 import {
   HostAudioEngine,
   HostAudioStartError,
+  SystemAudioHapticsEngine,
+  listAudioHapticsSessions,
   type HostAudioFramePayload
 } from './host-audio-engine';
 
@@ -97,6 +99,78 @@ describe('HostAudioEngine startup lifecycle', () => {
     expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
     expect(statuses).not.toContain('host audio helper exited (SIGTERM)');
     expect(engine.isActive()).toBe(false);
+  });
+});
+
+describe('SystemAudioHapticsEngine app source', () => {
+  it('passes selected app session identity to the helper', async () => {
+    const engine = new SystemAudioHapticsEngine();
+    const start = engine.start({
+      source: {
+        kind: 'app-session',
+        processId: 1234,
+        displayName: 'Game',
+        executableName: 'Game.exe',
+        processPath: 'C:\\Games\\Game.exe'
+      },
+      gainPercent: 125,
+      bassFocus: 'punchy',
+      response: 'strong',
+      attack: 'fast',
+      release: 'smooth'
+    });
+
+    const helper = childProcessMock.processes[0]!;
+    helper.stderr.emit('data', Buffer.from('status: recording-started\n'));
+    await start;
+
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
+    const args = childProcessMock.spawn.mock.calls[0]![1] as string[];
+    expect(args).toContain('--haptics-app-process-id');
+    expect(args).toContain('1234');
+    expect(args).toContain('--haptics-app-process-path');
+    expect(args).toContain('C:\\Games\\Game.exe');
+    expect(args).toContain('--haptics-app-executable');
+    expect(args).toContain('Game.exe');
+
+    await engine.stop();
+  });
+});
+
+describe('audio haptics session listing', () => {
+  it('parses helper session JSON defensively', async () => {
+    const sessionsPromise = listAudioHapticsSessions('system-audio');
+    const helper = childProcessMock.processes[0]!;
+    helper.stdout.emit('data', Buffer.from(JSON.stringify([{
+      processId: 2345,
+      displayName: 'Battlefront II',
+      executableName: 'starwarsbattlefrontii.exe',
+      processPath: 'C:\\Games\\Battlefront\\starwarsbattlefrontii.exe',
+      iconPath: '',
+      sessionIdentifier: 'session',
+      sessionInstanceIdentifier: 'instance',
+      state: 'active',
+      endpointName: 'Speakers',
+      isSelected: true
+    }, {
+      processId: 0,
+      displayName: 'bad'
+    }])));
+    helper.emit('exit', 0, null);
+
+    await expect(sessionsPromise).resolves.toEqual([{
+      processId: 2345,
+      displayName: 'Battlefront II',
+      executableName: 'starwarsbattlefrontii.exe',
+      processPath: 'C:\\Games\\Battlefront\\starwarsbattlefrontii.exe',
+      iconPath: null,
+      iconDataUrl: null,
+      sessionIdentifier: 'session',
+      sessionInstanceIdentifier: 'instance',
+      state: 'active',
+      endpointName: 'Speakers',
+      isSelected: true
+    }]);
   });
 });
 

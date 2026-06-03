@@ -135,7 +135,16 @@ export interface AdaptiveTriggerPreviewEffect {
 }
 export type PollingRateMode = '250' | '500' | '1000';
 export type HostPersonaMode = 'dualsense' | 'xbox' | 'ds4';
-export type AudioReactiveHapticsSource = 'controller-audio' | 'system-audio';
+export interface AudioReactiveHapticsAppSource {
+  kind: 'app-session';
+  processId: number;
+  displayName?: string;
+  executableName?: string;
+  processPath?: string;
+  sessionIdentifier?: string;
+  sessionInstanceIdentifier?: string;
+}
+export type AudioReactiveHapticsSource = 'controller-audio' | 'system-audio' | AudioReactiveHapticsAppSource;
 export type AudioReactiveHapticsMode = 'mix' | 'replace';
 export type AudioReactiveHapticsBassFocus = 'deep' | 'balanced' | 'punchy' | 'wide';
 export type AudioReactiveHapticsResponse = 'subtle' | 'balanced' | 'strong';

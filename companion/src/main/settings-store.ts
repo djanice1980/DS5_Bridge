@@ -208,7 +208,38 @@ function normalizeAudioReactiveHapticsMode(value: unknown): AudioReactiveHaptics
 }
 
 function normalizeAudioReactiveHapticsSource(value: unknown): AudioReactiveHapticsSource {
-  return value === 'controller-audio' ? value : DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsSource;
+  if (value === 'controller-audio' || value === 'system-audio') {
+    return value;
+  }
+  if (!value || typeof value !== 'object') {
+    return DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsSource;
+  }
+  const candidate = value as Partial<Extract<AudioReactiveHapticsSource, { kind: 'app-session' }>>;
+  if (candidate.kind !== 'app-session') {
+    return DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsSource;
+  }
+  const processId = Number.isFinite(candidate.processId)
+    ? Math.max(0, Math.round(candidate.processId!))
+    : 0;
+  const displayName = normalizeOptionalString(candidate.displayName);
+  const executableName = normalizeOptionalString(candidate.executableName);
+  const processPath = normalizeOptionalString(candidate.processPath);
+  if (processId <= 0 && !processPath && !executableName) {
+    return DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsSource;
+  }
+  return {
+    kind: 'app-session',
+    processId,
+    ...(displayName ? { displayName } : {}),
+    ...(executableName ? { executableName } : {}),
+    ...(processPath ? { processPath } : {}),
+    ...(normalizeOptionalString(candidate.sessionIdentifier) ? { sessionIdentifier: normalizeOptionalString(candidate.sessionIdentifier) } : {}),
+    ...(normalizeOptionalString(candidate.sessionInstanceIdentifier) ? { sessionInstanceIdentifier: normalizeOptionalString(candidate.sessionInstanceIdentifier) } : {})
+  };
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeAudioReactiveHapticsBassFocus(value: unknown): AudioReactiveHapticsBassFocus {

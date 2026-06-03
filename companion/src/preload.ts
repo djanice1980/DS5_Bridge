@@ -11,11 +11,19 @@ import type {
   TriggerTestMode,
   TriggerTestTarget
 } from './shared/protocol';
-import type { BridgeDiagnostics, BridgeSnapshot, WindowsDeviceCleanupResult } from './shared/types';
+import type {
+  AudioHapticsSession,
+  BridgeDiagnostics,
+  BridgeSnapshot,
+  WindowsDeviceCleanupResult
+} from './shared/types';
 
 const api = {
   getStatus: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:getStatus'),
   listDevices: () => ipcRenderer.invoke('bridge:listDevices'),
+  listAudioHapticsSessions: (): Promise<AudioHapticsSession[]> => (
+    ipcRenderer.invoke('bridge:listAudioHapticsSessions')
+  ),
   applyPreset: (value: BridgePresetId): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:applyPreset', value),
   selectControllerProfile: (profileId: string): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:selectControllerProfile', profileId)

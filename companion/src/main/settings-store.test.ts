@@ -281,6 +281,34 @@ describe('SettingsStore', () => {
     expect(persistedSettings(userDataPath).speakerVolumePercent).toBe(45);
   });
 
+  it('persists audio haptics app-session sources', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.update({
+      audioReactiveHapticsSource: {
+        kind: 'app-session',
+        processId: 1234.6,
+        displayName: ' Battlefront II ',
+        executableName: 'starwarsbattlefrontii.exe',
+        processPath: 'C:\\Games\\Battlefront\\starwarsbattlefrontii.exe',
+        sessionIdentifier: 'session',
+        sessionInstanceIdentifier: 'instance'
+      }
+    });
+
+    expect(updated.audioReactiveHapticsSource).toEqual({
+      kind: 'app-session',
+      processId: 1235,
+      displayName: 'Battlefront II',
+      executableName: 'starwarsbattlefrontii.exe',
+      processPath: 'C:\\Games\\Battlefront\\starwarsbattlefrontii.exe',
+      sessionIdentifier: 'session',
+      sessionInstanceIdentifier: 'instance'
+    });
+    expect(new SettingsStore(userDataPath).get().audioReactiveHapticsSource).toEqual(updated.audioReactiveHapticsSource);
+  });
+
   it('auto-forks default button remapping changes into a saved custom profile', () => {
     vi.spyOn(Date, 'now').mockReturnValue(0x23456);
     const store = new SettingsStore(tempUserDataPath());

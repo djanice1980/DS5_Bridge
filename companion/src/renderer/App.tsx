@@ -79,6 +79,7 @@ import type {
   AudioReactiveHapticsBassFocus,
   AudioReactiveHapticsConfig,
   AudioReactiveHapticsMode,
+  AudioReactiveHapticsSource,
   AudioReactiveHapticsAttack,
   AudioReactiveHapticsRelease,
   AudioReactiveHapticsResponse,
@@ -92,7 +93,7 @@ import type {
   TriggerTestMode,
   TriggerTestTarget
 } from '../shared/protocol';
-import type { BridgeSnapshot, UiScalePercent } from '../shared/types';
+import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
 type ControllerType = BridgeStatusPayload['controllerType'];
@@ -549,6 +550,56 @@ function snapAudioReactiveHapticsGain(value: number): number {
   );
 }
 
+function audioHapticsAppSource(source: AudioReactiveHapticsSource | null | undefined) {
+  return source && typeof source === 'object' && source.kind === 'app-session' ? source : null;
+}
+
+function audioHapticsSessionKey(session: AudioHapticsSession): string {
+  if (session.processPath) {
+    return `app-path:${session.processPath.toLowerCase()}`;
+  }
+  if (session.executableName) {
+    return `app-exe:${session.executableName.toLowerCase()}`;
+  }
+  return `app-pid:${session.processId}`;
+}
+
+function audioHapticsSourceKey(source: AudioReactiveHapticsSource | null | undefined): string {
+  const appSource = audioHapticsAppSource(source);
+  if (!appSource) {
+    return 'system-audio';
+  }
+  if (appSource.processPath) {
+    return `app-path:${appSource.processPath.toLowerCase()}`;
+  }
+  if (appSource.executableName) {
+    return `app-exe:${appSource.executableName.toLowerCase()}`;
+  }
+  return `app-pid:${Math.max(0, Math.round(appSource.processId))}`;
+}
+
+function audioHapticsSourceFromSession(session: AudioHapticsSession): AudioReactiveHapticsSource {
+  return {
+    kind: 'app-session',
+    processId: session.processId,
+    displayName: session.displayName,
+    ...(session.executableName ? { executableName: session.executableName } : {}),
+    ...(session.processPath ? { processPath: session.processPath } : {}),
+    ...(session.sessionIdentifier ? { sessionIdentifier: session.sessionIdentifier } : {}),
+    ...(session.sessionInstanceIdentifier ? { sessionInstanceIdentifier: session.sessionInstanceIdentifier } : {})
+  };
+}
+
+function audioHapticsSourceDisplayName(source: AudioReactiveHapticsSource | null | undefined): string {
+  const appSource = audioHapticsAppSource(source);
+  if (!appSource) {
+    return 'System';
+  }
+  return appSource.displayName
+    || appSource.executableName?.replace(/\.[^.]+$/, '')
+    || 'Selected app';
+}
+
 function snapSpeakerVolume(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / SPEAKER_VOLUME_STEP) * SPEAKER_VOLUME_STEP));
 }
@@ -853,6 +904,8 @@ function hostAudioCaptureIssueLabel(reason: HostAudioCaptureStatusReason): strin
       return 'Format Error';
     case 'bulk-pcm-unavailable':
       return 'PCM Pipe Missing';
+    case 'app-session-unavailable':
+      return 'App Waiting';
     case 'start-timeout':
       return 'Retrying';
     case 'helper-exit':
@@ -870,6 +923,8 @@ function hostAudioCaptureIssueTooltip(reason: HostAudioCaptureStatusReason): str
       return 'Windows rejected the DualSense raw PCM capture format. Re-enumerate or clean stale DualSense audio devices.';
     case 'bulk-pcm-unavailable':
       return 'Windows did not expose the DS5 Bridge WinUSB PCM pipe. Re-enumerate or clean stale DS5 Bridge devices.';
+    case 'app-session-unavailable':
+      return 'The selected audio app is not currently available. Audio Haptics will retry automatically.';
     case 'start-timeout':
       return 'The host audio encoder did not start in time. The app will retry automatically.';
     case 'helper-exit':
@@ -1927,6 +1982,48 @@ function HostPersonaOption({ label, value }: { label: string; value: HostPersona
   );
 }
 
+function AudioHapticsSourceOption({
+  label,
+  value,
+  session,
+  loading
+}: {
+  label: string;
+  value: string;
+  session?: AudioHapticsSession;
+  loading?: boolean;
+}) {
+  const system = value === 'system-audio';
+  const unavailable = !system && !session;
+  let sublabel = 'System mix';
+  if (!system) {
+    if (!session) {
+      sublabel = loading ? 'Scanning' : 'Unavailable';
+    } else {
+      sublabel = session.state === 'active'
+        ? session.endpointName || 'Active'
+        : 'Idle';
+    }
+  }
+  return (
+    <span className={`audio-haptics-source-option ${unavailable ? 'unavailable' : ''}`}>
+      <span className="audio-haptics-source-icon" aria-hidden="true">
+        {system ? (
+          <IconDeviceAudioTape size={17} />
+        ) : session?.iconDataUrl ? (
+          <img src={session.iconDataUrl} alt="" />
+        ) : (
+          <IconBrandDeezer size={17} />
+        )}
+      </span>
+      <span className="audio-haptics-source-copy">
+        <strong>{label}</strong>
+        <small>{sublabel}</small>
+      </span>
+    </span>
+  );
+}
+
 function remapTargetOptionsFor(buttonId: RemapButtonId): Array<[string, RemapButtonId]> {
   if ((REMAP_EDGE_BUTTON_IDS as readonly RemapButtonId[]).includes(buttonId)) {
     return [[REMAP_BUTTONS[buttonId].label, buttonId], ...REMAP_TARGET_OPTIONS];
@@ -1965,6 +2062,8 @@ export function App() {
   const triggerLabInitialState = triggerLabInitialStateRef.current;
   const [triggerLabOpen, setTriggerLabOpen] = useState(false);
   const [audioHapticsOpen, setAudioHapticsOpen] = useState(false);
+  const [audioHapticsSessions, setAudioHapticsSessions] = useState<AudioHapticsSession[]>([]);
+  const [audioHapticsSessionsLoading, setAudioHapticsSessionsLoading] = useState(false);
   const [triggerLabLinked, setTriggerLabLinked] = useState(triggerLabInitialState.linked);
   const [triggerLabDrafts, setTriggerLabDrafts] = useState<Record<TriggerLabSide, TriggerLabDraft>>(triggerLabInitialState.drafts);
   const [triggerLabActive, setTriggerLabActive] = useState<Record<TriggerLabSide, boolean>>(triggerLabInitialState.active);
@@ -2189,6 +2288,40 @@ export function App() {
       window.removeEventListener('blur', finishWindowDrag);
     };
   }, []);
+
+  useEffect(() => {
+    if (!audioHapticsOpen) {
+      setAudioHapticsSessions([]);
+      setAudioHapticsSessionsLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    async function refreshSessions() {
+      setAudioHapticsSessionsLoading(true);
+      try {
+        const sessions = await window.bridge.listAudioHapticsSessions();
+        if (!cancelled) {
+          setAudioHapticsSessions(sessions);
+        }
+      } catch {
+        if (!cancelled) {
+          setAudioHapticsSessions([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setAudioHapticsSessionsLoading(false);
+        }
+      }
+    }
+
+    void refreshSessions();
+    const interval = window.setInterval(refreshSessions, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [audioHapticsOpen, snapshot?.settings.audioReactiveHapticsSource]);
 
   useEffect(() => {
     if (!showBridgeSettings && !showNotificationsMenu) {
@@ -2417,6 +2550,33 @@ export function App() {
   const overviewHostPersonaMode = personaTransition?.to ?? snapshot?.settings.hostPersonaMode ?? 'dualsense';
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const audioReactiveHapticsEnabled = Boolean(snapshot?.settings.audioReactiveHapticsEnabled);
+  const audioReactiveHapticsSource = snapshot?.settings.audioReactiveHapticsSource ?? 'system-audio';
+  const audioReactiveHapticsSourceKey = audioHapticsSourceKey(audioReactiveHapticsSource);
+  const audioHapticsSessionByKey = useMemo(() => {
+    const sessions = new Map<string, AudioHapticsSession>();
+    for (const session of audioHapticsSessions) {
+      sessions.set(audioHapticsSessionKey(session), session);
+    }
+    return sessions;
+  }, [audioHapticsSessions]);
+  const audioHapticsSourceOptions = useMemo<Array<[string, string]>>(() => {
+    const options: Array<[string, string]> = [['System', 'system-audio']];
+    for (const session of audioHapticsSessions) {
+      options.push([session.displayName, audioHapticsSessionKey(session)]);
+    }
+    if (
+      audioReactiveHapticsSourceKey !== 'system-audio'
+      && !audioHapticsSessionByKey.has(audioReactiveHapticsSourceKey)
+    ) {
+      options.push([`${audioHapticsSourceDisplayName(audioReactiveHapticsSource)} unavailable`, audioReactiveHapticsSourceKey]);
+    }
+    return options;
+  }, [
+    audioHapticsSessionByKey,
+    audioHapticsSessions,
+    audioReactiveHapticsSource,
+    audioReactiveHapticsSourceKey
+  ]);
   const classicRumbleEnabled = Boolean(snapshot?.settings.classicRumbleEnabled);
   const activeHapticsFeatureEnabled = showClassicRumbleControl ? classicRumbleEnabled : hapticsEnabled;
   const speakerEnabled = Boolean(snapshot?.settings.speakerEnabled);
@@ -3296,6 +3456,19 @@ export function App() {
   function setAudioReactiveHapticsMode(mode: AudioReactiveHapticsMode) {
     if (!snapshot || mode === snapshot.settings.audioReactiveHapticsMode) return;
     void commitAudioReactiveHapticsConfig({ mode });
+  }
+
+  function setAudioReactiveHapticsSourceValue(value: string) {
+    if (!snapshot || value === audioReactiveHapticsSourceKey) return;
+    if (value === 'system-audio') {
+      void commitAudioReactiveHapticsConfig({ source: 'system-audio' });
+      return;
+    }
+    const session = audioHapticsSessionByKey.get(value);
+    if (!session) {
+      return;
+    }
+    void commitAudioReactiveHapticsConfig({ source: audioHapticsSourceFromSession(session) });
   }
 
   function setAudioReactiveHapticsBassFocus(bassFocus: AudioReactiveHapticsBassFocus) {
@@ -5162,6 +5335,33 @@ export function App() {
                       ))}
                     </div>
                     <div className="audio-haptics-routing-stack">
+                      <label className="audio-haptics-source-field">
+                        <span>Source</span>
+                        <CustomSelect
+                          value={audioReactiveHapticsSourceKey}
+                          options={audioHapticsSourceOptions}
+                          disabled={audioReactiveHapticsConfigDisabled}
+                          className="audio-haptics-source-select"
+                          ariaLabel="Audio haptics source"
+                          renderValue={(label, value) => (
+                            <AudioHapticsSourceOption
+                              label={label}
+                              value={value}
+                              session={audioHapticsSessionByKey.get(value)}
+                              loading={audioHapticsSessionsLoading}
+                            />
+                          )}
+                          renderOption={(label, value) => (
+                            <AudioHapticsSourceOption
+                              label={label}
+                              value={value}
+                              session={audioHapticsSessionByKey.get(value)}
+                              loading={audioHapticsSessionsLoading}
+                            />
+                          )}
+                          onChange={setAudioReactiveHapticsSourceValue}
+                        />
+                      </label>
                       <div className="dual-selector audio-haptics-mode-selector" role="tablist" aria-label="Audio haptics mode">
                         {AUDIO_REACTIVE_HAPTICS_MODE_OPTIONS.map(([label, mode]) => (
                           <button
@@ -5258,9 +5458,9 @@ export function App() {
                         <span className={`dot ${audioReactiveHapticsStatusTone}`} />
                         <strong>{audioReactiveHapticsStatusLabel}</strong>
                       </span>
-                      <span className={`status-badge ${audioReactiveHapticsStatusTone}`} title="Automatically follows the active Windows output without duplicating controller audio.">
+                      <span className={`status-badge ${audioReactiveHapticsStatusTone}`} title={audioReactiveHapticsSourceKey === 'system-audio' ? 'Using the mixed Windows output.' : 'Using the selected app audio session.'}>
                         <span className={`dot ${audioReactiveHapticsEnabled ? audioReactiveHapticsStatusTone : 'idle'}`} />
-                        <strong>Auto Route</strong>
+                        <strong>{audioHapticsSourceDisplayName(audioReactiveHapticsSource)}</strong>
                       </span>
                     </div>
                   </section>

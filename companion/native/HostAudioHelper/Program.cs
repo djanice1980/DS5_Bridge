@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Concentus.Enums;
 using Concentus.Structs;
 using HidSharp;
@@ -63,6 +64,8 @@ static class AudioConstants
     public const int WriterPrebufferReports = 3;
     public const int WriterTakeTimeoutMilliseconds = 2;
     public const int RawPcmCaptureBufferMilliseconds = 10;
+    public const int ProcessLoopbackBufferMilliseconds = 10;
+    public const int ProcessLoopbackActivationTimeoutMilliseconds = 5000;
     public const int MaxQueuedPcmChunks = 32;
     public const int BulkPcmMaxGapFillPackets = 6;
     public static readonly bool DiagnosticsEnabled =
@@ -149,6 +152,7 @@ sealed class HostAudioHelper : IDisposable
     private Task? directCaptureTask;
     private Task? bulkPcmTask;
     private Task? pcmEncoderTask;
+    private Task? appSessionMonitorTask;
     private WinUsbBridgeTransport? bridgeTransport;
     private HidStream? hidStream;
     private int picoBlockFrameIndex;
@@ -241,6 +245,12 @@ sealed class HostAudioHelper : IDisposable
 
     public async Task RunAsync()
     {
+        if (options.ListAudioSessions)
+        {
+            AudioSessionCatalog.WriteJson(options.AppProcessId, options.AppProcessPath, options.AppExecutableName);
+            return;
+        }
+
         if (options.ListDevices)
         {
             EndpointManager.ListDevices();
@@ -291,6 +301,7 @@ sealed class HostAudioHelper : IDisposable
         {
             directCaptureTask?.Wait(TimeSpan.FromSeconds(1));
             bulkPcmTask?.Wait(TimeSpan.FromSeconds(1));
+            appSessionMonitorTask?.Wait(TimeSpan.FromSeconds(1));
             pcmEncoderTask?.Wait(TimeSpan.FromSeconds(1));
         }
         catch (AggregateException)
@@ -347,7 +358,16 @@ sealed class HostAudioHelper : IDisposable
 
             if (options.HapticsOnly)
             {
-                StartSystemAudioHapticsMirror(enumerator);
+                if (options.AppProcessId is not null
+                    || !string.IsNullOrWhiteSpace(options.AppProcessPath)
+                    || !string.IsNullOrWhiteSpace(options.AppExecutableName))
+                {
+                    StartAppAudioHapticsMirror(enumerator);
+                }
+                else
+                {
+                    StartSystemAudioHapticsMirror(enumerator);
+                }
                 return;
             }
 
@@ -512,27 +532,12 @@ sealed class HostAudioHelper : IDisposable
             return;
         }
 
-        var targetFormat = targetDevice.AudioClient.MixFormat;
-        if (targetFormat.Channels < 4)
+        var targetFormat = TryStartHapticsMirrorOutput(targetDevice, targetName);
+        if (targetFormat is null)
         {
-            Console.Error.WriteLine(
-                $"status: capture-unavailable reason=unsupported-format device='{EscapeStatusValue(targetName)}' targetChannels={targetFormat.Channels}");
-            stopped.Set();
             return;
         }
 
-        hapticsMirrorFormat = targetFormat;
-        hapticsMirrorScratch = new byte[Math.Max(targetFormat.BlockAlign, targetFormat.BlockAlign * AudioConstants.PicoInputBlockFrames)];
-        hapticsMirrorScratchLength = 0;
-        hapticsMirrorBuffer = new BufferedWaveProvider(targetFormat)
-        {
-            BufferDuration = TimeSpan.FromMilliseconds(80),
-            DiscardOnBufferOverflow = true,
-            ReadFully = true
-        };
-        hapticsMirrorOutput = new WasapiOut(targetDevice, AudioClientShareMode.Shared, false, 20);
-        hapticsMirrorOutput.Init(hapticsMirrorBuffer);
-        hapticsMirrorOutput.Play();
         RegisterDefaultRenderNotification(enumerator);
 
         capture = new WasapiLoopbackCapture(sourceDevice);
@@ -549,6 +554,137 @@ sealed class HostAudioHelper : IDisposable
         StartRawCaptureDump(capture.WaveFormat);
         capture.StartRecording();
         Console.Error.WriteLine("status: recording-started");
+    }
+
+    private void StartAppAudioHapticsMirror(MMDeviceEnumerator enumerator)
+    {
+        var selectedSession = AudioSessionCatalog.ResolveAppSession(
+            options.AppProcessId,
+            options.AppProcessPath,
+            options.AppExecutableName);
+        if (selectedSession is null)
+        {
+            Console.Error.WriteLine(
+                $"status: capture-unavailable reason=app-session-unavailable processId={options.AppProcessId?.ToString() ?? "none"} processPath='{EscapeStatusValue(options.AppProcessPath ?? "")}' executable='{EscapeStatusValue(options.AppExecutableName ?? "")}'");
+            stopped.Set();
+            return;
+        }
+
+        var targetDevice = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
+        var targetName = targetDevice.FriendlyName;
+        var targetFormat = TryStartHapticsMirrorOutput(targetDevice, targetName);
+        if (targetFormat is null)
+        {
+            return;
+        }
+
+        var captureFormat = new WaveFormat(44100, 16, 2);
+        try
+        {
+            directCaptureAudioClient = ProcessLoopbackAudioClient.Activate(
+                selectedSession.ProcessId,
+                includeProcessTree: true,
+                TimeSpan.FromMilliseconds(AudioConstants.ProcessLoopbackActivationTimeoutMilliseconds));
+            var bufferDuration = AudioConstants.ProcessLoopbackBufferMilliseconds * 10000L;
+            directCaptureAudioClient.Initialize(
+                AudioClientShareMode.Shared,
+                AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback,
+                bufferDuration,
+                0,
+                captureFormat,
+                Guid.Empty
+            );
+            directCaptureEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
+            directCaptureAudioClient.SetEventHandle(directCaptureEvent.SafeWaitHandle.DangerousGetHandle());
+            directCaptureClient = directCaptureAudioClient.AudioCaptureClient;
+
+            Console.Error.WriteLine(
+                $"status: host-capture-format source=app-session device='{EscapeStatusValue(selectedSession.DisplayName)}' processId={selectedSession.ProcessId} processPath='{EscapeStatusValue(selectedSession.ProcessPath ?? "")}' target='{EscapeStatusValue(targetName)}' sampleRate={captureFormat.SampleRate} channels={captureFormat.Channels} bits={captureFormat.BitsPerSample} encoding={captureFormat.Encoding} targetRate={targetFormat.SampleRate} targetChannels={targetFormat.Channels} targetBits={targetFormat.BitsPerSample} targetEncoding={targetFormat.Encoding} bufferMs={AudioConstants.ProcessLoopbackBufferMilliseconds} engineBufferFrames={directCaptureAudioClient.BufferSize}");
+            StartRawCaptureDump(captureFormat);
+
+            pcmEncoderTask = Task.Run(ProcessQueuedPcm);
+            directCaptureTask = Task.Run(() => RunDirectRawPcmCapture(captureFormat));
+            appSessionMonitorTask = Task.Run(() => MonitorAppSessionProcess(selectedSession.ProcessId));
+            directCaptureAudioClient.Start();
+            Console.Error.WriteLine("status: recording-started");
+        }
+        catch (COMException error)
+        {
+            if (!WriteWasapiStartFailure(error, selectedSession.DisplayName))
+            {
+                Console.Error.WriteLine(
+                    $"status: capture-unavailable reason=app-loopback-unavailable hr={FormatHResult(error.HResult)} processId={selectedSession.ProcessId} device='{EscapeStatusValue(selectedSession.DisplayName)}'");
+            }
+            stopped.Set();
+        }
+        catch (TimeoutException error)
+        {
+            Console.Error.WriteLine(
+                $"status: capture-unavailable reason=app-loopback-timeout processId={selectedSession.ProcessId} error='{EscapeStatusValue(error.Message)}'");
+            stopped.Set();
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(
+                $"status: capture-unavailable reason=app-loopback-unavailable processId={selectedSession.ProcessId} error='{EscapeStatusValue(error.Message)}'");
+            stopped.Set();
+        }
+    }
+
+    private WaveFormat? TryStartHapticsMirrorOutput(MMDevice targetDevice, string targetName)
+    {
+        var targetFormat = targetDevice.AudioClient.MixFormat;
+        if (targetFormat.Channels < 4)
+        {
+            Console.Error.WriteLine(
+                $"status: capture-unavailable reason=unsupported-format device='{EscapeStatusValue(targetName)}' targetChannels={targetFormat.Channels}");
+            stopped.Set();
+            return null;
+        }
+
+        hapticsMirrorFormat = targetFormat;
+        hapticsMirrorScratch = new byte[Math.Max(targetFormat.BlockAlign, targetFormat.BlockAlign * AudioConstants.PicoInputBlockFrames)];
+        hapticsMirrorScratchLength = 0;
+        hapticsMirrorBuffer = new BufferedWaveProvider(targetFormat)
+        {
+            BufferDuration = TimeSpan.FromMilliseconds(80),
+            DiscardOnBufferOverflow = true,
+            ReadFully = true
+        };
+        hapticsMirrorOutput = new WasapiOut(targetDevice, AudioClientShareMode.Shared, false, 20);
+        hapticsMirrorOutput.Init(hapticsMirrorBuffer);
+        hapticsMirrorOutput.Play();
+        return targetFormat;
+    }
+
+    private void MonitorAppSessionProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            process.WaitForExit();
+            if (!stopped.IsSet)
+            {
+                Console.Error.WriteLine($"status: route-changed reason=app-session-exited processId={processId}");
+                Stop();
+            }
+        }
+        catch (ArgumentException)
+        {
+            if (!stopped.IsSet)
+            {
+                Console.Error.WriteLine($"status: route-changed reason=app-session-exited processId={processId}");
+                Stop();
+            }
+        }
+        catch (Exception error)
+        {
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                Console.Error.WriteLine(
+                    $"status: app-session-monitor-unavailable processId={processId} error='{EscapeStatusValue(error.Message)}'");
+            }
+        }
     }
 
     private void RegisterDefaultRenderNotification(MMDeviceEnumerator enumerator)
@@ -2180,9 +2316,13 @@ sealed record HelperOptions(
     string? HidPath,
     HostAudioSource Source,
     bool ListDevices,
+    bool ListAudioSessions,
     bool CompanionTransportServer,
     bool MicKeepaliveOnly,
     string? MicDeviceName,
+    int? AppProcessId,
+    string? AppProcessPath,
+    string? AppExecutableName,
     int SpeakerVolumePercent,
     string? TestAudioPath,
     bool PlayTestTone,
@@ -2224,8 +2364,12 @@ sealed record HelperOptions(
             20
         );
         var listDevices = false;
+        var listAudioSessions = false;
         var companionTransportServer = false;
         var micKeepaliveOnly = false;
+        int? appProcessId = null;
+        string? appProcessPath = null;
+        string? appExecutableName = null;
         var playTestTone = false;
         var captureDumpOnly = false;
         var hapticsOnly = false;
@@ -2251,6 +2395,18 @@ sealed record HelperOptions(
                     break;
                 case "--mic-device-name" when index + 1 < args.Length:
                     micDeviceName = args[++index];
+                    break;
+                case "--haptics-app-process-id" when index + 1 < args.Length:
+                    if (int.TryParse(args[++index], out var parsedAppProcessId) && parsedAppProcessId > 0)
+                    {
+                        appProcessId = parsedAppProcessId;
+                    }
+                    break;
+                case "--haptics-app-process-path" when index + 1 < args.Length:
+                    appProcessPath = args[++index];
+                    break;
+                case "--haptics-app-executable" when index + 1 < args.Length:
+                    appExecutableName = args[++index];
                     break;
                 case "--speaker-volume" when index + 1 < args.Length:
                     if (int.TryParse(args[++index], out var parsedSpeakerVolumePercent))
@@ -2294,6 +2450,9 @@ sealed record HelperOptions(
                 case "--list-devices":
                     listDevices = true;
                     break;
+                case "--list-audio-sessions":
+                    listAudioSessions = true;
+                    break;
                 case "--companion-transport":
                     companionTransportServer = true;
                     break;
@@ -2320,9 +2479,13 @@ sealed record HelperOptions(
             hidPath,
             source,
             listDevices,
+            listAudioSessions,
             companionTransportServer,
             micKeepaliveOnly,
             micDeviceName,
+            appProcessId,
+            appProcessPath,
+            appExecutableName,
             speakerVolumePercent,
             testAudioPath,
             playTestTone,

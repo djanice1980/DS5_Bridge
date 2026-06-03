@@ -973,6 +973,30 @@ describe('BridgeService', () => {
     expect(passthroughCommand?.slice(11, 18)).toEqual([0x81, 150, 0, 2, 2, 3, 2]);
   });
 
+  it('preserves selected audio haptics app source on partial config updates', async () => {
+    const appSource = {
+      kind: 'app-session' as const,
+      processId: 4321,
+      displayName: 'Battlefront II',
+      executableName: 'starwarsbattlefrontii.exe',
+      processPath: 'C:\\Games\\Battlefront\\starwarsbattlefrontii.exe'
+    };
+    const service = serviceFixture({
+      audioReactiveHapticsSource: appSource
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setAudioReactiveHapticsConfig({
+      gainPercent: 130
+    });
+
+    expect(snapshot.settings.audioReactiveHapticsSource).toEqual(appSource);
+  });
+
   it('does not request classic rumble suppression when audio reactive haptics is disabled', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();

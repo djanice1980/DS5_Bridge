@@ -86,6 +86,20 @@ export interface HidDeviceSummary {
   interface?: number;
 }
 
+export interface AudioHapticsSession {
+  processId: number;
+  displayName: string;
+  executableName: string | null;
+  processPath: string | null;
+  iconPath: string | null;
+  iconDataUrl?: string | null;
+  sessionIdentifier: string | null;
+  sessionInstanceIdentifier: string | null;
+  state: 'active' | 'inactive' | 'expired' | string;
+  endpointName: string;
+  isSelected: boolean;
+}
+
 export type BridgeStateKind =
   | 'no-bridge'
   | 'normal-firmware'
@@ -117,13 +131,13 @@ export interface BridgeDiagnostics {
 }
 
 export interface HostAudioCaptureIssue {
-  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'start-timeout' | 'helper-exit';
+  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'app-session-unavailable' | 'start-timeout' | 'helper-exit';
   message: string;
   retryAt: number;
 }
 
 export interface HostAudioCaptureRetry {
-  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'start-timeout' | 'helper-exit';
+  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'app-session-unavailable' | 'start-timeout' | 'helper-exit';
   message: string;
   retryAt: number;
 }

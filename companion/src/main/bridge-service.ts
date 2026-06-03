@@ -59,6 +59,7 @@ import type {
   BridgeDiagnostics,
   BridgeSnapshot,
   CompanionSettings,
+  AudioHapticsSession,
   HostAudioCaptureIssue,
   HostAudioCaptureRetry,
   HostPersonaTransition,
@@ -71,6 +72,7 @@ import {
   HostAudioStartError,
   MicKeepaliveEngine,
   SystemAudioHapticsEngine,
+  listAudioHapticsSessions,
   playHostAudioTestTone,
   type HostAudioStartFailureReason,
   type HostAudioFramePayload,
@@ -235,6 +237,8 @@ function hostAudioCaptureIssueMessage(
       return `DualSense raw PCM capture endpoint format is not usable by Windows. Re-enumerate or clean stale DualSense audio devices, then Host Encoding will retry in ${retrySeconds}s.`;
     case 'bulk-pcm-unavailable':
       return `DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices, then Host Encoding will retry in ${retrySeconds}s.`;
+    case 'app-session-unavailable':
+      return `Selected audio app is not available for haptics yet. Audio Haptics will retry in ${retrySeconds}s.`;
     case 'start-timeout':
     case 'start-cancelled':
     case 'helper-exit':
@@ -410,7 +414,38 @@ function normalizeAudioReactiveHapticsMode(mode: unknown): AudioReactiveHapticsM
 }
 
 function normalizeAudioReactiveHapticsSource(source: unknown): AudioReactiveHapticsSource {
-  return source === 'system-audio' ? 'system-audio' : 'controller-audio';
+  if (source === 'controller-audio' || source === 'system-audio') {
+    return source;
+  }
+  if (!source || typeof source !== 'object') {
+    return 'system-audio';
+  }
+  const candidate = source as Partial<Extract<AudioReactiveHapticsSource, { kind: 'app-session' }>>;
+  if (candidate.kind !== 'app-session') {
+    return 'system-audio';
+  }
+  const processId = Number.isFinite(candidate.processId)
+    ? Math.max(0, Math.round(candidate.processId!))
+    : 0;
+  const displayName = normalizeOptionalString(candidate.displayName);
+  const executableName = normalizeOptionalString(candidate.executableName);
+  const processPath = normalizeOptionalString(candidate.processPath);
+  if (processId <= 0 && !processPath && !executableName) {
+    return 'system-audio';
+  }
+  return {
+    kind: 'app-session',
+    processId,
+    ...(displayName ? { displayName } : {}),
+    ...(executableName ? { executableName } : {}),
+    ...(processPath ? { processPath } : {}),
+    ...(normalizeOptionalString(candidate.sessionIdentifier) ? { sessionIdentifier: normalizeOptionalString(candidate.sessionIdentifier) } : {}),
+    ...(normalizeOptionalString(candidate.sessionInstanceIdentifier) ? { sessionInstanceIdentifier: normalizeOptionalString(candidate.sessionInstanceIdentifier) } : {})
+  };
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function normalizeAudioReactiveHapticsBassFocus(focus: unknown): AudioReactiveHapticsBassFocus {
@@ -447,7 +482,7 @@ function normalizeAudioReactiveHapticsConfig(
 ): AudioReactiveHapticsConfig {
   return {
     enabled: typeof config.enabled === 'boolean' ? config.enabled : settings.audioReactiveHapticsEnabled,
-    source: normalizeAudioReactiveHapticsSource(config.source),
+    source: normalizeAudioReactiveHapticsSource(config.source ?? settings.audioReactiveHapticsSource),
     mode: normalizeAudioReactiveHapticsMode(config.mode ?? settings.audioReactiveHapticsMode),
     gainPercent: Number.isFinite(config.gainPercent)
       ? Math.max(0, Math.min(200, Math.round(config.gainPercent!)))
@@ -1176,6 +1211,16 @@ export class BridgeService extends EventEmitter {
     return this.hidDiscovery.listDevices();
   }
 
+  async listAudioHapticsSessions(): Promise<AudioHapticsSession[]> {
+    try {
+      return await listAudioHapticsSessions(this.settingsStore.get().audioReactiveHapticsSource);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAudioDebugLines([`[SystemHaptics] session list unavailable error=${message}`]);
+      return [];
+    }
+  }
+
   async repairWindowsDeviceCache(): Promise<WindowsDeviceCleanupResult> {
     if (this.snapshot.status?.controllerConnected) {
       throw new Error('Disconnect the controller from the bridge before running emergency device repair.');
@@ -1651,6 +1696,7 @@ export class BridgeService extends EventEmitter {
 
   private systemAudioHapticsConfig(settings: CompanionSettings): SystemAudioHapticsConfig {
     return {
+      source: settings.audioReactiveHapticsSource,
       gainPercent: settings.audioReactiveHapticsGainPercent,
       bassFocus: settings.audioReactiveHapticsBassFocus,
       response: settings.audioReactiveHapticsResponse,

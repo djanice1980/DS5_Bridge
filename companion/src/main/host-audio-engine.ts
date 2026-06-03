@@ -5,11 +5,13 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { CompanionDebugConfig, DEBUG_ENV } from './debug-config';
 import type {
+  AudioReactiveHapticsSource,
   AudioReactiveHapticsAttack,
   AudioReactiveHapticsBassFocus,
   AudioReactiveHapticsRelease,
   AudioReactiveHapticsResponse
 } from '../shared/protocol';
+import type { AudioHapticsSession } from '../shared/types';
 
 export type HostAudioFramePayload = {
   frame: number[];
@@ -18,6 +20,7 @@ export type HostAudioFramePayload = {
 };
 
 export type SystemAudioHapticsConfig = {
+  source: AudioReactiveHapticsSource;
   gainPercent: number;
   bassFocus: AudioReactiveHapticsBassFocus;
   response: AudioReactiveHapticsResponse;
@@ -30,6 +33,7 @@ export type HostAudioStartFailureReason =
   | 'device-invalidated'
   | 'unsupported-format'
   | 'bulk-pcm-unavailable'
+  | 'app-session-unavailable'
   | 'start-timeout'
   | 'start-cancelled'
   | 'helper-exit';
@@ -50,6 +54,7 @@ const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
 const HELPER_START_TIMEOUT_MS = 8000;
 const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
+const HELPER_SESSION_LIST_TIMEOUT_MS = 3000;
 const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
@@ -298,6 +303,7 @@ export class SystemAudioHapticsEngine extends EventEmitter {
   private process: ChildProcessWithoutNullStreams | null = null;
   private starting: Promise<void> | null = null;
   private activeConfig: SystemAudioHapticsConfig = {
+    source: 'system-audio',
     gainPercent: 100,
     bassFocus: 'balanced',
     response: 'balanced',
@@ -308,6 +314,10 @@ export class SystemAudioHapticsEngine extends EventEmitter {
   async start(config: SystemAudioHapticsConfig): Promise<void> {
     const nextConfig = normalizeSystemAudioHapticsConfig(config);
     if (this.process) {
+      if (audioReactiveHapticsSourceKey(this.activeConfig.source) !== audioReactiveHapticsSourceKey(nextConfig.source)) {
+        await this.stop();
+        return this.start(nextConfig);
+      }
       this.setConfig(nextConfig);
       return;
     }
@@ -383,7 +393,7 @@ export class SystemAudioHapticsEngine extends EventEmitter {
   private async startInternal(config: SystemAudioHapticsConfig): Promise<void> {
     const helperPath = resolveHelperPath();
     this.activeConfig = config;
-    const helper = spawn(helperPath, [
+    const args = [
       '--device-name',
       BRIDGE_AUDIO_DEVICE_NAME,
       '--source',
@@ -400,7 +410,21 @@ export class SystemAudioHapticsEngine extends EventEmitter {
       config.attack,
       '--haptics-release',
       config.release
-    ], {
+    ];
+    const appSource = audioReactiveHapticsAppSource(config.source);
+    if (appSource) {
+      if (Number.isFinite(appSource.processId) && appSource.processId > 0) {
+        args.push('--haptics-app-process-id', `${Math.round(appSource.processId)}`);
+      }
+      if (appSource.processPath) {
+        args.push('--haptics-app-process-path', appSource.processPath);
+      }
+      if (appSource.executableName) {
+        args.push('--haptics-app-executable', appSource.executableName);
+      }
+    }
+
+    const helper = spawn(helperPath, args, {
       env: buildSystemAudioHapticsHelperEnv(),
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
@@ -431,6 +455,7 @@ function normalizeSpeakerVolumePercent(percent: number): number {
 
 function normalizeSystemAudioHapticsConfig(config: SystemAudioHapticsConfig): SystemAudioHapticsConfig {
   return {
+    source: normalizeAudioReactiveHapticsSource(config.source),
     gainPercent: Math.max(0, Math.min(200, Math.round(config.gainPercent))),
     bassFocus: config.bassFocus === 'deep' || config.bassFocus === 'punchy' || config.bassFocus === 'wide'
       ? config.bassFocus
@@ -445,6 +470,90 @@ function normalizeSystemAudioHapticsConfig(config: SystemAudioHapticsConfig): Sy
       ? config.release
       : 'balanced'
   };
+}
+
+function parseAudioHapticsSessions(raw: string): AudioHapticsSession[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const sessions: AudioHapticsSession[] = [];
+  for (const value of parsed) {
+    if (!value || typeof value !== 'object') {
+      continue;
+    }
+    const candidate = value as Partial<AudioHapticsSession>;
+    const processId = Number.isFinite(candidate.processId)
+      ? Math.max(0, Math.round(candidate.processId!))
+      : 0;
+    const displayName = normalizeOptionalText(candidate.displayName);
+    if (processId <= 0 || !displayName) {
+      continue;
+    }
+    sessions.push({
+      processId,
+      displayName,
+      executableName: normalizeOptionalText(candidate.executableName) ?? null,
+      processPath: normalizeOptionalText(candidate.processPath) ?? null,
+      iconPath: normalizeOptionalText(candidate.iconPath) ?? null,
+      iconDataUrl: normalizeOptionalText(candidate.iconDataUrl) ?? null,
+      sessionIdentifier: normalizeOptionalText(candidate.sessionIdentifier) ?? null,
+      sessionInstanceIdentifier: normalizeOptionalText(candidate.sessionInstanceIdentifier) ?? null,
+      state: normalizeOptionalText(candidate.state) ?? 'inactive',
+      endpointName: normalizeOptionalText(candidate.endpointName) ?? '',
+      isSelected: Boolean(candidate.isSelected)
+    });
+  }
+  return sessions;
+}
+
+function normalizeAudioReactiveHapticsSource(source: AudioReactiveHapticsSource | undefined): AudioReactiveHapticsSource {
+  if (source === 'controller-audio' || source === 'system-audio') {
+    return source;
+  }
+  const appSource = audioReactiveHapticsAppSource(source);
+  if (!appSource) {
+    return 'system-audio';
+  }
+  const processId = Number.isFinite(appSource.processId) ? Math.max(0, Math.round(appSource.processId)) : 0;
+  return {
+    kind: 'app-session',
+    processId,
+    displayName: normalizeOptionalText(appSource.displayName),
+    executableName: normalizeOptionalText(appSource.executableName),
+    processPath: normalizeOptionalText(appSource.processPath),
+    sessionIdentifier: normalizeOptionalText(appSource.sessionIdentifier),
+    sessionInstanceIdentifier: normalizeOptionalText(appSource.sessionInstanceIdentifier)
+  };
+}
+
+function audioReactiveHapticsAppSource(source: AudioReactiveHapticsSource | undefined) {
+  return source && typeof source === 'object' && source.kind === 'app-session'
+    ? source
+    : null;
+}
+
+function audioReactiveHapticsSourceKey(source: AudioReactiveHapticsSource): string {
+  const appSource = audioReactiveHapticsAppSource(source);
+  if (!appSource) {
+    return source === 'controller-audio' ? 'controller-audio' : 'system-audio';
+  }
+  if (appSource.processPath) {
+    return `app-path:${appSource.processPath.toLowerCase()}`;
+  }
+  if (appSource.executableName) {
+    return `app-exe:${appSource.executableName.toLowerCase()}`;
+  }
+  return `app-pid:${Math.max(0, Math.round(appSource.processId))}`;
+}
+
+function normalizeOptionalText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function isExpectedHelperPipeError(error: unknown): boolean {
@@ -473,6 +582,13 @@ function parseCaptureUnavailableReason(line: string): HostAudioStartFailureReaso
   if (line.includes('reason=bulk-pcm-unavailable')) {
     return 'bulk-pcm-unavailable';
   }
+  if (
+    line.includes('reason=app-session-unavailable')
+    || line.includes('reason=app-loopback-unavailable')
+    || line.includes('reason=app-loopback-timeout')
+  ) {
+    return 'app-session-unavailable';
+  }
   return 'helper-exit';
 }
 
@@ -486,6 +602,8 @@ function hostAudioStartFailureMessage(reason: HostAudioStartFailureReason): stri
       return 'DualSense raw PCM capture endpoint format is not usable by Windows. Re-enumerate or clean stale DualSense audio devices.';
     case 'bulk-pcm-unavailable':
       return 'DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices, then Host Encoding will retry.';
+    case 'app-session-unavailable':
+      return 'Selected audio app is not available for haptics yet.';
     case 'start-timeout':
       return `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`;
     case 'start-cancelled':
@@ -638,6 +756,70 @@ export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise
       finish(new Error(detail));
     });
   });
+}
+
+export async function listAudioHapticsSessions(source: AudioReactiveHapticsSource = 'system-audio'): Promise<AudioHapticsSession[]> {
+  const helperPath = resolveHelperPath();
+  const args = ['--list-audio-sessions'];
+  const appSource = audioReactiveHapticsAppSource(normalizeAudioReactiveHapticsSource(source));
+  if (appSource) {
+    if (Number.isFinite(appSource.processId) && appSource.processId > 0) {
+      args.push('--haptics-app-process-id', `${Math.round(appSource.processId)}`);
+    }
+    if (appSource.processPath) {
+      args.push('--haptics-app-process-path', appSource.processPath);
+    }
+    if (appSource.executableName) {
+      args.push('--haptics-app-executable', appSource.executableName);
+    }
+  }
+
+  const helper = spawn(helperPath, args, {
+    env: buildSystemAudioHapticsHelperEnv(),
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  const raw = await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let stdout = '';
+    let stderr = '';
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        if (!helper.killed) {
+          helper.kill();
+        }
+        reject(error);
+      } else {
+        resolve(stdout);
+      }
+    };
+    const timeout = setTimeout(() => {
+      finish(new Error(`Audio haptics session list timed out after ${HELPER_SESSION_LIST_TIMEOUT_MS}ms.`));
+    }, HELPER_SESSION_LIST_TIMEOUT_MS);
+
+    helper.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+    });
+    helper.stderr.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString('utf8')).slice(-HELPER_STDERR_MAX_CHARS);
+    });
+    helper.once('error', finish);
+    helper.once('exit', (code, signal) => {
+      if (code === 0) {
+        finish();
+      } else {
+        finish(new Error(`Audio haptics session list failed (${signal ?? code ?? 'unknown'}): ${stderr.trim()}`));
+      }
+    });
+  });
+
+  return parseAudioHapticsSessions(raw);
 }
 
 export class MicKeepaliveEngine extends EventEmitter {
