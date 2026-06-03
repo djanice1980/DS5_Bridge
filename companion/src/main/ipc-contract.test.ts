@@ -13,8 +13,8 @@ describe('IPC contract', () => {
     const preloadChannels = uniqueMatches(preloadSource, /ipcRenderer\.invoke\('([^']+)'/g);
     const mainChannels = uniqueMatches(mainSource, /ipcMain\.handle\('([^']+)'/g);
 
-    expect(preloadChannels).toHaveLength(64);
-    expect(mainChannels).toHaveLength(64);
+    expect(preloadChannels).toHaveLength(65);
+    expect(mainChannels).toHaveLength(65);
     expect(preloadChannels).toEqual(mainChannels);
   });
 

@@ -8,6 +8,12 @@ import type {
   HostAudioStatusPayload,
   BridgePresetId,
   HostPersonaMode,
+  AudioReactiveHapticsSource,
+  AudioReactiveHapticsBassFocus,
+  AudioReactiveHapticsMode,
+  AudioReactiveHapticsResponse,
+  AudioReactiveHapticsAttack,
+  AudioReactiveHapticsRelease,
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
@@ -33,6 +39,14 @@ export interface CompanionSettings {
   speakerVolumePercent: number;
   micVolumePercent: number;
   micMuted: boolean;
+  audioReactiveHapticsEnabled: boolean;
+  audioReactiveHapticsSource: AudioReactiveHapticsSource;
+  audioReactiveHapticsMode: AudioReactiveHapticsMode;
+  audioReactiveHapticsGainPercent: number;
+  audioReactiveHapticsBassFocus: AudioReactiveHapticsBassFocus;
+  audioReactiveHapticsResponse: AudioReactiveHapticsResponse;
+  audioReactiveHapticsAttack: AudioReactiveHapticsAttack;
+  audioReactiveHapticsRelease: AudioReactiveHapticsRelease;
   lightbarEnabled: boolean;
   lightbarColor: string;
   lightbarBrightnessPercent: number;

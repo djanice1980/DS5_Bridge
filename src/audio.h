@@ -24,6 +24,38 @@ enum AudioFallbackReason : uint8_t {
     AudioFallbackControllerDisconnected = 6,
 };
 
+enum AudioReactiveHapticsMode : uint8_t {
+    AudioReactiveHapticsMix = 0,
+    AudioReactiveHapticsReplace = 1,
+};
+
+enum AudioReactiveHapticsBassFocus : uint8_t {
+    AudioReactiveHapticsBassDeep = 0,
+    AudioReactiveHapticsBassBalanced = 1,
+    AudioReactiveHapticsBassPunchy = 2,
+    AudioReactiveHapticsBassWide = 3,
+};
+
+enum AudioReactiveHapticsResponse : uint8_t {
+    AudioReactiveHapticsResponseSubtle = 0,
+    AudioReactiveHapticsResponseBalanced = 1,
+    AudioReactiveHapticsResponseStrong = 2,
+};
+
+enum AudioReactiveHapticsAttack : uint8_t {
+    AudioReactiveHapticsAttackSoft = 0,
+    AudioReactiveHapticsAttackBalanced = 1,
+    AudioReactiveHapticsAttackFast = 2,
+    AudioReactiveHapticsAttackSharp = 3,
+};
+
+enum AudioReactiveHapticsRelease : uint8_t {
+    AudioReactiveHapticsReleaseTight = 0,
+    AudioReactiveHapticsReleaseBalanced = 1,
+    AudioReactiveHapticsReleaseSmooth = 2,
+    AudioReactiveHapticsReleaseLong = 3,
+};
+
 struct audio_host_status {
     uint8_t mode;
     uint8_t fallback_reason;
@@ -121,5 +153,16 @@ bool audio_duplex_active();
 void audio_get_host_status(audio_host_status *status);
 void audio_mic_add_packet(uint8_t const *data, uint16_t len);
 void audio_set_mic_output_state(uint8_t volume_percent, bool muted);
+bool audio_set_reactive_haptics_config(
+    bool enabled,
+    uint8_t mode,
+    uint16_t gain_percent,
+    uint8_t bass_focus,
+    uint8_t response,
+    uint8_t attack,
+    uint8_t release
+);
+bool audio_reactive_haptics_enabled();
+void audio_reactive_haptics_reset();
 
 #endif //DS5_BRIDGE_AUDIO_H

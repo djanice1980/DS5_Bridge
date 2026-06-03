@@ -19,10 +19,11 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 6;
+constexpr uint8_t kProtocolMinor = 8;
+constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 5;
-constexpr uint8_t kFirmwarePatch = 1;
+constexpr uint8_t kFirmwarePatch = 3;
 constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kSquareButtonBit = 0x10;
 constexpr uint8_t kCrossButtonBit = 0x20;
@@ -128,6 +129,7 @@ enum CommandId : uint8_t {
     CommandPreviewAdaptiveTriggerEffect = 0x1F,
     CommandApplyAdaptiveTriggerEffect = 0x20,
     CommandSetHostPersona = 0x21,
+    CommandSetAudioReactiveHaptics = 0x22,
 };
 
 enum AckResult : uint8_t {
@@ -609,7 +611,9 @@ bool has_magic(uint8_t const *buffer) {
 }
 
 bool has_supported_version(uint8_t const *buffer) {
-    return buffer[4] == kProtocolMajor && buffer[5] == kProtocolMinor;
+    return buffer[4] == kProtocolMajor
+        && buffer[5] >= kProtocolMinSupportedMinor
+        && buffer[5] <= kProtocolMinor;
 }
 
 void set_led_enabled(bool enabled) {
@@ -696,6 +700,15 @@ void restore_defaults() {
     audio_set_quiet_mode(false);
     audio_host_set_duplex_requested(false);
     audio_host_set_requested(false);
+    audio_set_reactive_haptics_config(
+        false,
+        AudioReactiveHapticsMix,
+        100,
+        AudioReactiveHapticsBassBalanced,
+        AudioReactiveHapticsResponseBalanced,
+        AudioReactiveHapticsAttackBalanced,
+        AudioReactiveHapticsReleaseBalanced
+    );
     companion_mic_volume_percent = 100;
     companion_mic_muted = false;
     audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
@@ -1653,6 +1666,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     }
 
     const uint16_t value = read_u16(buffer + 8);
+    const uint8_t protocol_minor = buffer[5];
     switch (command_id) {
         case CommandSetHapticsGain:
             if (value > kMaxFeedbackGainPercent) {
@@ -1996,6 +2010,26 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckOk);
                 return;
             }
+
+        case CommandSetAudioReactiveHaptics:
+            if (
+                value > 1
+                || !audio_set_reactive_haptics_config(
+                    value == 1,
+                    buffer[10],
+                    read_u16(buffer + 11),
+                    buffer[13],
+                    buffer[14],
+                    protocol_minor >= 8 ? buffer[15] : AudioReactiveHapticsAttackBalanced,
+                    protocol_minor >= 8 ? buffer[16] : AudioReactiveHapticsReleaseBalanced
+                )
+            ) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
 
         case CommandSleepController:
             if (value != 0) {

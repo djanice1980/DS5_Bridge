@@ -34,6 +34,11 @@ sealed class EndpointManager
         return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
     }
 
+    public static MMDevice SelectDefaultRenderEndpoint(MMDeviceEnumerator enumerator)
+    {
+        return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+    }
+
     public static MMDevice SelectCaptureEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
     {
         var devices = enumerator
@@ -243,7 +248,7 @@ sealed class EndpointManager
         return allowFallback ? devices.FirstOrDefault() : null;
     }
 
-    private static bool IsKnownBridgeEndpoint(MMDevice device)
+    public static bool IsKnownBridgeEndpoint(MMDevice device)
     {
         return BridgeEndpointAliases.Any(alias =>
             device.FriendlyName.Contains(alias, StringComparison.OrdinalIgnoreCase));

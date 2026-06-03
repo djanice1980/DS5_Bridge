@@ -32,6 +32,13 @@ import {
 } from '../shared/protocol';
 import type {
   AdaptiveTriggerPreviewEffect,
+  AudioReactiveHapticsAttack,
+  AudioReactiveHapticsBassFocus,
+  AudioReactiveHapticsConfig,
+  AudioReactiveHapticsMode,
+  AudioReactiveHapticsRelease,
+  AudioReactiveHapticsResponse,
+  AudioReactiveHapticsSource,
   AudioDebugEventPayload,
   AudioDebugStatsPayload,
   BridgePresetId,
@@ -63,9 +70,11 @@ import {
   HostAudioEngine,
   HostAudioStartError,
   MicKeepaliveEngine,
+  SystemAudioHapticsEngine,
   playHostAudioTestTone,
   type HostAudioStartFailureReason,
-  type HostAudioFramePayload
+  type HostAudioFramePayload,
+  type SystemAudioHapticsConfig
 } from './host-audio-engine';
 import { CompanionDebugConfig } from './debug-config';
 import { HidDiscoveryClient } from './hid-discovery-client';
@@ -87,8 +96,9 @@ const FEEDBACK_TRACE_DIAGNOSTICS_ENABLED = CompanionDebugConfig.feedbackTraceDia
 const MIC_KEEPALIVE_ENABLED = CompanionDebugConfig.micKeepaliveEnabled;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
+const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const LOW_BATTERY_PERCENT = 20;
-const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.0';
+const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.3';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const TRIGGER_TRACE_LOG_LINE_LIMIT = 300;
@@ -293,6 +303,64 @@ function triggerTestTargetValue(target: TriggerTestTarget): number {
   return 0;
 }
 
+function audioReactiveHapticsModeValue(mode: AudioReactiveHapticsMode): number {
+  return mode === 'replace' ? 1 : 0;
+}
+
+function audioReactiveHapticsBassFocusValue(focus: AudioReactiveHapticsBassFocus): number {
+  switch (focus) {
+    case 'deep':
+      return 0;
+    case 'punchy':
+      return 2;
+    case 'wide':
+      return 3;
+    case 'balanced':
+    default:
+      return 1;
+  }
+}
+
+function audioReactiveHapticsResponseValue(response: AudioReactiveHapticsResponse): number {
+  switch (response) {
+    case 'subtle':
+      return 0;
+    case 'strong':
+      return 2;
+    case 'balanced':
+    default:
+      return 1;
+  }
+}
+
+function audioReactiveHapticsAttackValue(attack: AudioReactiveHapticsAttack): number {
+  switch (attack) {
+    case 'soft':
+      return 0;
+    case 'fast':
+      return 2;
+    case 'sharp':
+      return 3;
+    case 'balanced':
+    default:
+      return 1;
+  }
+}
+
+function audioReactiveHapticsReleaseValue(release: AudioReactiveHapticsRelease): number {
+  switch (release) {
+    case 'tight':
+      return 0;
+    case 'smooth':
+      return 2;
+    case 'long':
+      return 3;
+    case 'balanced':
+    default:
+      return 1;
+  }
+}
+
 function normalizeTriggerTestMode(mode: unknown): TriggerTestMode {
   if (mode === 'weapon' || mode === 'vibration') {
     return mode;
@@ -332,6 +400,60 @@ function normalizePollingRateMode(mode: PollingRateMode): PollingRateMode {
     return mode;
   }
   return '1000';
+}
+
+function normalizeAudioReactiveHapticsMode(mode: unknown): AudioReactiveHapticsMode {
+  return mode === 'replace' ? 'replace' : 'mix';
+}
+
+function normalizeAudioReactiveHapticsSource(source: unknown): AudioReactiveHapticsSource {
+  return source === 'system-audio' ? 'system-audio' : 'controller-audio';
+}
+
+function normalizeAudioReactiveHapticsBassFocus(focus: unknown): AudioReactiveHapticsBassFocus {
+  if (focus === 'deep' || focus === 'punchy' || focus === 'wide') {
+    return focus;
+  }
+  return 'balanced';
+}
+
+function normalizeAudioReactiveHapticsResponse(response: unknown): AudioReactiveHapticsResponse {
+  if (response === 'subtle' || response === 'strong') {
+    return response;
+  }
+  return 'balanced';
+}
+
+function normalizeAudioReactiveHapticsAttack(attack: unknown): AudioReactiveHapticsAttack {
+  if (attack === 'soft' || attack === 'fast' || attack === 'sharp') {
+    return attack;
+  }
+  return 'balanced';
+}
+
+function normalizeAudioReactiveHapticsRelease(release: unknown): AudioReactiveHapticsRelease {
+  if (release === 'tight' || release === 'smooth' || release === 'long') {
+    return release;
+  }
+  return 'balanced';
+}
+
+function normalizeAudioReactiveHapticsConfig(
+  config: Partial<AudioReactiveHapticsConfig>,
+  settings: CompanionSettings
+): AudioReactiveHapticsConfig {
+  return {
+    enabled: typeof config.enabled === 'boolean' ? config.enabled : settings.audioReactiveHapticsEnabled,
+    source: normalizeAudioReactiveHapticsSource(config.source ?? settings.audioReactiveHapticsSource),
+    mode: normalizeAudioReactiveHapticsMode(config.mode ?? settings.audioReactiveHapticsMode),
+    gainPercent: Number.isFinite(config.gainPercent)
+      ? Math.max(0, Math.min(200, Math.round(config.gainPercent!)))
+      : settings.audioReactiveHapticsGainPercent,
+    bassFocus: normalizeAudioReactiveHapticsBassFocus(config.bassFocus ?? settings.audioReactiveHapticsBassFocus),
+    response: normalizeAudioReactiveHapticsResponse(config.response ?? settings.audioReactiveHapticsResponse),
+    attack: normalizeAudioReactiveHapticsAttack(config.attack ?? settings.audioReactiveHapticsAttack),
+    release: normalizeAudioReactiveHapticsRelease(config.release ?? settings.audioReactiveHapticsRelease)
+  };
 }
 
 function normalizeIdleDisconnectTimeoutMinutes(minutes: number): number {
@@ -883,6 +1005,7 @@ export class BridgeService extends EventEmitter {
   private pollAgainRequested = false;
   private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
   private readonly hostAudioEngine = new HostAudioEngine();
+  private readonly systemAudioHapticsEngine = new SystemAudioHapticsEngine();
   private readonly micKeepaliveEngine = new MicKeepaliveEngine();
   private readonly hidDiscovery = new HidDiscoveryClient();
   private snapshot: BridgeSnapshot;
@@ -910,6 +1033,8 @@ export class BridgeService extends EventEmitter {
   private hostAudioStatus: HostAudioStatusPayload | null = null;
   private lastAudioStatsSignature: string | null = null;
   private hostAudioCommandActive = false;
+  private systemAudioHapticsRetryAt = 0;
+  private systemAudioHapticsPassthroughActive = false;
   private commandQueue: Promise<unknown> = Promise.resolve();
   private hostAudioHeartbeatBusy = false;
   private hostAudioReportQueue: number[][] = [];
@@ -956,6 +1081,17 @@ export class BridgeService extends EventEmitter {
       }
       this.emitSnapshot();
     });
+    this.systemAudioHapticsEngine.on('error', (error: Error) => {
+      this.appendAudioDebugLines([`[SystemHaptics] error: ${error.message}`]);
+      this.emitSnapshot();
+    });
+    this.systemAudioHapticsEngine.on('status', (line: string) => {
+      if (line) {
+        this.appendAudioDebugLines([`[SystemHaptics] ${line}`]);
+      }
+      void this.handleSystemAudioHapticsStatus(line);
+      this.emitSnapshot();
+    });
     this.micKeepaliveEngine.on('error', (error: Error) => {
       this.appendAudioDebugLines([`[MicKeepalive] error: ${error.message}`]);
       this.emitSnapshot();
@@ -1000,7 +1136,7 @@ export class BridgeService extends EventEmitter {
       this.runPoll();
     }, POLL_INTERVAL_MS);
     this.hostAudioHeartbeatTimer = setInterval(() => {
-      this.pulseHostAudio().catch((error) => this.publishError(error));
+      this.pulseAudioHelpers().catch((error) => this.publishError(error));
     }, HOST_AUDIO_HEARTBEAT_MS);
   }
 
@@ -1023,6 +1159,7 @@ export class BridgeService extends EventEmitter {
       }
     }
     await this.hostAudioEngine.stop();
+    await this.systemAudioHapticsEngine.stop();
     await this.micKeepaliveEngine.stop();
     this.hidDiscovery.stop();
     this.closeDevice();
@@ -1466,6 +1603,72 @@ export class BridgeService extends EventEmitter {
       : 0;
   }
 
+  private audioReactiveHapticsCommandEnabled(settings: CompanionSettings): boolean {
+    return settings.hapticsEnabled
+      && settings.audioReactiveHapticsEnabled
+      && (
+        settings.audioReactiveHapticsSource === 'controller-audio'
+        || (
+          settings.audioReactiveHapticsSource === 'system-audio'
+          && this.systemAudioHapticsPassthroughActive
+        )
+      );
+  }
+
+  private audioReactiveHapticsSupported(): boolean {
+    return Boolean(this.snapshot.status?.firmwareFlags.audioReactiveHapticsControl);
+  }
+
+  private systemAudioHapticsSupported(): boolean {
+    return this.audioReactiveHapticsSupported();
+  }
+
+  private systemAudioHapticsDesired(settings: CompanionSettings): boolean {
+    return settings.hapticsEnabled
+      && settings.audioReactiveHapticsEnabled
+      && settings.audioReactiveHapticsSource === 'system-audio';
+  }
+
+  private systemAudioHapticsConfig(settings: CompanionSettings): SystemAudioHapticsConfig {
+    return {
+      gainPercent: settings.audioReactiveHapticsGainPercent,
+      bassFocus: settings.audioReactiveHapticsBassFocus,
+      response: settings.audioReactiveHapticsResponse,
+      attack: settings.audioReactiveHapticsAttack,
+      release: settings.audioReactiveHapticsRelease
+    };
+  }
+
+  private audioReactiveHapticsCommandPayload(settings: CompanionSettings): number[] {
+    const gain = Math.max(0, Math.min(200, Math.round(settings.audioReactiveHapticsGainPercent)));
+    return [
+      audioReactiveHapticsModeValue(settings.audioReactiveHapticsMode),
+      gain & 0xff,
+      (gain >> 8) & 0xff,
+      audioReactiveHapticsBassFocusValue(settings.audioReactiveHapticsBassFocus),
+      audioReactiveHapticsResponseValue(settings.audioReactiveHapticsResponse),
+      audioReactiveHapticsAttackValue(settings.audioReactiveHapticsAttack),
+      audioReactiveHapticsReleaseValue(settings.audioReactiveHapticsRelease)
+    ];
+  }
+
+  private async applyAudioReactiveHapticsSettings(
+    settings: CompanionSettings,
+    expectSettingsRevisionChange: boolean
+  ): Promise<void> {
+    if (!this.audioReactiveHapticsSupported()) {
+      return;
+    }
+    await this.sendCommand(
+      COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS,
+      this.audioReactiveHapticsCommandEnabled(settings) ? 1 : 0,
+      {
+        expectSettingsRevisionChange,
+        extraPayload: this.audioReactiveHapticsCommandPayload(settings)
+      }
+    );
+  }
+
   private effectiveLightbarBrightness(settings: CompanionSettings): number {
     return settings.lightbarEnabled
       ? this.capForControllerPowerSaving(settings.lightbarBrightnessPercent, settings)
@@ -1485,6 +1688,7 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, this.effectiveTriggerEffectIntensity(settings), {
       expectSettingsRevisionChange
     });
+    await this.applyAudioReactiveHapticsSettings(settings, expectSettingsRevisionChange);
     await this.applyLightbarSettings(settings, expectSettingsRevisionChange);
   }
 
@@ -1528,6 +1732,10 @@ export class BridgeService extends EventEmitter {
     await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_GAIN, this.effectiveHapticsGain(settings), customSettingUpdate({
       hapticsEnabled: enabled
     }));
+    if (this.snapshot.state === 'connected') {
+      await this.applyAudioReactiveHapticsSettings(this.snapshot.settings, true);
+    }
+    await this.updateSystemAudioHapticsEngine();
     return this.getSnapshot();
   }
 
@@ -1661,6 +1869,48 @@ export class BridgeService extends EventEmitter {
     }));
     await this.updateMicKeepaliveEngine(Boolean(this.snapshot.status?.controllerConnected));
     this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setAudioReactiveHapticsConfig(config: Partial<AudioReactiveHapticsConfig>): Promise<BridgeSnapshot> {
+    const currentSettings = this.settingsStore.get();
+    const normalized = normalizeAudioReactiveHapticsConfig(config, currentSettings);
+    const nextSettings: CompanionSettings = {
+      ...currentSettings,
+      audioReactiveHapticsEnabled: normalized.enabled,
+      audioReactiveHapticsSource: normalized.source,
+      audioReactiveHapticsMode: normalized.mode,
+      audioReactiveHapticsGainPercent: normalized.gainPercent,
+      audioReactiveHapticsBassFocus: normalized.bassFocus,
+      audioReactiveHapticsResponse: normalized.response,
+      audioReactiveHapticsAttack: normalized.attack,
+      audioReactiveHapticsRelease: normalized.release
+    };
+    if (!this.audioReactiveHapticsSupported()) {
+      throw new Error('Audio reactive haptics require updated bridge firmware.');
+    }
+    const ack = await this.sendCommand(
+      COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS,
+      this.audioReactiveHapticsCommandEnabled(nextSettings) ? 1 : 0,
+      {
+        expectSettingsRevisionChange: true,
+        extraPayload: this.audioReactiveHapticsCommandPayload(nextSettings)
+      }
+    );
+    if (ack.resultCode === ACK_RESULT.OK) {
+      this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+        audioReactiveHapticsEnabled: normalized.enabled,
+        audioReactiveHapticsSource: normalized.source,
+        audioReactiveHapticsMode: normalized.mode,
+        audioReactiveHapticsGainPercent: normalized.gainPercent,
+        audioReactiveHapticsBassFocus: normalized.bassFocus,
+        audioReactiveHapticsResponse: normalized.response,
+        audioReactiveHapticsAttack: normalized.attack,
+        audioReactiveHapticsRelease: normalized.release
+      }));
+      await this.updateSystemAudioHapticsEngine();
+      this.emitSnapshot();
+    }
     return this.getSnapshot();
   }
 
@@ -2018,6 +2268,7 @@ export class BridgeService extends EventEmitter {
     const ack = await this.sendCommand(COMMAND_ID.RESTORE_DEFAULTS, 0, { expectSettingsRevisionChange: true });
     if (ack.resultCode === ACK_RESULT.OK) {
       this.snapshot.settings = this.settingsStore.restoreDefaults();
+      await this.updateSystemAudioHapticsEngine();
       this.emitSnapshot();
     }
     return this.getSnapshot();
@@ -2384,6 +2635,94 @@ export class BridgeService extends EventEmitter {
     await this.ensureHostAudioCapture(settings.speakerEnabled ? settings.speakerVolumePercent : 0);
   }
 
+  private async updateSystemAudioHapticsEngine(): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (
+      !this.systemAudioHapticsDesired(settings)
+      || !this.device
+      || !this.systemAudioHapticsSupported()
+    ) {
+      const wasPassthroughActive = this.systemAudioHapticsPassthroughActive;
+      this.systemAudioHapticsPassthroughActive = false;
+      this.systemAudioHapticsRetryAt = 0;
+      await this.systemAudioHapticsEngine.stop();
+      if (wasPassthroughActive && this.device && this.audioReactiveHapticsSupported()) {
+        await this.applyAudioReactiveHapticsSettings(settings, false);
+      }
+      return;
+    }
+
+    if (Date.now() < this.systemAudioHapticsRetryAt) {
+      await this.systemAudioHapticsEngine.stop();
+      return;
+    }
+
+    try {
+      await this.systemAudioHapticsEngine.start(this.systemAudioHapticsConfig(settings));
+      if (this.systemAudioHapticsPassthroughActive) {
+        this.systemAudioHapticsPassthroughActive = false;
+        await this.applyAudioReactiveHapticsSettings(settings, false);
+      }
+      this.systemAudioHapticsRetryAt = 0;
+    } catch (error) {
+      const retryAt = Date.now() + SYSTEM_AUDIO_HAPTICS_RETRY_MS;
+      this.systemAudioHapticsRetryAt = retryAt;
+      await this.systemAudioHapticsEngine.stop();
+      if (this.systemAudioHapticsPassthroughActive) {
+        await this.applyAudioReactiveHapticsSettings(settings, false);
+        this.appendAudioDebugLines([
+          `[SystemHaptics] mirror bypassed because Windows output is already DS5 Bridge; firmware passthrough active retryInMs=${SYSTEM_AUDIO_HAPTICS_RETRY_MS}`
+        ]);
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAudioDebugLines([
+        `[SystemHaptics] capture unavailable retryInMs=${SYSTEM_AUDIO_HAPTICS_RETRY_MS} error=${message}`
+      ]);
+    }
+  }
+
+  private async handleSystemAudioHapticsStatus(line: string): Promise<void> {
+    if (!line) {
+      return;
+    }
+
+    try {
+      const settings = this.settingsStore.get();
+      if (
+        line.includes('system-haptics-bypassed')
+        && line.includes('reason=source-is-bridge')
+        && this.systemAudioHapticsDesired(settings)
+      ) {
+        if (!this.systemAudioHapticsPassthroughActive) {
+          this.systemAudioHapticsPassthroughActive = true;
+          if (this.device && this.audioReactiveHapticsSupported()) {
+            await this.applyAudioReactiveHapticsSettings(settings, false);
+          }
+          this.emitSnapshot();
+        }
+        return;
+      }
+
+      if (
+        this.systemAudioHapticsPassthroughActive
+        && (
+          line.includes('source=system-haptics-mirror')
+          || line.includes('status: recording-started')
+        )
+      ) {
+        this.systemAudioHapticsPassthroughActive = false;
+        if (this.device && this.audioReactiveHapticsSupported()) {
+          await this.applyAudioReactiveHapticsSettings(settings, false);
+        }
+        this.emitSnapshot();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAudioDebugLines([`[SystemHaptics] status handling failed: ${message}`]);
+    }
+  }
+
   private async startHostAudioSession(expectSettingsRevisionChange: boolean): Promise<void> {
     const settings = this.settingsStore.get();
     const speakerVolumePercent = settings.speakerEnabled ? settings.speakerVolumePercent : 0;
@@ -2463,6 +2802,11 @@ export class BridgeService extends EventEmitter {
     }
   }
 
+  private async pulseAudioHelpers(): Promise<void> {
+    await this.pulseHostAudio();
+    await this.pulseSystemAudioHaptics();
+  }
+
   private async pulseHostAudio(): Promise<void> {
     const settings = this.settingsStore.get();
     if (!settings.hostEncodedAudioEnabled || this.hostAudioHeartbeatBusy || this.reapplyActive) {
@@ -2515,6 +2859,19 @@ export class BridgeService extends EventEmitter {
     } finally {
       this.hostAudioHeartbeatBusy = false;
     }
+  }
+
+  private async pulseSystemAudioHaptics(): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!this.systemAudioHapticsDesired(settings)) {
+      await this.updateSystemAudioHapticsEngine();
+      return;
+    }
+    if (this.reapplyActive) {
+      return;
+    }
+    await this.ensureCompanionDevice();
+    await this.updateSystemAudioHapticsEngine();
   }
 
   private async poll(): Promise<void> {
@@ -2811,6 +3168,8 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH, settings.hapticsBufferLength, {
       expectSettingsRevisionChange
     });
+    await this.applyAudioReactiveHapticsSettings(settings, expectSettingsRevisionChange);
+    await this.updateSystemAudioHapticsEngine();
     await this.sendCommand(
       COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
       this.effectiveClassicRumbleGain(settings),
@@ -2953,8 +3312,11 @@ export class BridgeService extends EventEmitter {
     this.hostAudioFrameCount = 0;
     this.hostAudioChunkWriteCount = 0;
     this.hostAudioFrameDropCount = 0;
+    this.systemAudioHapticsRetryAt = 0;
+    this.systemAudioHapticsPassthroughActive = false;
     this.clearHostAudioCaptureBackoff();
     void this.hostAudioEngine.stop();
+    void this.systemAudioHapticsEngine.stop();
     void this.micKeepaliveEngine.stop();
   }
 

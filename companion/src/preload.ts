@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   AdaptiveTriggerPreviewEffect,
+  AudioReactiveHapticsConfig,
   BridgePresetId,
   HostPersonaMode,
   MuteButtonMode,
@@ -58,6 +59,9 @@ const api = {
   setSpeakerEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setSpeakerEnabled', value),
   setMicVolume: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setMicVolume', value),
   setMicMute: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setMicMute', value),
+  setAudioReactiveHapticsConfig: (value: Partial<AudioReactiveHapticsConfig>): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setAudioReactiveHapticsConfig', value)
+  ),
   setHostEncodedAudioEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setHostEncodedAudioEnabled', value)
   ),

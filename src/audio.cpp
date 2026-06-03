@@ -71,7 +71,13 @@
 #define HOST_RAW_PCM_RETURN_PACKET_BYTES (HOST_RAW_PCM_RETURN_FRAMES * INPUT_CHANNELS * sizeof(int16_t))
 #define HOST_RAW_PCM_RETURN_LINE_BYTES (HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS * sizeof(int16_t))
 #define HOST_USB_HAPTIC_LATCH_US 50000
-#define HAPTIC_DOWNSAMPLE_FRAMES 16
+#define AUDIO_REACTIVE_HAPTICS_MAX_GAIN_PERCENT 200
+#define AUDIO_REACTIVE_HAPTICS_GATE_THRESHOLD 98.0f
+#define AUDIO_REACTIVE_HAPTICS_ENVELOPE_ATTACK 0.40f
+#define AUDIO_REACTIVE_HAPTICS_ENVELOPE_RELEASE 0.025f
+#define AUDIO_REACTIVE_HAPTICS_GATE_OPEN_RATE 0.035f
+#define AUDIO_REACTIVE_HAPTICS_GATE_CLOSE_RATE 0.004f
+#define AUDIO_REACTIVE_HAPTICS_OUTPUT_RAMP_STEP 0.004f
 #define HOST_MIC_OPUS_SIZE 71
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
@@ -228,13 +234,24 @@ struct audio_raw_element {
     uint32_t generation;
 };
 
+static WDL_Resampler resampler;
 static float audio_buf[512 * 2];
 static uint audio_buf_pos = 0;
 static int8_t audio_haptic_buf[SAMPLE_SIZE];
 static int audio_haptic_buf_pos = 0;
-static int32_t audio_haptic_bucket_l = 0;
-static int32_t audio_haptic_bucket_r = 0;
-static uint8_t audio_haptic_bucket_frames = 0;
+static bool audio_reactive_haptics_config_enabled = false;
+static uint8_t audio_reactive_haptics_mode = AudioReactiveHapticsMix;
+static uint16_t audio_reactive_haptics_gain_percent = 100;
+static uint8_t audio_reactive_haptics_bass_focus = AudioReactiveHapticsBassBalanced;
+static uint8_t audio_reactive_haptics_response = AudioReactiveHapticsResponseBalanced;
+static uint8_t audio_reactive_haptics_attack = AudioReactiveHapticsAttackBalanced;
+static uint8_t audio_reactive_haptics_release = AudioReactiveHapticsReleaseBalanced;
+static float audio_reactive_haptics_filter_l = 0.0f;
+static float audio_reactive_haptics_filter_r = 0.0f;
+static float audio_reactive_haptics_env_l = 0.0f;
+static float audio_reactive_haptics_env_r = 0.0f;
+static float audio_reactive_haptics_gate = 0.0f;
+static float audio_reactive_haptics_output_ramp = 0.0f;
 static int8_t host_usb_haptic_buf[SAMPLE_SIZE]{};
 static bool host_usb_haptic_pending = false;
 static uint32_t host_usb_haptic_us = 0;
@@ -295,7 +312,7 @@ static bool copy_latest_host_usb_haptics(uint8_t *destination);
 static void store_latest_host_usb_haptics(int8_t const *data);
 static void clear_latest_host_usb_haptics();
 static bool merge_test_haptics_overlay(int8_t *destination);
-static bool append_averaged_haptic_frame(int16_t left, int16_t right, float gain);
+static bool append_resampled_haptic_sample(float left, float right, float gain);
 #if DS5_AUDIO_DEBUG_ENABLED
 static void audio_debug_log_impl(
     AudioDebugEventCode code,
@@ -1007,15 +1024,98 @@ static void audio_host_poll() {
     }
 }
 
+static bool valid_audio_reactive_haptics_mode(uint8_t mode) {
+    return mode == AudioReactiveHapticsMix || mode == AudioReactiveHapticsReplace;
+}
+
+static bool valid_audio_reactive_haptics_bass_focus(uint8_t focus) {
+    return focus == AudioReactiveHapticsBassDeep
+        || focus == AudioReactiveHapticsBassBalanced
+        || focus == AudioReactiveHapticsBassPunchy
+        || focus == AudioReactiveHapticsBassWide;
+}
+
+static bool valid_audio_reactive_haptics_response(uint8_t response) {
+    return response == AudioReactiveHapticsResponseSubtle
+        || response == AudioReactiveHapticsResponseBalanced
+        || response == AudioReactiveHapticsResponseStrong;
+}
+
+static bool valid_audio_reactive_haptics_attack(uint8_t attack) {
+    return attack == AudioReactiveHapticsAttackSoft
+        || attack == AudioReactiveHapticsAttackBalanced
+        || attack == AudioReactiveHapticsAttackFast
+        || attack == AudioReactiveHapticsAttackSharp;
+}
+
+static bool valid_audio_reactive_haptics_release(uint8_t release) {
+    return release == AudioReactiveHapticsReleaseTight
+        || release == AudioReactiveHapticsReleaseBalanced
+        || release == AudioReactiveHapticsReleaseSmooth
+        || release == AudioReactiveHapticsReleaseLong;
+}
+
+void audio_reactive_haptics_reset() {
+    audio_reactive_haptics_filter_l = 0.0f;
+    audio_reactive_haptics_filter_r = 0.0f;
+    audio_reactive_haptics_env_l = 0.0f;
+    audio_reactive_haptics_env_r = 0.0f;
+    audio_reactive_haptics_gate = 0.0f;
+    audio_reactive_haptics_output_ramp = 0.0f;
+}
+
+bool audio_set_reactive_haptics_config(
+    bool enabled,
+    uint8_t mode,
+    uint16_t gain_percent,
+    uint8_t bass_focus,
+    uint8_t response,
+    uint8_t attack,
+    uint8_t release
+) {
+    if (
+        !valid_audio_reactive_haptics_mode(mode)
+        || !valid_audio_reactive_haptics_bass_focus(bass_focus)
+        || !valid_audio_reactive_haptics_response(response)
+        || !valid_audio_reactive_haptics_attack(attack)
+        || !valid_audio_reactive_haptics_release(release)
+        || gain_percent > AUDIO_REACTIVE_HAPTICS_MAX_GAIN_PERCENT
+    ) {
+        return false;
+    }
+
+    const bool changed = audio_reactive_haptics_config_enabled != enabled
+        || audio_reactive_haptics_mode != mode
+        || audio_reactive_haptics_gain_percent != gain_percent
+        || audio_reactive_haptics_bass_focus != bass_focus
+        || audio_reactive_haptics_response != response
+        || audio_reactive_haptics_attack != attack
+        || audio_reactive_haptics_release != release;
+    audio_reactive_haptics_config_enabled = enabled;
+    audio_reactive_haptics_mode = mode;
+    audio_reactive_haptics_gain_percent = gain_percent;
+    audio_reactive_haptics_bass_focus = bass_focus;
+    audio_reactive_haptics_response = response;
+    audio_reactive_haptics_attack = attack;
+    audio_reactive_haptics_release = release;
+    if (changed) {
+        audio_reactive_haptics_reset();
+    }
+    return true;
+}
+
+bool audio_reactive_haptics_enabled() {
+    return audio_reactive_haptics_config_enabled;
+}
+
 static void clear_partial_audio_state() {
     audio_buf_pos = 0;
     audio_haptic_buf_pos = 0;
-    audio_haptic_bucket_l = 0;
-    audio_haptic_bucket_r = 0;
-    audio_haptic_bucket_frames = 0;
     audio_silence_tail_logged = false;
+    audio_reactive_haptics_reset();
     memset(audio_buf, 0, sizeof(audio_buf));
     memset(audio_haptic_buf, 0, sizeof(audio_haptic_buf));
+    resampler.Reset();
 }
 
 static void schedule_speaker_silence_preroll() {
@@ -1211,34 +1311,218 @@ static bool haptic_block_has_signal(uint8_t const *data) {
     return false;
 }
 
-static int8_t quantize_haptic_average(int32_t sample_sum, float gain) {
+static float audio_reactive_haptics_filter_coeff() {
+    switch (audio_reactive_haptics_bass_focus) {
+        case AudioReactiveHapticsBassDeep:
+            return 0.01039f;
+        case AudioReactiveHapticsBassPunchy:
+            return 0.03095f;
+        case AudioReactiveHapticsBassWide:
+            return 0.05123f;
+        case AudioReactiveHapticsBassBalanced:
+        default:
+            return 0.02074f;
+    }
+}
+
+static float audio_reactive_haptics_focus_gain() {
+    switch (audio_reactive_haptics_bass_focus) {
+        case AudioReactiveHapticsBassDeep:
+            return 1.35f;
+        case AudioReactiveHapticsBassPunchy:
+            return 1.12f;
+        case AudioReactiveHapticsBassWide:
+            return 0.92f;
+        case AudioReactiveHapticsBassBalanced:
+        default:
+            return 1.0f;
+    }
+}
+
+static float audio_reactive_haptics_response_gain() {
+    switch (audio_reactive_haptics_response) {
+        case AudioReactiveHapticsResponseSubtle:
+            return 0.68f;
+        case AudioReactiveHapticsResponseStrong:
+            return 1.0f;
+        case AudioReactiveHapticsResponseBalanced:
+        default:
+            return 1.0f;
+    }
+}
+
+static float audio_reactive_haptics_response_punch() {
+    switch (audio_reactive_haptics_response) {
+        case AudioReactiveHapticsResponseSubtle:
+            return 0.0f;
+        case AudioReactiveHapticsResponseStrong:
+            return 3.0f;
+        case AudioReactiveHapticsResponseBalanced:
+        default:
+            return 1.5f;
+    }
+}
+
+static float audio_reactive_haptics_envelope_punch(float envelope) {
+    const float normalized = clamp(envelope / 32768.0f, 0.0f, 1.0f);
+    return 1.0f + (audio_reactive_haptics_response_punch() * normalized);
+}
+
+static float abs_float(float value) {
+    return value < 0.0f ? -value : value;
+}
+
+static float audio_reactive_haptics_attack_coeff() {
+    switch (audio_reactive_haptics_attack) {
+        case AudioReactiveHapticsAttackSoft:
+            return 0.20f;
+        case AudioReactiveHapticsAttackFast:
+            return 0.65f;
+        case AudioReactiveHapticsAttackSharp:
+            return 0.90f;
+        case AudioReactiveHapticsAttackBalanced:
+        default:
+            return AUDIO_REACTIVE_HAPTICS_ENVELOPE_ATTACK;
+    }
+}
+
+static float audio_reactive_haptics_release_coeff() {
+    switch (audio_reactive_haptics_release) {
+        case AudioReactiveHapticsReleaseTight:
+            return 0.055f;
+        case AudioReactiveHapticsReleaseSmooth:
+            return 0.012f;
+        case AudioReactiveHapticsReleaseLong:
+            return 0.006f;
+        case AudioReactiveHapticsReleaseBalanced:
+        default:
+            return AUDIO_REACTIVE_HAPTICS_ENVELOPE_RELEASE;
+    }
+}
+
+static float follow_envelope(float current, float value) {
+    const float target = abs_float(value);
+    const float rate = target > current
+        ? audio_reactive_haptics_attack_coeff()
+        : audio_reactive_haptics_release_coeff();
+    return current + ((target - current) * rate);
+}
+
+static float soft_clip_unit(float value) {
+    const float x = clamp(value, -4.0f, 4.0f);
+    const float x2 = x * x;
+    return clamp((x * (27.0f + x2)) / (27.0f + (9.0f * x2)), -1.0f, 1.0f);
+}
+
+static int16_t soft_clip_i16_from_float(float value) {
+    const float normalized = value / 32768.0f;
+    const float clipped = soft_clip_unit(normalized);
+    return static_cast<int16_t>(
+        clamp(
+            static_cast<int32_t>(clipped * 32767.0f),
+            static_cast<int32_t>(-32768),
+            static_cast<int32_t>(32767)
+        )
+    );
+}
+
+static int16_t mix_i16(int16_t native_sample, int16_t derived_sample) {
+    return soft_clip_i16_from_float(static_cast<float>(native_sample) + static_cast<float>(derived_sample));
+}
+
+static void process_audio_reactive_haptic_frame(
+    int16_t speaker_l,
+    int16_t speaker_r,
+    int16_t native_haptic_l,
+    int16_t native_haptic_r,
+    int16_t &out_l,
+    int16_t &out_r
+) {
+    if (!audio_reactive_haptics_config_enabled || quiet_mode_enabled) {
+        out_l = native_haptic_l;
+        out_r = native_haptic_r;
+        return;
+    }
+
+    const float coeff = audio_reactive_haptics_filter_coeff();
+    audio_reactive_haptics_filter_l += (static_cast<float>(speaker_l) - audio_reactive_haptics_filter_l) * coeff;
+    audio_reactive_haptics_filter_r += (static_cast<float>(speaker_r) - audio_reactive_haptics_filter_r) * coeff;
+    audio_reactive_haptics_env_l = follow_envelope(audio_reactive_haptics_env_l, audio_reactive_haptics_filter_l);
+    audio_reactive_haptics_env_r = follow_envelope(audio_reactive_haptics_env_r, audio_reactive_haptics_filter_r);
+
+    const float peak = max(audio_reactive_haptics_env_l, audio_reactive_haptics_env_r);
+    const float gate_target = peak > AUDIO_REACTIVE_HAPTICS_GATE_THRESHOLD ? 1.0f : 0.0f;
+    const float gate_rate = gate_target > audio_reactive_haptics_gate
+        ? AUDIO_REACTIVE_HAPTICS_GATE_OPEN_RATE
+        : AUDIO_REACTIVE_HAPTICS_GATE_CLOSE_RATE;
+    audio_reactive_haptics_gate += (gate_target - audio_reactive_haptics_gate) * gate_rate;
+    audio_reactive_haptics_output_ramp = std::min(
+        1.0f,
+        audio_reactive_haptics_output_ramp + AUDIO_REACTIVE_HAPTICS_OUTPUT_RAMP_STEP
+    );
+
+    const float gain = (static_cast<float>(audio_reactive_haptics_gain_percent) / 100.0f)
+        * audio_reactive_haptics_focus_gain()
+        * audio_reactive_haptics_response_gain()
+        * audio_reactive_haptics_gate
+        * audio_reactive_haptics_output_ramp;
+    const int16_t derived_l = soft_clip_i16_from_float(
+        audio_reactive_haptics_filter_l
+        * gain
+        * audio_reactive_haptics_envelope_punch(audio_reactive_haptics_env_l)
+    );
+    const int16_t derived_r = soft_clip_i16_from_float(
+        audio_reactive_haptics_filter_r
+        * gain
+        * audio_reactive_haptics_envelope_punch(audio_reactive_haptics_env_r)
+    );
+    if (audio_reactive_haptics_mode == AudioReactiveHapticsReplace) {
+        out_l = derived_l;
+        out_r = derived_r;
+        return;
+    }
+
+    out_l = mix_i16(native_haptic_l, derived_l);
+    out_r = mix_i16(native_haptic_r, derived_r);
+}
+
+static int8_t quantize_haptic_sample(float sample, float gain) {
     const float clamped_gain = clamp(gain, 0.0f, MAX_HAPTICS_GAIN);
-    const float scaled = static_cast<float>(sample_sum) * 127.0f * clamped_gain
-        / (static_cast<float>(HAPTIC_DOWNSAMPLE_FRAMES) * 32768.0f);
+    const float scaled = sample * 127.0f * clamped_gain;
     return static_cast<int8_t>(clamp(static_cast<int>(scaled), -128, 127));
 }
 
-static bool append_averaged_haptic_frame(int16_t left, int16_t right, float gain) {
-    audio_haptic_bucket_l += left;
-    audio_haptic_bucket_r += right;
-    audio_haptic_bucket_frames++;
-
-    if (audio_haptic_bucket_frames < HAPTIC_DOWNSAMPLE_FRAMES) {
-        return false;
-    }
-
-    audio_haptic_buf[audio_haptic_buf_pos++] = quantize_haptic_average(audio_haptic_bucket_l, gain);
-    audio_haptic_buf[audio_haptic_buf_pos++] = quantize_haptic_average(audio_haptic_bucket_r, gain);
-    audio_haptic_bucket_l = 0;
-    audio_haptic_bucket_r = 0;
-    audio_haptic_bucket_frames = 0;
-
+static bool append_resampled_haptic_sample(float left, float right, float gain) {
+    audio_haptic_buf[audio_haptic_buf_pos++] = quantize_haptic_sample(left, gain);
+    audio_haptic_buf[audio_haptic_buf_pos++] = quantize_haptic_sample(right, gain);
     if (audio_haptic_buf_pos < SAMPLE_SIZE) {
         return false;
     }
 
     audio_haptic_buf_pos = 0;
     return true;
+}
+
+static void process_audio_reactive_haptic_frame_for_resampler(
+    int16_t speaker_l,
+    int16_t speaker_r,
+    int16_t native_haptic_l,
+    int16_t native_haptic_r,
+    WDL_ResampleSample &out_l,
+    WDL_ResampleSample &out_r
+) {
+    int16_t processed_l = native_haptic_l;
+    int16_t processed_r = native_haptic_r;
+    process_audio_reactive_haptic_frame(
+        speaker_l,
+        speaker_r,
+        native_haptic_l,
+        native_haptic_r,
+        processed_l,
+        processed_r
+    );
+    out_l = static_cast<WDL_ResampleSample>(processed_l) / 32768.0f;
+    out_r = static_cast<WDL_ResampleSample>(processed_r) / 32768.0f;
 }
 
 static void store_latest_host_usb_haptics(int8_t const *data) {
@@ -2079,6 +2363,9 @@ static bool process_usb_audio_packet() {
         last_audio_us = time_us_32();
     }
 
+    WDL_ResampleSample *in_buf;
+    const int requested_haptic_frames = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
+    const int haptic_input_frames = std::min(frames, requested_haptic_frames);
     const float speaker_gain = usb_host_mute[0] ? 0.0f : clamp(volume[0], 0.0f, 1.0f) * usb_host_speaker_gain;
     const float haptic_gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
     for (int i = 0; i < frames; i++) {
@@ -2113,7 +2400,22 @@ static bool process_usb_audio_packet() {
             audio_buf_pos = 0;
         }
 
-        if (append_averaged_haptic_frame(raw[i * INPUT_CHANNELS + 2], raw[i * INPUT_CHANNELS + 3], haptic_gain)) {
+        if (i < haptic_input_frames) {
+            process_audio_reactive_haptic_frame_for_resampler(
+                raw[i * INPUT_CHANNELS],
+                raw[i * INPUT_CHANNELS + 1],
+                raw[i * INPUT_CHANNELS + 2],
+                raw[i * INPUT_CHANNELS + 3],
+                in_buf[i * OUTPUT_CHANNELS],
+                in_buf[i * OUTPUT_CHANNELS + 1]
+            );
+        }
+    }
+
+    static WDL_ResampleSample out_buf[SAMPLE_SIZE];
+    const int out_frames = resampler.ResampleOut(out_buf, haptic_input_frames, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
+    for (int i = 0; i < out_frames; i++) {
+        if (append_resampled_haptic_sample(out_buf[i * OUTPUT_CHANNELS], out_buf[i * OUTPUT_CHANNELS + 1], haptic_gain)) {
             send_audio_haptics_packet(audio_haptic_buf, true);
         }
     }
@@ -2138,11 +2440,29 @@ static bool process_usb_audio_raw_pcm_return_packet() {
     audio_stats_note_usb_read(now);
 
     alignas(4) int16_t line[HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS]{};
+    WDL_ResampleSample *in_buf;
+    const int requested_haptic_frames = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
+    const int haptic_input_frames = std::min(frames, requested_haptic_frames);
     for (int i = 0; i < frames; i++) {
         line[i * HOST_RAW_PCM_RETURN_CHANNELS] = raw[i * INPUT_CHANNELS];
         line[i * HOST_RAW_PCM_RETURN_CHANNELS + 1] = raw[i * INPUT_CHANNELS + 1];
 
-        if (append_averaged_haptic_frame(raw[i * INPUT_CHANNELS + 2], raw[i * INPUT_CHANNELS + 3], 1.0f)) {
+        if (i < haptic_input_frames) {
+            process_audio_reactive_haptic_frame_for_resampler(
+                raw[i * INPUT_CHANNELS],
+                raw[i * INPUT_CHANNELS + 1],
+                raw[i * INPUT_CHANNELS + 2],
+                raw[i * INPUT_CHANNELS + 3],
+                in_buf[i * OUTPUT_CHANNELS],
+                in_buf[i * OUTPUT_CHANNELS + 1]
+            );
+        }
+    }
+
+    static WDL_ResampleSample out_buf[SAMPLE_SIZE];
+    const int out_frames = resampler.ResampleOut(out_buf, haptic_input_frames, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
+    for (int i = 0; i < out_frames; i++) {
+        if (append_resampled_haptic_sample(out_buf[i * OUTPUT_CHANNELS], out_buf[i * OUTPUT_CHANNELS + 1], 1.0f)) {
             store_latest_host_usb_haptics(audio_haptic_buf);
         }
     }
@@ -2541,6 +2861,10 @@ void audio_init() {
     critical_section_init(&audio_debug_cs);
     audio_debug_cs_ready = true;
 #endif
+    resampler.SetMode(true, 0, false);
+    resampler.SetRates(48000, 3000);
+    resampler.SetFeedMode(true);
+    resampler.Prealloc(2, 24, 6);
     queue_init(&audio_fifo,sizeof(audio_raw_element),2);
     queue_init(&mic_fifo,sizeof(mic_packet_element),HOST_MIC_QUEUE_DEPTH);
     queue_init(&mic_decode_fifo,sizeof(mic_decode_element),HOST_MIC_QUEUE_DEPTH);

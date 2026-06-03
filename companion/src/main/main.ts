@@ -7,6 +7,7 @@ import { BridgeService } from './bridge-service';
 import { SettingsStore } from './settings-store';
 import type {
   AdaptiveTriggerPreviewEffect,
+  AudioReactiveHapticsConfig,
   BridgePresetId,
   HostPersonaMode,
   MuteButtonMode,
@@ -547,6 +548,12 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:setSpeakerEnabled', (_event, value: boolean) => service.setSpeakerEnabled(value));
   ipcMain.handle('bridge:setMicVolume', (_event, value: number) => service.setMicVolume(value));
   ipcMain.handle('bridge:setMicMute', (_event, value: boolean) => service.setMicMute(value));
+  ipcMain.handle('bridge:setAudioReactiveHapticsConfig', (
+    _event,
+    value: Partial<AudioReactiveHapticsConfig>
+  ) => (
+    service.setAudioReactiveHapticsConfig(value)
+  ));
   ipcMain.handle('bridge:setHostEncodedAudioEnabled', (_event, value: boolean) => (
     service.setHostEncodedAudioEnabled(value)
   ));

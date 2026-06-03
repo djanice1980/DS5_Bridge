@@ -32,9 +32,12 @@ static class AudioConstants
     public const int OpusPacketBytes = 200;
     public const int CompactFrameBytes = 264;
     public const int HapticBuckets = 32;
-    public const int HapticDecimationFactor = PicoInputBlockFrames / HapticBuckets;
-    public const int HapticFilterRadius = 64;
-    public const double HapticLowPassCutoff = 0.028125;
+    public const float HapticsGateThreshold = 0.003f;
+    public const float HapticsEnvelopeAttack = 0.40f;
+    public const float HapticsEnvelopeRelease = 0.025f;
+    public const float HapticsGateOpenRate = 0.035f;
+    public const float HapticsGateCloseRate = 0.004f;
+    public const float HapticsOutputRampStep = 0.004f;
     public const int WasapiBufferMilliseconds = 10;
     public const int MaxQueuedReports = 12;
     public const int MaxBufferedReports = 6;
@@ -125,13 +128,17 @@ sealed class HostAudioHelper : IDisposable
     private readonly ManualResetEventSlim stopped = new(false);
     private readonly Task writerTask;
     private readonly Task? diagnosticsTask;
-    private static readonly double[] HapticDownsampleKernel = BuildHapticDownsampleKernel();
     private WaveFileWriter? rawCaptureDump;
     private long rawCaptureDumpFrameLimit;
     private long rawCaptureDumpFramesWritten;
     private bool rawCaptureDumpLimitLogged;
     private MMDeviceEnumerator? enumerator;
     private WasapiCapture? capture;
+    private WasapiOut? hapticsMirrorOutput;
+    private BufferedWaveProvider? hapticsMirrorBuffer;
+    private WaveFormat? hapticsMirrorFormat;
+    private byte[] hapticsMirrorScratch = Array.Empty<byte>();
+    private int hapticsMirrorScratchLength;
     private WasapiCapture? micCapture;
     private AudioClient? directCaptureAudioClient;
     private AudioCaptureClient? directCaptureClient;
@@ -193,6 +200,17 @@ sealed class HostAudioHelper : IDisposable
     private long bulkPcmParsedPackets;
     private int targetSpeakerGainPermille;
     private float currentSpeakerGainPermille;
+    private int hapticsGainPercent;
+    private int hapticsBassFocus;
+    private int hapticsResponse;
+    private int hapticsAttack;
+    private int hapticsRelease;
+    private float hapticsFilterLeft;
+    private float hapticsFilterRight;
+    private float hapticsEnvelopeLeft;
+    private float hapticsEnvelopeRight;
+    private float hapticsGate;
+    private float hapticsOutputRamp;
     private bool timerResolutionRaised;
     private bool disposed;
 
@@ -201,6 +219,11 @@ sealed class HostAudioHelper : IDisposable
         this.options = options;
         targetSpeakerGainPermille = VolumePercentToPermille(options.SpeakerVolumePercent);
         currentSpeakerGainPermille = 0f;
+        hapticsGainPercent = Math.Clamp(options.HapticsGainPercent, 0, 200);
+        hapticsBassFocus = options.HapticsBassFocus;
+        hapticsResponse = options.HapticsResponse;
+        hapticsAttack = options.HapticsAttack;
+        hapticsRelease = options.HapticsRelease;
         RaiseSchedulingPriority();
         timerResolutionRaised = TryBeginTimerResolution(1);
         encoder = new OpusEncoder(AudioConstants.TargetSampleRate, 2, OpusApplication.OPUS_APPLICATION_AUDIO)
@@ -272,6 +295,7 @@ sealed class HostAudioHelper : IDisposable
         {
         }
         capture?.Dispose();
+        hapticsMirrorOutput?.Dispose();
         micCapture?.Dispose();
         directCaptureClient?.Dispose();
         directCaptureAudioClient?.Dispose();
@@ -305,7 +329,10 @@ sealed class HostAudioHelper : IDisposable
             return;
         }
 
-        TryOpenCompanionOutput();
+        if (!options.HapticsOnly)
+        {
+            TryOpenCompanionOutput();
+        }
         string deviceName = options.DeviceName ?? options.SourceArgument;
         try
         {
@@ -313,6 +340,12 @@ sealed class HostAudioHelper : IDisposable
             {
                 StartBulkPcmCapture();
                 Console.Error.WriteLine("status: recording-started");
+                return;
+            }
+
+            if (options.HapticsOnly)
+            {
+                StartSystemAudioHapticsMirror(enumerator);
                 return;
             }
 
@@ -398,6 +431,14 @@ sealed class HostAudioHelper : IDisposable
         }
         try
         {
+            hapticsMirrorOutput?.Stop();
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"error: haptics mirror stop failed: {error.Message}");
+        }
+        try
+        {
             capture?.StopRecording();
         }
         catch (Exception error)
@@ -434,6 +475,10 @@ sealed class HostAudioHelper : IDisposable
 
     private void TryOpenCompanionOutput()
     {
+        if (options.StdoutOnly)
+        {
+            return;
+        }
         bridgeTransport = WinUsbBridgeTransport.TryOpen();
         if (bridgeTransport is not null)
         {
@@ -444,6 +489,62 @@ sealed class HostAudioHelper : IDisposable
             return;
         }
         hidStream = PicoTransport.TryOpenDirectHid(options.HidPath);
+    }
+
+    private void StartSystemAudioHapticsMirror(MMDeviceEnumerator enumerator)
+    {
+        var sourceDevice = EndpointManager.SelectDefaultRenderEndpoint(enumerator);
+        var targetDevice = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
+        var sourceName = sourceDevice.FriendlyName;
+        var targetName = targetDevice.FriendlyName;
+
+        if (
+            string.Equals(sourceDevice.ID, targetDevice.ID, StringComparison.OrdinalIgnoreCase)
+            || EndpointManager.IsKnownBridgeEndpoint(sourceDevice)
+        )
+        {
+            Console.Error.WriteLine(
+                $"status: system-haptics-bypassed reason=source-is-bridge device='{EscapeStatusValue(sourceName)}'");
+            stopped.Set();
+            return;
+        }
+
+        var targetFormat = targetDevice.AudioClient.MixFormat;
+        if (targetFormat.Channels < 4)
+        {
+            Console.Error.WriteLine(
+                $"status: capture-unavailable reason=unsupported-format device='{EscapeStatusValue(targetName)}' targetChannels={targetFormat.Channels}");
+            stopped.Set();
+            return;
+        }
+
+        hapticsMirrorFormat = targetFormat;
+        hapticsMirrorScratch = new byte[Math.Max(targetFormat.BlockAlign, targetFormat.BlockAlign * AudioConstants.PicoInputBlockFrames)];
+        hapticsMirrorScratchLength = 0;
+        hapticsMirrorBuffer = new BufferedWaveProvider(targetFormat)
+        {
+            BufferDuration = TimeSpan.FromMilliseconds(80),
+            DiscardOnBufferOverflow = true,
+            ReadFully = true
+        };
+        hapticsMirrorOutput = new WasapiOut(targetDevice, AudioClientShareMode.Shared, false, 20);
+        hapticsMirrorOutput.Init(hapticsMirrorBuffer);
+        hapticsMirrorOutput.Play();
+
+        capture = new WasapiLoopbackCapture(sourceDevice);
+        SetWasapiBufferMilliseconds(capture, AudioConstants.WasapiBufferMilliseconds);
+        capture.DataAvailable += OnDataAvailable;
+        capture.RecordingStopped += (_, eventArgs) =>
+        {
+            WriteWasapiStopFailure(eventArgs.Exception);
+            stopped.Set();
+        };
+
+        Console.Error.WriteLine(
+            $"status: host-capture-format source=system-haptics-mirror device='{EscapeStatusValue(sourceName)}' target='{EscapeStatusValue(targetName)}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding} targetRate={targetFormat.SampleRate} targetChannels={targetFormat.Channels} targetBits={targetFormat.BitsPerSample} targetEncoding={targetFormat.Encoding}");
+        StartRawCaptureDump(capture.WaveFormat);
+        capture.StartRecording();
+        Console.Error.WriteLine("status: recording-started");
     }
 
     private static void SetWasapiBufferMilliseconds(WasapiCapture capture, int milliseconds)
@@ -928,6 +1029,12 @@ sealed class HostAudioHelper : IDisposable
 
     private void ProcessPcm(byte[] buffer, int byteCount, WaveFormat format)
     {
+        if (options.HapticsOnly)
+        {
+            ProcessHapticsOnlyPcm(buffer, byteCount, format);
+            return;
+        }
+
         var channels = Math.Max(1, format.Channels);
         var bytesPerSample = Math.Max(1, format.BitsPerSample / 8);
         var frameBytes = channels * bytesPerSample;
@@ -1041,6 +1148,50 @@ sealed class HostAudioHelper : IDisposable
         }
     }
 
+    private void ProcessHapticsOnlyPcm(byte[] buffer, int byteCount, WaveFormat format)
+    {
+        var targetFormat = hapticsMirrorFormat;
+        if (targetFormat is null || hapticsMirrorBuffer is null)
+        {
+            return;
+        }
+
+        var channels = Math.Max(1, format.Channels);
+        var bytesPerSample = Math.Max(1, format.BitsPerSample / 8);
+        var frameBytes = channels * bytesPerSample;
+        var frameCount = byteCount / frameBytes;
+        var outputPerInput = targetFormat.SampleRate / (double)format.SampleRate;
+        if (AudioConstants.DiagnosticsEnabled)
+        {
+            capturedCallbacks++;
+            capturedFrames += frameCount;
+        }
+
+        for (var frame = 0; frame < frameCount; frame++)
+        {
+            var offset = frame * frameBytes;
+            var left = ReadSample(buffer, byteCount, offset, format);
+            var right = channels > 1 ? ReadSample(buffer, byteCount, offset + bytesPerSample, format) : left;
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                var peak = (int)Math.Round(Math.Max(Math.Abs(left), Math.Abs(right)) * 1000);
+                if (peak > peakSamplePermille)
+                {
+                    Interlocked.Exchange(ref peakSamplePermille, peak);
+                }
+            }
+
+            resampleCredit += outputPerInput;
+            while (resampleCredit >= 1)
+            {
+                var processed = ProcessReactiveHapticsSample(left, right);
+                AppendHapticsMirrorFrame(processed.Left, processed.Right);
+                resampleCredit -= 1;
+            }
+        }
+        FlushHapticsMirrorScratch();
+    }
+
     private static float ReadSample(byte[] buffer, int byteCount, int offset, WaveFormat format)
     {
         if (offset < 0 || offset >= byteCount)
@@ -1074,6 +1225,14 @@ sealed class HostAudioHelper : IDisposable
         return value;
     }
 
+    private static void WriteInt24(byte[] buffer, int offset, int value)
+    {
+        value = Math.Clamp(value, -8388608, 8388607);
+        buffer[offset] = (byte)(value & 0xff);
+        buffer[offset + 1] = (byte)((value >> 8) & 0xff);
+        buffer[offset + 2] = (byte)((value >> 16) & 0xff);
+    }
+
     private void PushPicoInputSample(float left, float right, float hapticLeft, float hapticRight, bool hasHaptics)
     {
         speakerBlock[picoBlockFrameIndex * 2] = left;
@@ -1091,6 +1250,109 @@ sealed class HostAudioHelper : IDisposable
         EmitReport(picoBlockHasHaptics);
         picoBlockFrameIndex = 0;
         picoBlockHasHaptics = false;
+    }
+
+    private (float Left, float Right) ProcessReactiveHapticsSample(float left, float right)
+    {
+        var coeff = HapticsFilterCoeff(Volatile.Read(ref hapticsBassFocus));
+        hapticsFilterLeft += (left - hapticsFilterLeft) * coeff;
+        hapticsFilterRight += (right - hapticsFilterRight) * coeff;
+        var attack = Volatile.Read(ref hapticsAttack);
+        var release = Volatile.Read(ref hapticsRelease);
+        hapticsEnvelopeLeft = FollowHapticsEnvelope(hapticsEnvelopeLeft, hapticsFilterLeft, attack, release);
+        hapticsEnvelopeRight = FollowHapticsEnvelope(hapticsEnvelopeRight, hapticsFilterRight, attack, release);
+
+        var peak = Math.Max(hapticsEnvelopeLeft, hapticsEnvelopeRight);
+        var gateTarget = peak > AudioConstants.HapticsGateThreshold ? 1.0f : 0.0f;
+        var gateRate = gateTarget > hapticsGate
+            ? AudioConstants.HapticsGateOpenRate
+            : AudioConstants.HapticsGateCloseRate;
+        hapticsGate += (gateTarget - hapticsGate) * gateRate;
+        hapticsOutputRamp = Math.Min(1.0f, hapticsOutputRamp + AudioConstants.HapticsOutputRampStep);
+
+        var gain = (Volatile.Read(ref hapticsGainPercent) / 100.0f)
+            * HapticsFocusGain(Volatile.Read(ref hapticsBassFocus))
+            * hapticsGate
+            * hapticsOutputRamp;
+        var response = Volatile.Read(ref hapticsResponse);
+        gain *= HapticsResponseGain(response);
+        var punch = HapticsResponsePunch(response);
+        return (
+            SoftClipUnit(hapticsFilterLeft * gain * HapticsEnvelopePunch(hapticsEnvelopeLeft, punch)),
+            SoftClipUnit(hapticsFilterRight * gain * HapticsEnvelopePunch(hapticsEnvelopeRight, punch))
+        );
+    }
+
+    private void AppendHapticsMirrorFrame(float hapticLeft, float hapticRight)
+    {
+        var format = hapticsMirrorFormat;
+        if (format is null)
+        {
+            return;
+        }
+
+        var blockAlign = Math.Max(1, format.BlockAlign);
+        var bytesPerSample = Math.Max(1, format.BitsPerSample / 8);
+        if (hapticsMirrorScratchLength + blockAlign > hapticsMirrorScratch.Length)
+        {
+            FlushHapticsMirrorScratch();
+        }
+
+        if (hapticsMirrorScratchLength + blockAlign > hapticsMirrorScratch.Length)
+        {
+            hapticsMirrorScratch = new byte[Math.Max(blockAlign, hapticsMirrorScratch.Length * 2)];
+        }
+
+        Array.Clear(hapticsMirrorScratch, hapticsMirrorScratchLength, blockAlign);
+        var frameOffset = hapticsMirrorScratchLength;
+        WriteSample(hapticsMirrorScratch, frameOffset + bytesPerSample * 2, format, hapticLeft);
+        WriteSample(hapticsMirrorScratch, frameOffset + bytesPerSample * 3, format, hapticRight);
+        hapticsMirrorScratchLength += blockAlign;
+    }
+
+    private void FlushHapticsMirrorScratch()
+    {
+        if (hapticsMirrorScratchLength <= 0 || hapticsMirrorBuffer is null)
+        {
+            return;
+        }
+
+        hapticsMirrorBuffer.AddSamples(hapticsMirrorScratch, 0, hapticsMirrorScratchLength);
+        hapticsMirrorScratchLength = 0;
+    }
+
+    private static void WriteSample(byte[] buffer, int offset, WaveFormat format, float sample)
+    {
+        if (offset < 0 || offset >= buffer.Length)
+        {
+            return;
+        }
+
+        sample = Math.Clamp(sample, -1.0f, 1.0f);
+        if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
+        {
+            _ = BitConverter.TryWriteBytes(buffer.AsSpan(offset, Math.Min(4, buffer.Length - offset)), sample);
+            return;
+        }
+
+        switch (format.BitsPerSample)
+        {
+            case 16 when offset + 1 < buffer.Length:
+                BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(offset, 2), FloatToInt16(sample));
+                break;
+            case 24 when offset + 2 < buffer.Length:
+                WriteInt24(buffer, offset, (int)Math.Round(sample * 8388607.0f));
+                break;
+            case 32 when offset + 3 < buffer.Length && format.Encoding == WaveFormatEncoding.Pcm:
+                BinaryPrimitives.WriteInt32LittleEndian(
+                    buffer.AsSpan(offset, 4),
+                    (int)Math.Round(sample * 2147483647.0f)
+                );
+                break;
+            case 32 when offset + 3 < buffer.Length:
+                _ = BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), sample);
+                break;
+        }
     }
 
     private void EmitReport(bool hasHaptics)
@@ -1171,6 +1433,26 @@ sealed class HostAudioHelper : IDisposable
             Volatile.Write(ref targetSpeakerGainPermille, VolumePercentToPermille(speakerVolumePercent));
             return;
         }
+
+        if (
+            parts.Length >= 4
+            && string.Equals(parts[0], "haptics-config", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(parts[1], out var hapticsGain)
+        )
+        {
+            Volatile.Write(ref hapticsGainPercent, Math.Clamp(hapticsGain, 0, 200));
+            Volatile.Write(ref hapticsBassFocus, HelperOptions.ParseHapticsBassFocus(parts[2]));
+            Volatile.Write(ref hapticsResponse, HelperOptions.ParseHapticsResponse(parts[3]));
+            Volatile.Write(ref hapticsAttack, parts.Length > 4 ? HelperOptions.ParseHapticsAttack(parts[4]) : 1);
+            Volatile.Write(ref hapticsRelease, parts.Length > 5 ? HelperOptions.ParseHapticsRelease(parts[5]) : 1);
+            hapticsFilterLeft = 0;
+            hapticsFilterRight = 0;
+            hapticsEnvelopeLeft = 0;
+            hapticsEnvelopeRight = 0;
+            hapticsGate = 0;
+            hapticsOutputRamp = 0;
+            return;
+        }
     }
 
     private static void BuildReport(
@@ -1185,8 +1467,8 @@ sealed class HostAudioHelper : IDisposable
 
         for (var bucket = 0; bucket < AudioConstants.HapticBuckets; bucket++)
         {
-            var left = hasHaptics ? FilterHapticBucket(hapticLeftBlock, bucket) : 0;
-            var right = hasHaptics ? FilterHapticBucket(hapticRightBlock, bucket) : 0;
+            var left = hasHaptics ? ResampleHapticBucket(hapticLeftBlock, bucket) : 0;
+            var right = hasHaptics ? ResampleHapticBucket(hapticRightBlock, bucket) : 0;
             destination[bucket * 2] = FloatToInt8(left);
             destination[bucket * 2 + 1] = FloatToInt8(right);
         }
@@ -1194,66 +1476,98 @@ sealed class HostAudioHelper : IDisposable
         Buffer.BlockCopy(opus, 0, destination, 64, Math.Min(encodedBytes, AudioConstants.OpusPacketBytes));
     }
 
-    private static float FilterHapticBucket(float[] samples, int bucket)
+    private static float ResampleHapticBucket(float[] samples, int bucket)
     {
-        var sourcePosition = ((bucket + 0.5) * AudioConstants.HapticDecimationFactor) - 0.5;
-        var firstSample = (int)Math.Floor(sourcePosition) - AudioConstants.HapticFilterRadius;
-        var value = 0.0;
-        for (var tap = 0; tap < HapticDownsampleKernel.Length; tap++)
-        {
-            var sampleIndex = Math.Clamp(firstSample + tap, 0, AudioConstants.PicoInputBlockFrames - 1);
-            value += samples[sampleIndex] * HapticDownsampleKernel[tap];
-        }
-        return (float)value;
+        var sourcePosition = ((bucket + 0.5) * AudioConstants.PicoInputBlockFrames / AudioConstants.HapticBuckets) - 0.5;
+        var sourceIndex = Math.Clamp((int)Math.Floor(sourcePosition), 0, AudioConstants.PicoInputBlockFrames - 1);
+        var nextIndex = Math.Min(sourceIndex + 1, AudioConstants.PicoInputBlockFrames - 1);
+        var fraction = Math.Clamp(sourcePosition - sourceIndex, 0, 1);
+        return Lerp(samples[sourceIndex], samples[nextIndex], fraction);
     }
 
-    private static double[] BuildHapticDownsampleKernel()
+    private static float HapticsFilterCoeff(int bassFocus)
     {
-        var taps = (AudioConstants.HapticFilterRadius * 2) + 1;
-        var kernel = new double[taps];
-        var sum = 0.0;
-        const double halfSamplePhase = 0.5;
-
-        for (var tap = 0; tap < taps; tap++)
+        return bassFocus switch
         {
-            var distance = tap - AudioConstants.HapticFilterRadius - halfSamplePhase;
-            var ideal = SincLowPass(distance, AudioConstants.HapticLowPassCutoff);
-            var window = BlackmanWindow(tap, taps);
-            kernel[tap] = ideal * window;
-            sum += kernel[tap];
-        }
-
-        if (Math.Abs(sum) < double.Epsilon)
-        {
-            return kernel;
-        }
-
-        for (var tap = 0; tap < taps; tap++)
-        {
-            kernel[tap] /= sum;
-        }
-        return kernel;
+            0 => 0.01039f,
+            2 => 0.03095f,
+            3 => 0.05123f,
+            _ => 0.02074f
+        };
     }
 
-    private static double SincLowPass(double sampleOffset, double cutoffCyclesPerSample)
+    private static float FollowHapticsEnvelope(float current, float value, int attack, int release)
     {
-        if (Math.Abs(sampleOffset) < double.Epsilon)
-        {
-            return 2.0 * cutoffCyclesPerSample;
-        }
-
-        return Math.Sin(2.0 * Math.PI * cutoffCyclesPerSample * sampleOffset) / (Math.PI * sampleOffset);
+        var target = Math.Abs(value);
+        var rate = target > current
+            ? HapticsEnvelopeAttackCoeff(attack)
+            : HapticsEnvelopeReleaseCoeff(release);
+        return current + ((target - current) * rate);
     }
 
-    private static double BlackmanWindow(int tap, int tapCount)
+    private static float HapticsEnvelopeAttackCoeff(int attack)
     {
-        if (tapCount <= 1)
+        return attack switch
         {
-            return 1.0;
-        }
+            0 => 0.20f,
+            2 => 0.65f,
+            3 => 0.90f,
+            _ => AudioConstants.HapticsEnvelopeAttack
+        };
+    }
 
-        var phase = 2.0 * Math.PI * tap / (tapCount - 1);
-        return 0.42 - (0.5 * Math.Cos(phase)) + (0.08 * Math.Cos(2.0 * phase));
+    private static float HapticsEnvelopeReleaseCoeff(int release)
+    {
+        return release switch
+        {
+            0 => 0.055f,
+            2 => 0.012f,
+            3 => 0.006f,
+            _ => AudioConstants.HapticsEnvelopeRelease
+        };
+    }
+
+    private static float SoftClipUnit(float value)
+    {
+        var x = Math.Clamp(value, -4.0f, 4.0f);
+        var x2 = x * x;
+        return Math.Clamp((x * (27.0f + x2)) / (27.0f + (9.0f * x2)), -1.0f, 1.0f);
+    }
+
+    private static float HapticsFocusGain(int bassFocus)
+    {
+        return bassFocus switch
+        {
+            0 => 1.35f,
+            2 => 1.12f,
+            3 => 0.92f,
+            _ => 1.0f
+        };
+    }
+
+    private static float HapticsResponseGain(int response)
+    {
+        return response switch
+        {
+            0 => 0.68f,
+            2 => 1.0f,
+            _ => 1.0f
+        };
+    }
+
+    private static float HapticsResponsePunch(int response)
+    {
+        return response switch
+        {
+            0 => 0.0f,
+            2 => 3.0f,
+            _ => 1.5f
+        };
+    }
+
+    private static float HapticsEnvelopePunch(float envelope, float punch)
+    {
+        return 1.0f + (punch * Math.Clamp(envelope, 0.0f, 1.0f));
     }
 
     private static float Lerp(float a, float b, double amount)
@@ -1802,6 +2116,13 @@ sealed record HelperOptions(
     int SpeakerVolumePercent,
     string? TestAudioPath,
     bool PlayTestTone,
+    bool HapticsOnly,
+    bool StdoutOnly,
+    int HapticsGainPercent,
+    int HapticsBassFocus,
+    int HapticsResponse,
+    int HapticsAttack,
+    int HapticsRelease,
     string? FrameDumpPath,
     int FrameDumpFrameLimit,
     string? RawCaptureDumpPath,
@@ -1837,6 +2158,13 @@ sealed record HelperOptions(
         var micKeepaliveOnly = false;
         var playTestTone = false;
         var captureDumpOnly = false;
+        var hapticsOnly = false;
+        var stdoutOnly = false;
+        var hapticsGainPercent = 100;
+        var hapticsBassFocus = 1;
+        var hapticsResponse = 1;
+        var hapticsAttack = 1;
+        var hapticsRelease = 1;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -1859,6 +2187,24 @@ sealed record HelperOptions(
                     {
                         speakerVolumePercent = parsedSpeakerVolumePercent;
                     }
+                    break;
+                case "--haptics-gain" when index + 1 < args.Length:
+                    if (int.TryParse(args[++index], out var parsedHapticsGainPercent))
+                    {
+                        hapticsGainPercent = Math.Clamp(parsedHapticsGainPercent, 0, 200);
+                    }
+                    break;
+                case "--haptics-bass-focus" when index + 1 < args.Length:
+                    hapticsBassFocus = ParseHapticsBassFocus(args[++index]);
+                    break;
+                case "--haptics-response" when index + 1 < args.Length:
+                    hapticsResponse = ParseHapticsResponse(args[++index]);
+                    break;
+                case "--haptics-attack" when index + 1 < args.Length:
+                    hapticsAttack = ParseHapticsAttack(args[++index]);
+                    break;
+                case "--haptics-release" when index + 1 < args.Length:
+                    hapticsRelease = ParseHapticsRelease(args[++index]);
                     break;
                 case "--test-audio-path" when index + 1 < args.Length:
                     testAudioPath = args[++index];
@@ -1887,6 +2233,12 @@ sealed record HelperOptions(
                 case "--play-test-tone":
                     playTestTone = true;
                     break;
+                case "--haptics-only":
+                    hapticsOnly = true;
+                    break;
+                case "--stdout-only":
+                    stdoutOnly = true;
+                    break;
                 case "--capture-dump-only":
                     captureDumpOnly = true;
                     break;
@@ -1904,6 +2256,13 @@ sealed record HelperOptions(
             speakerVolumePercent,
             testAudioPath,
             playTestTone,
+            hapticsOnly,
+            stdoutOnly,
+            hapticsGainPercent,
+            hapticsBassFocus,
+            hapticsResponse,
+            hapticsAttack,
+            hapticsRelease,
             frameDumpPath,
             frameDumpFrameLimit,
             rawCaptureDumpPath,
@@ -1925,6 +2284,70 @@ sealed record HelperOptions(
             return HostAudioSource.UsbBulkPcm;
         }
         return HostAudioSource.RenderLoopback;
+    }
+
+    public static int ParseHapticsBassFocus(string value)
+    {
+        if (value.Equals("deep", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+        if (value.Equals("punchy", StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+        if (value.Equals("wide", StringComparison.OrdinalIgnoreCase))
+        {
+            return 3;
+        }
+        return 1;
+    }
+
+    public static int ParseHapticsResponse(string value)
+    {
+        if (value.Equals("subtle", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+        if (value.Equals("strong", StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+        return 1;
+    }
+
+    public static int ParseHapticsAttack(string value)
+    {
+        if (value.Equals("soft", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+        if (value.Equals("fast", StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+        if (value.Equals("sharp", StringComparison.OrdinalIgnoreCase))
+        {
+            return 3;
+        }
+        return 1;
+    }
+
+    public static int ParseHapticsRelease(string value)
+    {
+        if (value.Equals("tight", StringComparison.OrdinalIgnoreCase))
+        {
+            return 0;
+        }
+        if (value.Equals("smooth", StringComparison.OrdinalIgnoreCase))
+        {
+            return 2;
+        }
+        if (value.Equals("long", StringComparison.OrdinalIgnoreCase))
+        {
+            return 3;
+        }
+        return 1;
     }
 
     private static int ParseFrameDumpLimit(string? value)

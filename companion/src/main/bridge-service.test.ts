@@ -94,6 +94,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_MUTE_BUTTON_ACTION,
   COMMAND_ID.SET_HAPTICS_GAIN,
   COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH,
+  COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS,
   COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
   COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
   COMMAND_ID.SET_SPEAKER_VOLUME,
@@ -598,7 +599,7 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.0 update required');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.3 update required');
     expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
   });
 
@@ -613,9 +614,9 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('incompatible');
-    expect(snapshot.message).toBe('Firmware 1.5.0 update required');
+    expect(snapshot.message).toBe('Firmware 1.5.3 update required');
     expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
-    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.0 or newer');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.3 or newer');
     expect(device.sentReports).toEqual([]);
   });
 
@@ -887,6 +888,7 @@ describe('BridgeService', () => {
       [COMMAND_ID.SET_HAPTICS_GAIN, 60],
       [COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, 60],
       [COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, 60],
+      [COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS, 0],
       [COMMAND_ID.SET_LIGHTBAR_COLOR, 60],
       [COMMAND_ID.SET_LIGHTBAR_OVERRIDE, 0]
     ]);
@@ -904,6 +906,7 @@ describe('BridgeService', () => {
       [COMMAND_ID.SET_HAPTICS_GAIN, 100],
       [COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, 120],
       [COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, 80],
+      [COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS, 0],
       [COMMAND_ID.SET_LIGHTBAR_COLOR, 90],
       [COMMAND_ID.SET_LIGHTBAR_OVERRIDE, 0]
     ]);
@@ -924,6 +927,39 @@ describe('BridgeService', () => {
     expect(command?.[9]).toBe(25);
     expect(snapshot.settings.speakerVolumePercent).toBe(25);
     expect(snapshot.status?.speakerVolumePercent).toBe(25);
+  });
+
+  it('sends and stores audio reactive haptics settings', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setAudioReactiveHapticsConfig({
+      enabled: true,
+      mode: 'replace',
+      gainPercent: 150,
+      bassFocus: 'punchy',
+      response: 'strong',
+      attack: 'sharp',
+      release: 'smooth'
+    });
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
+    expect(command?.[9]).toBe(1);
+    expect(command?.slice(11, 18)).toEqual([1, 150, 0, 2, 2, 3, 2]);
+    expect(snapshot.settings).toMatchObject({
+      audioReactiveHapticsEnabled: true,
+      audioReactiveHapticsMode: 'replace',
+      audioReactiveHapticsGainPercent: 150,
+      audioReactiveHapticsBassFocus: 'punchy',
+      audioReactiveHapticsResponse: 'strong',
+      audioReactiveHapticsAttack: 'sharp',
+      audioReactiveHapticsRelease: 'smooth'
+    });
   });
 
   it('sends and stores USB suspend disconnect settings', async () => {
@@ -1430,15 +1466,14 @@ describe('BridgeService', () => {
     await service.setSpeakerEnabled(false);
     const snapshot = await service.setAdaptiveTriggersEnabled(false);
 
-    expect(device.sentReports.at(-5)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
-    expect(device.sentReports.at(-5)?.[9]).toBe(0);
-    expect(device.sentReports.at(-4)?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN);
-    expect(device.sentReports.at(-4)?.[9]).toBe(0);
-    expect(device.sentReports.at(-3)?.[7]).toBe(COMMAND_ID.SET_SPEAKER_VOLUME);
-    expect(device.sentReports.at(-3)?.[9]).toBe(0);
-    expect(device.sentReports.at(-2)?.[7]).toBe(COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY);
-    expect(device.sentReports.at(-2)?.[9]).toBe(0);
-    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.RESET_ADAPTIVE_TRIGGERS);
+    expect(device.sentReports.slice(-6).map((report) => [report[7], report[9]])).toEqual([
+      [COMMAND_ID.SET_HAPTICS_GAIN, 0],
+      [COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS, 0],
+      [COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, 0],
+      [COMMAND_ID.SET_SPEAKER_VOLUME, 0],
+      [COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, 0],
+      [COMMAND_ID.RESET_ADAPTIVE_TRIGGERS, 0]
+    ]);
     expect(snapshot.settings.hapticsEnabled).toBe(false);
     expect(snapshot.settings.classicRumbleEnabled).toBe(false);
     expect(snapshot.settings.speakerEnabled).toBe(false);
@@ -1496,7 +1531,9 @@ describe('BridgeService', () => {
     await poll(service);
     const snapshot = await service.setHapticsEnabled(true);
 
-    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-2)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-2)?.[9]).toBe(0);
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
     expect(device.sentReports.at(-1)?.[9]).toBe(0);
     expect(snapshot.settings.hapticsEnabled).toBe(true);
     expect(snapshot.settings.hapticsGainPercent).toBe(0);

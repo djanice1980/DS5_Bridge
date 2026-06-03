@@ -14,6 +14,12 @@ import type {
   ButtonRemapProfile,
   ControllerProfile,
   ControllerProfileSettings,
+  AudioReactiveHapticsSource,
+  AudioReactiveHapticsBassFocus,
+  AudioReactiveHapticsMode,
+  AudioReactiveHapticsResponse,
+  AudioReactiveHapticsAttack,
+  AudioReactiveHapticsRelease,
   HostPersonaMode,
   RemapButtonId
 } from '../shared/protocol';
@@ -32,6 +38,14 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerVolumePercent: 100,
   micVolumePercent: 100,
   micMuted: true,
+  audioReactiveHapticsEnabled: false,
+  audioReactiveHapticsSource: 'controller-audio',
+  audioReactiveHapticsMode: 'mix',
+  audioReactiveHapticsGainPercent: 100,
+  audioReactiveHapticsBassFocus: 'balanced',
+  audioReactiveHapticsResponse: 'balanced',
+  audioReactiveHapticsAttack: 'balanced',
+  audioReactiveHapticsRelease: 'balanced',
   lightbarEnabled: true,
   lightbarColor: '#0000ff',
   lightbarBrightnessPercent: 100,
@@ -80,6 +94,14 @@ const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>
   'speakerVolumePercent',
   'micVolumePercent',
   'micMuted',
+  'audioReactiveHapticsEnabled',
+  'audioReactiveHapticsSource',
+  'audioReactiveHapticsMode',
+  'audioReactiveHapticsGainPercent',
+  'audioReactiveHapticsBassFocus',
+  'audioReactiveHapticsResponse',
+  'audioReactiveHapticsAttack',
+  'audioReactiveHapticsRelease',
   'lightbarEnabled',
   'lightbarColor',
   'lightbarBrightnessPercent',
@@ -113,6 +135,14 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   speakerVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumePercent,
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
+  audioReactiveHapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,
+  audioReactiveHapticsSource: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsSource,
+  audioReactiveHapticsMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsMode,
+  audioReactiveHapticsGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsGainPercent,
+  audioReactiveHapticsBassFocus: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsBassFocus,
+  audioReactiveHapticsResponse: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsResponse,
+  audioReactiveHapticsAttack: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsAttack,
+  audioReactiveHapticsRelease: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsRelease,
   lightbarEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarEnabled,
   lightbarColor: DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarColor,
   lightbarBrightnessPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarBrightnessPercent,
@@ -173,6 +203,57 @@ function normalizeHostPersonaMode(value: unknown): HostPersonaMode {
   }
 }
 
+function normalizeAudioReactiveHapticsMode(value: unknown): AudioReactiveHapticsMode {
+  return value === 'replace' ? value : DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsMode;
+}
+
+function normalizeAudioReactiveHapticsSource(value: unknown): AudioReactiveHapticsSource {
+  return value === 'system-audio' ? value : DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsSource;
+}
+
+function normalizeAudioReactiveHapticsBassFocus(value: unknown): AudioReactiveHapticsBassFocus {
+  switch (value) {
+    case 'deep':
+    case 'punchy':
+    case 'wide':
+      return value;
+    default:
+      return DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsBassFocus;
+  }
+}
+
+function normalizeAudioReactiveHapticsResponse(value: unknown): AudioReactiveHapticsResponse {
+  switch (value) {
+    case 'subtle':
+    case 'strong':
+      return value;
+    default:
+      return DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsResponse;
+  }
+}
+
+function normalizeAudioReactiveHapticsAttack(value: unknown): AudioReactiveHapticsAttack {
+  switch (value) {
+    case 'soft':
+    case 'fast':
+    case 'sharp':
+      return value;
+    default:
+      return DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsAttack;
+  }
+}
+
+function normalizeAudioReactiveHapticsRelease(value: unknown): AudioReactiveHapticsRelease {
+  switch (value) {
+    case 'tight':
+    case 'smooth':
+    case 'long':
+      return value;
+    default:
+      return DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsRelease;
+  }
+}
+
 export function normalizeUiScalePercent(value: unknown): UiScalePercent {
   return value === 75 || value === 125 || value === 150 ? value : 100;
 }
@@ -199,6 +280,14 @@ export function controllerProfileSettingsFrom(settings: CompanionSettings): Cont
     speakerVolumePercent: settings.speakerVolumePercent,
     micVolumePercent: settings.micVolumePercent,
     micMuted: settings.micMuted,
+    audioReactiveHapticsEnabled: settings.audioReactiveHapticsEnabled,
+    audioReactiveHapticsSource: settings.audioReactiveHapticsSource,
+    audioReactiveHapticsMode: settings.audioReactiveHapticsMode,
+    audioReactiveHapticsGainPercent: settings.audioReactiveHapticsGainPercent,
+    audioReactiveHapticsBassFocus: settings.audioReactiveHapticsBassFocus,
+    audioReactiveHapticsResponse: settings.audioReactiveHapticsResponse,
+    audioReactiveHapticsAttack: settings.audioReactiveHapticsAttack,
+    audioReactiveHapticsRelease: settings.audioReactiveHapticsRelease,
     lightbarEnabled: settings.lightbarEnabled,
     lightbarColor: settings.lightbarColor,
     lightbarBrightnessPercent: settings.lightbarBrightnessPercent,
@@ -253,6 +342,18 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
       ? Math.max(0, Math.min(100, Math.round(candidate.micVolumePercent!)))
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
     micMuted: typeof candidate.micMuted === 'boolean' ? candidate.micMuted : DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
+    audioReactiveHapticsEnabled: typeof candidate.audioReactiveHapticsEnabled === 'boolean'
+      ? candidate.audioReactiveHapticsEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,
+    audioReactiveHapticsSource: normalizeAudioReactiveHapticsSource(candidate.audioReactiveHapticsSource),
+    audioReactiveHapticsMode: normalizeAudioReactiveHapticsMode(candidate.audioReactiveHapticsMode),
+    audioReactiveHapticsGainPercent: Number.isFinite(candidate.audioReactiveHapticsGainPercent)
+      ? Math.max(0, Math.min(200, Math.round(candidate.audioReactiveHapticsGainPercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsGainPercent,
+    audioReactiveHapticsBassFocus: normalizeAudioReactiveHapticsBassFocus(candidate.audioReactiveHapticsBassFocus),
+    audioReactiveHapticsResponse: normalizeAudioReactiveHapticsResponse(candidate.audioReactiveHapticsResponse),
+    audioReactiveHapticsAttack: normalizeAudioReactiveHapticsAttack(candidate.audioReactiveHapticsAttack),
+    audioReactiveHapticsRelease: normalizeAudioReactiveHapticsRelease(candidate.audioReactiveHapticsRelease),
     lightbarEnabled: typeof candidate.lightbarEnabled === 'boolean'
       ? candidate.lightbarEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarEnabled,
@@ -584,6 +685,18 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     micMuted: typeof value?.micMuted === 'boolean'
       ? value.micMuted
       : DEFAULT_SETTINGS.micMuted,
+    audioReactiveHapticsEnabled: typeof value?.audioReactiveHapticsEnabled === 'boolean'
+      ? value.audioReactiveHapticsEnabled
+      : DEFAULT_SETTINGS.audioReactiveHapticsEnabled,
+    audioReactiveHapticsSource: normalizeAudioReactiveHapticsSource(value?.audioReactiveHapticsSource),
+    audioReactiveHapticsMode: normalizeAudioReactiveHapticsMode(value?.audioReactiveHapticsMode),
+    audioReactiveHapticsGainPercent: Number.isFinite(value?.audioReactiveHapticsGainPercent)
+      ? Math.max(0, Math.min(200, Math.round(value!.audioReactiveHapticsGainPercent!)))
+      : DEFAULT_SETTINGS.audioReactiveHapticsGainPercent,
+    audioReactiveHapticsBassFocus: normalizeAudioReactiveHapticsBassFocus(value?.audioReactiveHapticsBassFocus),
+    audioReactiveHapticsResponse: normalizeAudioReactiveHapticsResponse(value?.audioReactiveHapticsResponse),
+    audioReactiveHapticsAttack: normalizeAudioReactiveHapticsAttack(value?.audioReactiveHapticsAttack),
+    audioReactiveHapticsRelease: normalizeAudioReactiveHapticsRelease(value?.audioReactiveHapticsRelease),
     lightbarEnabled: typeof value?.lightbarEnabled === 'boolean'
       ? value.lightbarEnabled
       : DEFAULT_SETTINGS.lightbarEnabled,

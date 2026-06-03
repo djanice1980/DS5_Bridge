@@ -4,11 +4,25 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { CompanionDebugConfig, DEBUG_ENV } from './debug-config';
+import type {
+  AudioReactiveHapticsAttack,
+  AudioReactiveHapticsBassFocus,
+  AudioReactiveHapticsRelease,
+  AudioReactiveHapticsResponse
+} from '../shared/protocol';
 
 export type HostAudioFramePayload = {
   frame: number[];
   sequence: number;
   encodedBytes: number;
+};
+
+export type SystemAudioHapticsConfig = {
+  gainPercent: number;
+  bassFocus: AudioReactiveHapticsBassFocus;
+  response: AudioReactiveHapticsResponse;
+  attack: AudioReactiveHapticsAttack;
+  release: AudioReactiveHapticsRelease;
 };
 
 export type HostAudioStartFailureReason =
@@ -272,8 +286,157 @@ export class HostAudioEngine extends EventEmitter {
   }
 }
 
+export class SystemAudioHapticsEngine extends EventEmitter {
+  private process: ChildProcessWithoutNullStreams | null = null;
+  private starting: Promise<void> | null = null;
+  private activeConfig: SystemAudioHapticsConfig = {
+    gainPercent: 100,
+    bassFocus: 'balanced',
+    response: 'balanced',
+    attack: 'balanced',
+    release: 'balanced'
+  };
+
+  async start(config: SystemAudioHapticsConfig): Promise<void> {
+    const nextConfig = normalizeSystemAudioHapticsConfig(config);
+    if (this.process) {
+      this.setConfig(nextConfig);
+      return;
+    }
+    if (this.starting) {
+      await this.starting;
+      if (this.process) {
+        this.setConfig(nextConfig);
+        return;
+      }
+      return this.start(nextConfig);
+    }
+
+    this.starting = this.startInternal(nextConfig).finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  setConfig(config: SystemAudioHapticsConfig): void {
+    this.activeConfig = normalizeSystemAudioHapticsConfig(config);
+    this.writeControlLine(
+      `haptics-config ${this.activeConfig.gainPercent} ${this.activeConfig.bassFocus} ${this.activeConfig.response} ${this.activeConfig.attack} ${this.activeConfig.release}`
+    );
+  }
+
+  private writeControlLine(line: string): void {
+    const helper = this.process;
+    if (!helper || helper.stdin.destroyed || !helper.stdin.writable) {
+      return;
+    }
+    try {
+      helper.stdin.write(`${line}\n`, (error) => {
+        if (error && !isExpectedHelperPipeError(error)) {
+          this.emit('error', error);
+        }
+      });
+    } catch (error) {
+      if (!isExpectedHelperPipeError(error)) {
+        this.emit('error', error);
+      }
+    }
+  }
+
+  async stop(): Promise<void> {
+    const helper = this.process;
+    this.process = null;
+    if (!helper) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        if (!helper.killed) {
+          helper.kill('SIGKILL');
+        }
+        resolve();
+      }, 500);
+
+      helper.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+
+      helper.stdin?.end();
+      helper.kill();
+    });
+  }
+
+  isActive(): boolean {
+    return this.process !== null;
+  }
+
+  private async startInternal(config: SystemAudioHapticsConfig): Promise<void> {
+    const helperPath = resolveHelperPath();
+    this.activeConfig = config;
+    const helper = spawn(helperPath, [
+      '--device-name',
+      BRIDGE_AUDIO_DEVICE_NAME,
+      '--source',
+      'render-loopback',
+      '--haptics-only',
+      '--stdout-only',
+      '--haptics-gain',
+      `${config.gainPercent}`,
+      '--haptics-bass-focus',
+      config.bassFocus,
+      '--haptics-response',
+      config.response,
+      '--haptics-attack',
+      config.attack,
+      '--haptics-release',
+      config.release
+    ], {
+      env: buildSystemAudioHapticsHelperEnv(),
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    this.process = helper;
+    helper.stdin.on('error', (error) => {
+      if (!isExpectedHelperPipeError(error)) {
+        this.emit('error', error);
+      }
+    });
+    helper.stdout.resume();
+    helper.on('error', (error) => this.emit('error', error));
+    helper.on('exit', (code, signal) => {
+      if (this.process === helper) {
+        this.process = null;
+        this.emit('status', `system audio haptics helper exited (${signal ?? code ?? 'unknown'})`);
+      }
+    });
+
+    await waitForHelperRecordingStarted(helper, (line) => this.emit('status', line));
+  }
+}
+
 function normalizeSpeakerVolumePercent(percent: number): number {
   return Math.max(0, Math.min(100, Math.round(percent)));
+}
+
+function normalizeSystemAudioHapticsConfig(config: SystemAudioHapticsConfig): SystemAudioHapticsConfig {
+  return {
+    gainPercent: Math.max(0, Math.min(200, Math.round(config.gainPercent))),
+    bassFocus: config.bassFocus === 'deep' || config.bassFocus === 'punchy' || config.bassFocus === 'wide'
+      ? config.bassFocus
+      : 'balanced',
+    response: config.response === 'subtle' || config.response === 'strong'
+      ? config.response
+      : 'balanced',
+    attack: config.attack === 'soft' || config.attack === 'fast' || config.attack === 'sharp'
+      ? config.attack
+      : 'balanced',
+    release: config.release === 'tight' || config.release === 'smooth' || config.release === 'long'
+      ? config.release
+      : 'balanced'
+  };
 }
 
 function isExpectedHelperPipeError(error: unknown): boolean {
@@ -342,6 +505,73 @@ function buildHostAudioHelperEnv(): NodeJS.ProcessEnv {
     env[DEBUG_ENV.hostAudioFrameDumpLimit] ??= '2500';
   }
   return env;
+}
+
+function buildSystemAudioHapticsHelperEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  env[DEBUG_ENV.hostAudioHelperDiagnostics] ??= CompanionDebugConfig.hostAudioHelperDiagnosticsEnabled ? '1' : '0';
+  return env;
+}
+
+async function waitForHelperRecordingStarted(
+  helper: ChildProcessWithoutNullStreams,
+  onStatus: (line: string) => void
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let stderr = '';
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        if (!helper.killed) {
+          helper.kill();
+        }
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const timeout = setTimeout(() => {
+      finish(new HostAudioStartError(
+        `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`,
+        'start-timeout'
+      ));
+    }, HELPER_START_TIMEOUT_MS);
+
+    helper.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+      const lines = stderr.split(/\r?\n/);
+      stderr = lines.pop() ?? '';
+      for (const line of lines) {
+        const text = line.trim();
+        if (!text) {
+          continue;
+        }
+        onStatus(text);
+        if (text.includes(HELPER_RECORDING_STARTED_MESSAGE)) {
+          finish();
+          continue;
+        }
+        const reason = parseCaptureUnavailableReason(text);
+        if (reason) {
+          finish(new HostAudioStartError(
+            hostAudioStartFailureMessage(reason),
+            reason
+          ));
+        }
+      }
+    });
+    helper.once('exit', (code, signal) => {
+      finish(new HostAudioStartError(
+        `Host audio helper exited before recording started: helper exited (${signal ?? code ?? 'unknown'}).`,
+        'helper-exit'
+      ));
+    });
+  });
 }
 
 export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise<void> {

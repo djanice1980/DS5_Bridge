@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 6;
+export const PROTOCOL_MINOR = 8;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -87,7 +87,8 @@ export const COMMAND_ID = {
   SET_BUTTON_REMAP: 0x1E,
   PREVIEW_ADAPTIVE_TRIGGER_EFFECT: 0x1F,
   APPLY_ADAPTIVE_TRIGGER_EFFECT: 0x20,
-  SET_HOST_PERSONA: 0x21
+  SET_HOST_PERSONA: 0x21,
+  SET_AUDIO_REACTIVE_HAPTICS: 0x22
 } as const;
 
 export const HOST_AUDIO_PACKET_TYPE = {
@@ -134,6 +135,22 @@ export interface AdaptiveTriggerPreviewEffect {
 }
 export type PollingRateMode = '250' | '500' | '1000';
 export type HostPersonaMode = 'dualsense' | 'xbox' | 'ds4';
+export type AudioReactiveHapticsSource = 'controller-audio' | 'system-audio';
+export type AudioReactiveHapticsMode = 'mix' | 'replace';
+export type AudioReactiveHapticsBassFocus = 'deep' | 'balanced' | 'punchy' | 'wide';
+export type AudioReactiveHapticsResponse = 'subtle' | 'balanced' | 'strong';
+export type AudioReactiveHapticsAttack = 'soft' | 'balanced' | 'fast' | 'sharp';
+export type AudioReactiveHapticsRelease = 'tight' | 'balanced' | 'smooth' | 'long';
+export interface AudioReactiveHapticsConfig {
+  enabled: boolean;
+  source: AudioReactiveHapticsSource;
+  mode: AudioReactiveHapticsMode;
+  gainPercent: number;
+  bassFocus: AudioReactiveHapticsBassFocus;
+  response: AudioReactiveHapticsResponse;
+  attack: AudioReactiveHapticsAttack;
+  release: AudioReactiveHapticsRelease;
+}
 export type HostAudioMode = 'fallback-pico-local' | 'host-encoded-active';
 export type HostAudioFallbackReason =
   | 'none'
@@ -197,6 +214,14 @@ export interface ControllerProfileSettings {
   speakerVolumePercent: number;
   micVolumePercent: number;
   micMuted: boolean;
+  audioReactiveHapticsEnabled: boolean;
+  audioReactiveHapticsSource: AudioReactiveHapticsSource;
+  audioReactiveHapticsMode: AudioReactiveHapticsMode;
+  audioReactiveHapticsGainPercent: number;
+  audioReactiveHapticsBassFocus: AudioReactiveHapticsBassFocus;
+  audioReactiveHapticsResponse: AudioReactiveHapticsResponse;
+  audioReactiveHapticsAttack: AudioReactiveHapticsAttack;
+  audioReactiveHapticsRelease: AudioReactiveHapticsRelease;
   lightbarEnabled: boolean;
   lightbarColor: string;
   lightbarBrightnessPercent: number;
@@ -311,6 +336,7 @@ export interface BridgeStatusPayload {
     sleepControllerControl: boolean;
     pollingRateControl: boolean;
     hostPersonaControl: boolean;
+    audioReactiveHapticsControl: boolean;
   };
   hostPersonaMode: HostPersonaMode;
   supportedHostPersonaModes: HostPersonaMode[];
@@ -624,7 +650,8 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
       usbSuspendDisconnectControl: (statusFlags & 0x20) !== 0,
       sleepControllerControl: (statusFlags & 0x80) !== 0,
       pollingRateControl: true,
-      hostPersonaControl: report[49] !== 0
+      hostPersonaControl: report[49] !== 0,
+      audioReactiveHapticsControl: report[6] >= 7
     },
     hostPersonaMode: hostPersonaMode(report[48]),
     supportedHostPersonaModes: supportedHostPersonaModes(report[49]),

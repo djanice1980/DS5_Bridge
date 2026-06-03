@@ -28,6 +28,9 @@ try {
   const failures = [];
   const rows = [];
   const buttonRows = [];
+  const audioHapticsRows = [];
+  const audioHapticsSelectorRows = [];
+  const audioHapticsConfigControlRows = [];
   const systemTypographyRows = [];
   let targetHeight = null;
   let targetIconLeft = null;
@@ -78,6 +81,163 @@ try {
       failures.push(`${tab}: card height differs from other tabs by ${tabHeightDelta.toFixed(2)}px`);
     }
   }
+
+  await controlsNav.getByRole('tab', { name: 'Haptics' }).click();
+  await page.waitForTimeout(150);
+  await page.getByRole('switch', { name: 'Enter Audio Haptics' }).click();
+  await page.waitForTimeout(150);
+
+  const audioHapticsMeasurement = await page.evaluate(() => {
+    const activePage = document.querySelector('.control-page.active');
+    const cards = [...(activePage?.querySelectorAll('.audio-haptics-grid > section') ?? [])].map((card) => {
+      const rect = card.getBoundingClientRect();
+      return {
+        className: card.className,
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+        scrollHeight: card.scrollHeight,
+        clientHeight: card.clientHeight
+      };
+    });
+    const leftChildren = [...(activePage?.querySelectorAll('.audio-haptics-card:first-child > *') ?? [])].map((element) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        className: element.className,
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height
+      };
+    });
+    const selectors = [...(activePage?.querySelectorAll('.audio-haptics-routing-stack .dual-selector') ?? [])].map((selector) => {
+      const rect = selector.getBoundingClientRect();
+      const buttons = [...selector.querySelectorAll('button')].map((button) => {
+        const buttonRect = button.getBoundingClientRect();
+        return {
+          label: button.textContent.trim(),
+          left: buttonRect.left,
+          right: buttonRect.right,
+          width: buttonRect.width
+        };
+      });
+      const firstButton = buttons[0];
+      const lastButton = buttons[buttons.length - 1];
+      return {
+        label: selector.getAttribute('aria-label') ?? '',
+        width: rect.width,
+        buttonCount: buttons.length,
+        buttonWidthDelta: Math.max(...buttons.map((button) => Math.abs(button.width - buttons[0].width))),
+        firstLeftGap: firstButton ? firstButton.left - rect.left : 0,
+        lastRightGap: lastButton ? rect.right - lastButton.right : 0
+      };
+    });
+    const configControls = [...(activePage?.querySelectorAll('.audio-haptics-config-pair-row label') ?? [])].map((label) => {
+      const select = label.querySelector('.custom-select-button');
+      const labelRect = label.getBoundingClientRect();
+      const selectRect = select?.getBoundingClientRect();
+      return {
+        label: label.querySelector('span')?.textContent?.trim() ?? '',
+        width: labelRect.width,
+        selectWidth: selectRect?.width ?? 0,
+        selectHeight: selectRect?.height ?? 0,
+        text: select?.textContent?.trim() ?? ''
+      };
+    });
+
+    return {
+      cards,
+      leftChildren,
+      selectors,
+      configControls
+    };
+  });
+
+  if (audioHapticsMeasurement.cards.length !== 2) {
+    failures.push(`Audio Haptics: expected 2 cards, found ${audioHapticsMeasurement.cards.length}`);
+  } else {
+    const [left, right] = audioHapticsMeasurement.cards;
+    const bottomDelta = Math.abs(left.bottom - right.bottom);
+    const heightDelta = Math.abs(left.height - right.height);
+    audioHapticsRows.push({
+      tab: 'Audio Haptics',
+      leftHeight: Number(left.height.toFixed(2)),
+      rightHeight: Number(right.height.toFixed(2)),
+      bottomDelta: Number(bottomDelta.toFixed(2)),
+      leftOverflow: left.scrollHeight - left.clientHeight,
+      rightOverflow: right.scrollHeight - right.clientHeight
+    });
+
+    if (bottomDelta > tolerancePx || heightDelta > tolerancePx) {
+      failures.push(
+        `Audio Haptics: columns differ by ${heightDelta.toFixed(2)}px height and ${bottomDelta.toFixed(2)}px bottom`
+      );
+    }
+
+    if (targetHeight !== null && Math.abs(left.height - targetHeight) > tolerancePx) {
+      failures.push(`Audio Haptics: card height differs from other tabs by ${Math.abs(left.height - targetHeight).toFixed(2)}px`);
+    }
+
+    for (const card of audioHapticsMeasurement.cards) {
+      const overflow = card.scrollHeight - card.clientHeight;
+      if (overflow > tolerancePx) {
+        failures.push(`Audio Haptics ${card.className}: content overflows by ${overflow.toFixed(2)}px`);
+      }
+    }
+  }
+
+  for (let index = 1; index < audioHapticsMeasurement.leftChildren.length; index += 1) {
+    const previous = audioHapticsMeasurement.leftChildren[index - 1];
+    const current = audioHapticsMeasurement.leftChildren[index];
+    if (previous.bottom - current.top > tolerancePx) {
+      failures.push(`Audio Haptics ${current.className}: overlaps previous control by ${(previous.bottom - current.top).toFixed(2)}px`);
+    }
+  }
+
+  for (const selector of audioHapticsMeasurement.selectors) {
+    audioHapticsSelectorRows.push({
+      label: selector.label,
+      width: Number(selector.width.toFixed(2)),
+      buttonCount: selector.buttonCount,
+      buttonWidthDelta: Number(selector.buttonWidthDelta.toFixed(2)),
+      firstLeftGap: Number(selector.firstLeftGap.toFixed(2)),
+      lastRightGap: Number(selector.lastRightGap.toFixed(2))
+    });
+
+    if (selector.buttonCount !== 2) {
+      failures.push(`Audio Haptics ${selector.label}: expected 2 selector buttons, found ${selector.buttonCount}`);
+    }
+
+    if (selector.buttonWidthDelta > tolerancePx) {
+      failures.push(`Audio Haptics ${selector.label}: selector button widths differ by ${selector.buttonWidthDelta.toFixed(2)}px`);
+    }
+
+    if (selector.firstLeftGap > buttonTolerancePx || selector.lastRightGap > buttonTolerancePx) {
+      failures.push(
+        `Audio Haptics ${selector.label}: selector buttons leave ${selector.firstLeftGap.toFixed(2)}px/${selector.lastRightGap.toFixed(2)}px side gaps`
+      );
+    }
+  }
+
+  for (const control of audioHapticsMeasurement.configControls) {
+    audioHapticsConfigControlRows.push({
+      label: control.label,
+      width: Number(control.width.toFixed(2)),
+      selectWidth: Number(control.selectWidth.toFixed(2)),
+      selectHeight: Number(control.selectHeight.toFixed(2)),
+      text: control.text
+    });
+
+    if (control.selectWidth < 150) {
+      failures.push(`Audio Haptics ${control.label}: dropdown is too narrow at ${control.selectWidth.toFixed(2)}px`);
+    }
+
+    if (control.selectHeight < 32) {
+      failures.push(`Audio Haptics ${control.label}: dropdown is too short at ${control.selectHeight.toFixed(2)}px`);
+    }
+  }
+
+  await page.getByRole('switch', { name: 'Exit Audio Haptics' }).click();
+  await page.waitForTimeout(150);
 
   for (const tab of testButtonTabs) {
     await controlsNav.getByRole('tab', { name: tab }).click();
@@ -241,6 +401,9 @@ try {
   }
 
   console.table(rows);
+  console.table(audioHapticsRows);
+  console.table(audioHapticsSelectorRows);
+  console.table(audioHapticsConfigControlRows);
   console.table(buttonRows);
   console.table(systemTypographyRows);
 
