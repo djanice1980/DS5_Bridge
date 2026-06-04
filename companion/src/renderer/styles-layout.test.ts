@@ -102,6 +102,18 @@ describe('companion layout CSS', () => {
     expect(appSource).not.toContain('Protocol and debug data.');
   });
 
+  it('keeps the remapping profile strip aligned with shared feature headers', () => {
+    expect(cssBlock('.remapping-page', 'height: 100%;')).toContain('height: 100%;');
+    expect(cssBlock('.remapping-page', 'min-height: 0;')).toContain('min-height: 0;');
+    expect(cssBlock('.remapping-card', 'min-height: 0;')).toContain('min-height: 0;');
+    expect(cssBlock('.remapping-card', '--remapping-profile-strip-height: var(--feature-card-header-height);')).toContain(
+      '--remapping-profile-strip-height: var(--feature-card-header-height);'
+    );
+    expect(cssBlock('.remapping-profile-strip', 'min-height: var(--remapping-profile-strip-height);')).toContain(
+      'min-height: var(--remapping-profile-strip-height);'
+    );
+  });
+
   it('mutes active toggles when the controller is unavailable', () => {
     expect(cssBlock('.shell.controller-unavailable .inline-switch', 'color: rgba(199, 211, 228, 0.58);')).toContain(
       'color: rgba(199, 211, 228, 0.58);'
