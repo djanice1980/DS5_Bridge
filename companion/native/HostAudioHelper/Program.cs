@@ -22,6 +22,17 @@ if (options.PlayTestTone)
     HostAudioTestTone.Play(options);
     return;
 }
+if (options.MonitorAudioSessions)
+{
+    using var monitor = new AudioSessionMonitor();
+    await monitor.RunAsync();
+    return;
+}
+if (options.ListDevices)
+{
+    EndpointManager.ListDevices();
+    return;
+}
 
 using var helper = new HostAudioHelper(options);
 await helper.RunAsync();
@@ -245,18 +256,6 @@ sealed class HostAudioHelper : IDisposable
 
     public async Task RunAsync()
     {
-        if (options.ListAudioSessions)
-        {
-            AudioSessionCatalog.WriteJson(options.AppProcessId, options.AppProcessPath, options.AppExecutableName);
-            return;
-        }
-
-        if (options.ListDevices)
-        {
-            EndpointManager.ListDevices();
-            return;
-        }
-
         Console.CancelKeyPress += (_, eventArgs) =>
         {
             eventArgs.Cancel = true;
@@ -2316,7 +2315,7 @@ sealed record HelperOptions(
     string? HidPath,
     HostAudioSource Source,
     bool ListDevices,
-    bool ListAudioSessions,
+    bool MonitorAudioSessions,
     bool CompanionTransportServer,
     bool MicKeepaliveOnly,
     string? MicDeviceName,
@@ -2364,7 +2363,7 @@ sealed record HelperOptions(
             20
         );
         var listDevices = false;
-        var listAudioSessions = false;
+        var monitorAudioSessions = false;
         var companionTransportServer = false;
         var micKeepaliveOnly = false;
         int? appProcessId = null;
@@ -2450,8 +2449,8 @@ sealed record HelperOptions(
                 case "--list-devices":
                     listDevices = true;
                     break;
-                case "--list-audio-sessions":
-                    listAudioSessions = true;
+                case "--monitor-audio-sessions":
+                    monitorAudioSessions = true;
                     break;
                 case "--companion-transport":
                     companionTransportServer = true;
@@ -2479,7 +2478,7 @@ sealed record HelperOptions(
             hidPath,
             source,
             listDevices,
-            listAudioSessions,
+            monitorAudioSessions,
             companionTransportServer,
             micKeepaliveOnly,
             micDeviceName,

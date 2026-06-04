@@ -70,9 +70,9 @@ import type {
 import {
   HostAudioEngine,
   HostAudioStartError,
+  AudioHapticsSessionMonitor,
   MicKeepaliveEngine,
   SystemAudioHapticsEngine,
-  listAudioHapticsSessions,
   playHostAudioTestTone,
   type HostAudioStartFailureReason,
   type HostAudioFramePayload,
@@ -100,6 +100,7 @@ const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
+const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.4';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -446,6 +447,23 @@ function normalizeAudioReactiveHapticsSource(source: unknown): AudioReactiveHapt
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function audioReactiveHapticsSourceKey(source: AudioReactiveHapticsSource): string {
+  if (source === 'controller-audio' || source === 'system-audio') {
+    return source;
+  }
+  if (source.processPath) {
+    return `app-path:${source.processPath.toLowerCase()}`;
+  }
+  if (source.executableName) {
+    return `app-exe:${source.executableName.toLowerCase()}`;
+  }
+  return `app-pid:${Math.max(0, Math.round(source.processId))}`;
+}
+
+function cloneAudioHapticsSessions(sessions: AudioHapticsSession[]): AudioHapticsSession[] {
+  return sessions.map((session) => ({ ...session }));
 }
 
 function normalizeAudioReactiveHapticsBassFocus(focus: unknown): AudioReactiveHapticsBassFocus {
@@ -1044,8 +1062,12 @@ export class BridgeService extends EventEmitter {
   private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
   private readonly hostAudioEngine = new HostAudioEngine();
   private readonly systemAudioHapticsEngine = new SystemAudioHapticsEngine();
+  private readonly audioHapticsSessionMonitor = new AudioHapticsSessionMonitor();
   private readonly micKeepaliveEngine = new MicKeepaliveEngine();
   private readonly hidDiscovery = new HidDiscoveryClient();
+  private audioHapticsSessionCache: { key: string; expiresAt: number; sessions: AudioHapticsSession[] } | null = null;
+  private audioHapticsSessionListInFlight: Promise<AudioHapticsSession[]> | null = null;
+  private audioHapticsSessionListInFlightKey: string | null = null;
   private snapshot: BridgeSnapshot;
   private lastEmittedSnapshotSignature: string | null = null;
   private commandSequence = 0;
@@ -1130,6 +1152,19 @@ export class BridgeService extends EventEmitter {
       void this.handleSystemAudioHapticsStatus(line);
       this.emitSnapshot();
     });
+    this.audioHapticsSessionMonitor.on('error', (error: Error) => {
+      this.appendAudioDebugLines([`[AudioSessions] error: ${error.message}`]);
+      this.emitSnapshot();
+    });
+    this.audioHapticsSessionMonitor.on('status', (line: string) => {
+      if (line) {
+        this.appendAudioDebugLines([`[AudioSessions] ${line}`]);
+      }
+      this.emitSnapshot();
+    });
+    this.audioHapticsSessionMonitor.on('sessions', () => {
+      this.audioHapticsSessionCache = null;
+    });
     this.micKeepaliveEngine.on('error', (error: Error) => {
       this.appendAudioDebugLines([`[MicKeepalive] error: ${error.message}`]);
       this.emitSnapshot();
@@ -1196,9 +1231,7 @@ export class BridgeService extends EventEmitter {
         this.publishError(error);
       }
     }
-    await this.hostAudioEngine.stop();
-    await this.systemAudioHapticsEngine.stop();
-    await this.micKeepaliveEngine.stop();
+    await this.stopControllerAudioPolling();
     this.hidDiscovery.stop();
     this.closeDevice();
   }
@@ -1211,14 +1244,72 @@ export class BridgeService extends EventEmitter {
     return this.hidDiscovery.listDevices();
   }
 
+  private controllerAudioReady(status = this.snapshot.status): boolean {
+    return Boolean(status?.controllerConnected);
+  }
+
+  private async stopAudioHapticsSessionPolling(): Promise<void> {
+    this.audioHapticsSessionCache = null;
+    this.audioHapticsSessionListInFlight = null;
+    this.audioHapticsSessionListInFlightKey = null;
+    await this.audioHapticsSessionMonitor.stop();
+  }
+
+  private async stopControllerAudioPolling(): Promise<void> {
+    this.clearHostAudioReportQueue();
+    this.hostAudioCommandActive = false;
+    this.systemAudioHapticsRetryAt = 0;
+    this.systemAudioHapticsPassthroughActive = false;
+    await this.hostAudioEngine.stop();
+    await this.systemAudioHapticsEngine.stop();
+    await this.stopAudioHapticsSessionPolling();
+    await this.micKeepaliveEngine.stop();
+  }
+
   async listAudioHapticsSessions(): Promise<AudioHapticsSession[]> {
-    try {
-      return await listAudioHapticsSessions(this.settingsStore.get().audioReactiveHapticsSource);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.appendAudioDebugLines([`[SystemHaptics] session list unavailable error=${message}`]);
+    if (!this.controllerAudioReady()) {
+      await this.stopAudioHapticsSessionPolling();
       return [];
     }
+
+    const source = this.settingsStore.get().audioReactiveHapticsSource;
+    const key = audioReactiveHapticsSourceKey(source);
+    const now = Date.now();
+    if (this.audioHapticsSessionCache?.key === key && now < this.audioHapticsSessionCache.expiresAt) {
+      return cloneAudioHapticsSessions(this.audioHapticsSessionCache.sessions);
+    }
+    if (this.audioHapticsSessionListInFlight && this.audioHapticsSessionListInFlightKey === key) {
+      return cloneAudioHapticsSessions(await this.audioHapticsSessionListInFlight);
+    }
+
+    this.audioHapticsSessionListInFlightKey = key;
+    this.audioHapticsSessionListInFlight = this.audioHapticsSessionMonitor.listSessions()
+      .then((sessions) => {
+        if (this.controllerAudioReady()) {
+          this.audioHapticsSessionCache = {
+            key,
+            expiresAt: Date.now() + AUDIO_HAPTICS_SESSION_CACHE_MS,
+            sessions: cloneAudioHapticsSessions(sessions)
+          };
+        }
+        return sessions;
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.appendAudioDebugLines([`[AudioSessions] monitor unavailable error=${message}`]);
+        return [];
+      })
+      .finally(() => {
+        this.audioHapticsSessionListInFlight = null;
+        this.audioHapticsSessionListInFlightKey = null;
+      });
+
+    const sessions = await this.audioHapticsSessionListInFlight;
+    if (!this.controllerAudioReady()) {
+      await this.stopAudioHapticsSessionPolling();
+      return [];
+    }
+    return cloneAudioHapticsSessions(sessions);
   }
 
   async repairWindowsDeviceCache(): Promise<WindowsDeviceCleanupResult> {
@@ -2706,7 +2797,12 @@ export class BridgeService extends EventEmitter {
 
   private async updateHostAudioEngine(): Promise<void> {
     const settings = this.settingsStore.get();
-    if (!settings.hostEncodedAudioEnabled || !this.device || !this.hostAudioCommandActive) {
+    if (
+      !settings.hostEncodedAudioEnabled
+      || !this.device
+      || !this.hostAudioCommandActive
+      || !this.controllerAudioReady()
+    ) {
       this.clearHostAudioReportQueue();
       await this.hostAudioEngine.stop();
       return;
@@ -2725,6 +2821,7 @@ export class BridgeService extends EventEmitter {
     if (
       !this.systemAudioHapticsDesired(settings)
       || !this.device
+      || !this.controllerAudioReady()
       || !this.systemAudioHapticsSupported()
       || hostAudioStartingOrRetrying
     ) {
@@ -2819,6 +2916,14 @@ export class BridgeService extends EventEmitter {
 
   private async startHostAudioSession(expectSettingsRevisionChange: boolean): Promise<void> {
     const settings = this.settingsStore.get();
+    if (!this.controllerAudioReady()) {
+      this.clearHostAudioReportQueue();
+      this.hostAudioCommandActive = false;
+      await this.hostAudioEngine.stop();
+      await this.micKeepaliveEngine.stop();
+      return;
+    }
+
     const speakerVolumePercent = settings.speakerEnabled ? settings.speakerVolumePercent : 0;
     const duplexEnabled = settings.duplexMicEnabled;
     const captureReady = await this.ensureHostAudioCapture(speakerVolumePercent);
@@ -2897,13 +3002,22 @@ export class BridgeService extends EventEmitter {
   }
 
   private async pulseAudioHelpers(): Promise<void> {
+    if (!this.controllerAudioReady()) {
+      await this.stopControllerAudioPolling();
+      return;
+    }
     await this.pulseHostAudio();
     await this.pulseSystemAudioHaptics();
   }
 
   private async pulseHostAudio(): Promise<void> {
     const settings = this.settingsStore.get();
-    if (!settings.hostEncodedAudioEnabled || this.hostAudioHeartbeatBusy || this.reapplyActive) {
+    if (
+      !settings.hostEncodedAudioEnabled
+      || !this.controllerAudioReady()
+      || this.hostAudioHeartbeatBusy
+      || this.reapplyActive
+    ) {
       return;
     }
     this.hostAudioHeartbeatBusy = true;
@@ -2964,7 +3078,8 @@ export class BridgeService extends EventEmitter {
       await this.updateSystemAudioHapticsEngine();
       return;
     }
-    if (this.reapplyActive) {
+    if (!this.controllerAudioReady() || this.reapplyActive) {
+      await this.updateSystemAudioHapticsEngine();
       return;
     }
     await this.ensureCompanionDevice();
@@ -2977,9 +3092,11 @@ export class BridgeService extends EventEmitter {
       return;
     }
     const currentSettings = this.settingsStore.get();
-    const hostAudioActive = currentSettings.hostEncodedAudioEnabled && this.hostAudioCommandActive;
+    const knownHostAudioActive = this.controllerAudioReady()
+      && currentSettings.hostEncodedAudioEnabled
+      && this.hostAudioCommandActive;
     if (
-      hostAudioActive
+      knownHostAudioActive
       && this.hostAudioStatusConfirmedActive()
       && now - this.lastHostAudioActivePollAt < HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS
     ) {
@@ -3042,7 +3159,14 @@ export class BridgeService extends EventEmitter {
     }
 
     const transition = this.advanceHostPersonaTransition(status, now);
+    const controllerAudioReady = this.controllerAudioReady(status);
+    const hostAudioActive = controllerAudioReady
+      && currentSettings.hostEncodedAudioEnabled
+      && this.hostAudioCommandActive;
 
+    if (!controllerAudioReady) {
+      await this.stopControllerAudioPolling();
+    }
     await this.readTriggerTraceThrottled();
     await this.readFeedbackTraceThrottled();
     if (hostAudioActive) {
@@ -3415,9 +3539,7 @@ export class BridgeService extends EventEmitter {
     this.systemAudioHapticsRetryAt = 0;
     this.systemAudioHapticsPassthroughActive = false;
     this.clearHostAudioCaptureBackoff();
-    void this.hostAudioEngine.stop();
-    void this.systemAudioHapticsEngine.stop();
-    void this.micKeepaliveEngine.stop();
+    void this.stopControllerAudioPolling();
   }
 
   private markBridgeUnavailableAfterDisconnect(rawDevices: HidDeviceSummary[], normalFirmwarePresent = false): void {

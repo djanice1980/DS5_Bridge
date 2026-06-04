@@ -3235,12 +3235,6 @@ button.feature-icon {
   gap: 6px;
 }
 
-.audio-haptics-source-field > span {
-  color: #dbe5f5;
-  font-size: 12px;
-  font-weight: 750;
-}
-
 .audio-haptics-source-select {
   width: 100%;
 }

@@ -54,7 +54,8 @@ const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
 const HELPER_START_TIMEOUT_MS = 8000;
 const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
-const HELPER_SESSION_LIST_TIMEOUT_MS = 3000;
+const HELPER_SESSION_MONITOR_START_TIMEOUT_MS = 3000;
+const HELPER_SESSION_MONITOR_STOP_TIMEOUT_MS = 500;
 const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
@@ -449,6 +450,191 @@ export class SystemAudioHapticsEngine extends EventEmitter {
   }
 }
 
+export class AudioHapticsSessionMonitor extends EventEmitter {
+  private process: ChildProcessWithoutNullStreams | null = null;
+  private starting: Promise<void> | null = null;
+  private readonly stoppingHelpers = new WeakSet<ChildProcessWithoutNullStreams>();
+  private stdoutBuffer = '';
+  private stderrBuffer = '';
+  private sessions: AudioHapticsSession[] = [];
+  private haveSnapshot = false;
+
+  async start(): Promise<void> {
+    if (this.process && this.haveSnapshot) {
+      return;
+    }
+    if (this.starting) {
+      return this.starting;
+    }
+
+    this.starting = this.startInternal().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  async listSessions(): Promise<AudioHapticsSession[]> {
+    await this.start();
+    return cloneAudioHapticsSessions(this.sessions);
+  }
+
+  async refresh(): Promise<AudioHapticsSession[]> {
+    await this.start();
+    this.writeControlLine('refresh');
+    return cloneAudioHapticsSessions(this.sessions);
+  }
+
+  async stop(): Promise<void> {
+    const helper = this.process;
+    this.process = null;
+    this.stdoutBuffer = '';
+    this.stderrBuffer = '';
+    this.haveSnapshot = false;
+    if (!helper) {
+      return;
+    }
+
+    this.stoppingHelpers.add(helper);
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        if (!helper.killed) {
+          helper.kill('SIGKILL');
+        }
+        resolve();
+      }, HELPER_SESSION_MONITOR_STOP_TIMEOUT_MS);
+
+      helper.once('exit', () => {
+        clearTimeout(timeout);
+        this.stoppingHelpers.delete(helper);
+        resolve();
+      });
+
+      this.writeControlLine('stop', helper);
+      helper.stdin?.end();
+      helper.kill();
+    });
+  }
+
+  isActive(): boolean {
+    return this.process !== null;
+  }
+
+  private async startInternal(): Promise<void> {
+    const helperPath = resolveHelperPath();
+    const helper = spawn(helperPath, ['--monitor-audio-sessions'], {
+      env: buildSystemAudioHapticsHelperEnv(),
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    this.process = helper;
+    this.stdoutBuffer = '';
+    this.stderrBuffer = '';
+    this.haveSnapshot = false;
+    helper.stdin.on('error', (error) => {
+      if (!isExpectedHelperPipeError(error)) {
+        this.emit('error', error);
+      }
+    });
+    helper.on('error', (error) => this.emit('error', error));
+    helper.on('exit', (code, signal) => {
+      const wasStoppedByCompanion = this.stoppingHelpers.has(helper);
+      this.stoppingHelpers.delete(helper);
+      if (this.process === helper) {
+        this.process = null;
+        this.stdoutBuffer = '';
+        this.stderrBuffer = '';
+        this.haveSnapshot = false;
+      }
+      if (!wasStoppedByCompanion) {
+        this.emit('status', `audio session monitor exited (${signal ?? code ?? 'unknown'})`);
+      }
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        if (error) {
+          if (this.process === helper) {
+            this.process = null;
+          }
+          if (!helper.killed) {
+            helper.kill();
+          }
+          reject(error);
+        } else {
+          resolve();
+        }
+      };
+      const timeout = setTimeout(() => {
+        finish(new Error(`Audio haptics session monitor did not produce a snapshot within ${HELPER_SESSION_MONITOR_START_TIMEOUT_MS}ms.`));
+      }, HELPER_SESSION_MONITOR_START_TIMEOUT_MS);
+
+      helper.stdout.on('data', (chunk: Buffer) => {
+        this.processMonitorStdout(chunk, () => finish());
+      });
+      helper.stderr.on('data', (chunk: Buffer) => {
+        this.processMonitorStderr(chunk);
+      });
+      helper.once('error', finish);
+      helper.once('exit', (code, signal) => {
+        const detail = this.stderrBuffer.trim() || `helper exited (${signal ?? code ?? 'unknown'})`;
+        finish(new Error(`Audio haptics session monitor failed to start: ${detail}`));
+      });
+    });
+  }
+
+  private writeControlLine(line: string, helper = this.process): void {
+    if (!helper || helper.stdin.destroyed || !helper.stdin.writable) {
+      return;
+    }
+    try {
+      helper.stdin.write(`${line}\n`, (error) => {
+        if (error && !isExpectedHelperPipeError(error)) {
+          this.emit('error', error);
+        }
+      });
+    } catch (error) {
+      if (!isExpectedHelperPipeError(error)) {
+        this.emit('error', error);
+      }
+    }
+  }
+
+  private processMonitorStdout(chunk: Buffer, onSnapshot?: () => void): void {
+    this.stdoutBuffer += chunk.toString('utf8');
+    const lines = this.stdoutBuffer.split(/\r?\n/);
+    this.stdoutBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      const sessions = parseAudioHapticsSessionMonitorLine(line);
+      if (!sessions) {
+        continue;
+      }
+      this.sessions = sessions;
+      this.haveSnapshot = true;
+      this.emit('sessions', cloneAudioHapticsSessions(sessions));
+      onSnapshot?.();
+    }
+  }
+
+  private processMonitorStderr(chunk: Buffer): void {
+    this.stderrBuffer = (this.stderrBuffer + chunk.toString('utf8')).slice(-HELPER_STDERR_MAX_CHARS);
+    const lines = this.stderrBuffer.split(/\r?\n/);
+    this.stderrBuffer = lines.pop() ?? '';
+    for (const line of lines) {
+      const text = line.trim();
+      if (text) {
+        this.emit('status', text);
+      }
+    }
+  }
+}
+
 function normalizeSpeakerVolumePercent(percent: number): number {
   return Math.max(0, Math.min(100, Math.round(percent)));
 }
@@ -472,13 +658,24 @@ function normalizeSystemAudioHapticsConfig(config: SystemAudioHapticsConfig): Sy
   };
 }
 
-function parseAudioHapticsSessions(raw: string): AudioHapticsSession[] {
+function parseAudioHapticsSessionMonitorLine(raw: string): AudioHapticsSession[] | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return [];
+    return null;
   }
+  if (!parsed || typeof parsed !== 'object') {
+    return null;
+  }
+  const message = parsed as { type?: unknown; sessions?: unknown };
+  if (message.type !== 'snapshot') {
+    return null;
+  }
+  return normalizeAudioHapticsSessionArray(message.sessions);
+}
+
+function normalizeAudioHapticsSessionArray(parsed: unknown): AudioHapticsSession[] {
   if (!Array.isArray(parsed)) {
     return [];
   }
@@ -510,6 +707,10 @@ function parseAudioHapticsSessions(raw: string): AudioHapticsSession[] {
     });
   }
   return sessions;
+}
+
+function cloneAudioHapticsSessions(sessions: AudioHapticsSession[]): AudioHapticsSession[] {
+  return sessions.map((session) => ({ ...session }));
 }
 
 function normalizeAudioReactiveHapticsSource(source: AudioReactiveHapticsSource | undefined): AudioReactiveHapticsSource {
@@ -756,70 +957,6 @@ export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise
       finish(new Error(detail));
     });
   });
-}
-
-export async function listAudioHapticsSessions(source: AudioReactiveHapticsSource = 'system-audio'): Promise<AudioHapticsSession[]> {
-  const helperPath = resolveHelperPath();
-  const args = ['--list-audio-sessions'];
-  const appSource = audioReactiveHapticsAppSource(normalizeAudioReactiveHapticsSource(source));
-  if (appSource) {
-    if (Number.isFinite(appSource.processId) && appSource.processId > 0) {
-      args.push('--haptics-app-process-id', `${Math.round(appSource.processId)}`);
-    }
-    if (appSource.processPath) {
-      args.push('--haptics-app-process-path', appSource.processPath);
-    }
-    if (appSource.executableName) {
-      args.push('--haptics-app-executable', appSource.executableName);
-    }
-  }
-
-  const helper = spawn(helperPath, args, {
-    env: buildSystemAudioHapticsHelperEnv(),
-    windowsHide: true,
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-
-  const raw = await new Promise<string>((resolve, reject) => {
-    let settled = false;
-    let stdout = '';
-    let stderr = '';
-    const finish = (error?: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      if (error) {
-        if (!helper.killed) {
-          helper.kill();
-        }
-        reject(error);
-      } else {
-        resolve(stdout);
-      }
-    };
-    const timeout = setTimeout(() => {
-      finish(new Error(`Audio haptics session list timed out after ${HELPER_SESSION_LIST_TIMEOUT_MS}ms.`));
-    }, HELPER_SESSION_LIST_TIMEOUT_MS);
-
-    helper.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf8');
-    });
-    helper.stderr.on('data', (chunk: Buffer) => {
-      stderr = (stderr + chunk.toString('utf8')).slice(-HELPER_STDERR_MAX_CHARS);
-    });
-    helper.once('error', finish);
-    helper.once('exit', (code, signal) => {
-      if (code === 0) {
-        finish();
-      } else {
-        finish(new Error(`Audio haptics session list failed (${signal ?? code ?? 'unknown'}): ${stderr.trim()}`));
-      }
-    });
-  });
-
-  return parseAudioHapticsSessions(raw);
 }
 
 export class MicKeepaliveEngine extends EventEmitter {

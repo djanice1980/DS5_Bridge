@@ -35,6 +35,7 @@ let bridgeService: BridgeService | null = null;
 let isQuitting = false;
 let shutdownComplete = false;
 const hasSingleInstanceLock = ALLOW_PARALLEL_AUTOMATION_INSTANCE || app.requestSingleInstanceLock();
+const audioHapticsIconCache = new Map<string, Promise<string | null> | string | null>();
 
 function windowsAppUserModelId(): string {
   return WINDOWS_APP_USER_MODEL_ID;
@@ -520,15 +521,39 @@ async function addAudioHapticsSessionIcons(sessions: AudioHapticsSession[]): Pro
 }
 
 async function audioHapticsSessionIconDataUrl(session: AudioHapticsSession): Promise<string | null> {
+  const cacheKey = audioHapticsSessionIconCacheKey(session);
+  if (!cacheKey) {
+    return null;
+  }
+  const cached = audioHapticsIconCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached instanceof Promise ? cached : cached;
+  }
+  const pending = loadAudioHapticsSessionIconDataUrl(session);
+  audioHapticsIconCache.set(cacheKey, pending);
+  const value = await pending;
+  audioHapticsIconCache.set(cacheKey, value);
+  return value;
+}
+
+function audioHapticsSessionIconCacheKey(session: AudioHapticsSession): string | null {
+  return session.iconPath
+    || session.processPath
+    || session.executableName
+    || (session.processId > 0 ? `pid:${session.processId}` : null);
+}
+
+async function loadAudioHapticsSessionIconDataUrl(session: AudioHapticsSession): Promise<string | null> {
   const sessionIcon = nativeImageFromPath(session.iconPath);
   if (sessionIcon && !sessionIcon.isEmpty()) {
     return sessionIcon.resize({ width: 32, height: 32 }).toDataURL();
   }
-  if (!session.processPath) {
+  const iconPath = session.processPath ?? session.iconPath;
+  if (!iconPath) {
     return null;
   }
   try {
-    const image = await app.getFileIcon(session.processPath, { size: 'normal' });
+    const image = await app.getFileIcon(iconPath, { size: 'normal' });
     return image.isEmpty() ? null : image.resize({ width: 32, height: 32 }).toDataURL();
   } catch {
     return null;
@@ -536,7 +561,7 @@ async function audioHapticsSessionIconDataUrl(session: AudioHapticsSession): Pro
 }
 
 function nativeImageFromPath(filePath: string | null): Electron.NativeImage | null {
-  if (!filePath || !fs.existsSync(filePath)) {
+  if (!filePath || !fs.existsSync(filePath) || !/\.(ico|png|jpg|jpeg|bmp)$/i.test(filePath)) {
     return null;
   }
   try {

@@ -2150,6 +2150,7 @@ export function App() {
   const personaTransition = snapshot?.personaTransition ?? null;
   const personaTransitionActive = Boolean(personaTransition);
   const connected = snapshot?.state === 'connected';
+  const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
   const liveControllerType = snapshot?.status?.controllerType;
   const remapControllerType = snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown'
     ? liveControllerType
@@ -2247,6 +2248,9 @@ export function App() {
     window.addEventListener('blur', finishWindowDrag, { once: true });
   }
 
+  const audioReactiveHapticsSource = snapshot?.settings.audioReactiveHapticsSource ?? 'system-audio';
+  const audioReactiveHapticsSourceKey = audioHapticsSourceKey(audioReactiveHapticsSource);
+
   useEffect(() => {
     let cancelled = false;
     let receivedLiveSnapshot = false;
@@ -2290,14 +2294,20 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!audioHapticsOpen) {
+    const controllerAudioReady = connected && controllerConnected;
+    if (!audioHapticsOpen || !controllerAudioReady) {
       setAudioHapticsSessions([]);
       setAudioHapticsSessionsLoading(false);
       return undefined;
     }
 
     let cancelled = false;
+    let refreshInFlight = false;
     async function refreshSessions() {
+      if (refreshInFlight) {
+        return;
+      }
+      refreshInFlight = true;
       setAudioHapticsSessionsLoading(true);
       try {
         const sessions = await window.bridge.listAudioHapticsSessions();
@@ -2309,6 +2319,7 @@ export function App() {
           setAudioHapticsSessions([]);
         }
       } finally {
+        refreshInFlight = false;
         if (!cancelled) {
           setAudioHapticsSessionsLoading(false);
         }
@@ -2316,12 +2327,12 @@ export function App() {
     }
 
     void refreshSessions();
-    const interval = window.setInterval(refreshSessions, 3000);
+    const interval = window.setInterval(refreshSessions, 15000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [audioHapticsOpen, snapshot?.settings.audioReactiveHapticsSource]);
+  }, [audioHapticsOpen, audioReactiveHapticsSourceKey, connected, controllerConnected]);
 
   useEffect(() => {
     if (!showBridgeSettings && !showNotificationsMenu) {
@@ -2550,8 +2561,6 @@ export function App() {
   const overviewHostPersonaMode = personaTransition?.to ?? snapshot?.settings.hostPersonaMode ?? 'dualsense';
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const audioReactiveHapticsEnabled = Boolean(snapshot?.settings.audioReactiveHapticsEnabled);
-  const audioReactiveHapticsSource = snapshot?.settings.audioReactiveHapticsSource ?? 'system-audio';
-  const audioReactiveHapticsSourceKey = audioHapticsSourceKey(audioReactiveHapticsSource);
   const audioHapticsSessionByKey = useMemo(() => {
     const sessions = new Map<string, AudioHapticsSession>();
     for (const session of audioHapticsSessions) {
@@ -2559,6 +2568,8 @@ export function App() {
     }
     return sessions;
   }, [audioHapticsSessions]);
+  const selectedAudioHapticsSourceDisplayName = audioHapticsSessionByKey.get(audioReactiveHapticsSourceKey)?.displayName
+    ?? audioHapticsSourceDisplayName(audioReactiveHapticsSource);
   const audioHapticsSourceOptions = useMemo<Array<[string, string]>>(() => {
     const options: Array<[string, string]> = [['System', 'system-audio']];
     for (const session of audioHapticsSessions) {
@@ -2586,7 +2597,6 @@ export function App() {
   const controllerToastEnabled = Boolean(snapshot?.settings.notifyControllerConnection);
   const lowBatteryToastEnabled = Boolean(snapshot?.settings.notifyLowBattery);
   const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled;
-  const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const adaptiveTriggerOutputActive = Boolean(snapshot?.status?.adaptiveTriggerOutputRecent);
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
@@ -5336,7 +5346,6 @@ export function App() {
                     </div>
                     <div className="audio-haptics-routing-stack">
                       <label className="audio-haptics-source-field">
-                        <span>Source</span>
                         <CustomSelect
                           value={audioReactiveHapticsSourceKey}
                           options={audioHapticsSourceOptions}
@@ -5460,7 +5469,7 @@ export function App() {
                       </span>
                       <span className={`status-badge ${audioReactiveHapticsStatusTone}`} title={audioReactiveHapticsSourceKey === 'system-audio' ? 'Using the mixed Windows output.' : 'Using the selected app audio session.'}>
                         <span className={`dot ${audioReactiveHapticsEnabled ? audioReactiveHapticsStatusTone : 'idle'}`} />
-                        <strong>{audioHapticsSourceDisplayName(audioReactiveHapticsSource)}</strong>
+                        <strong>{selectedAudioHapticsSourceDisplayName}</strong>
                       </span>
                     </div>
                   </section>

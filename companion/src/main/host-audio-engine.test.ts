@@ -53,10 +53,10 @@ vi.mock('node:fs', () => ({
 }));
 
 import {
+  AudioHapticsSessionMonitor,
   HostAudioEngine,
   HostAudioStartError,
   SystemAudioHapticsEngine,
-  listAudioHapticsSessions,
   type HostAudioFramePayload
 } from './host-audio-engine';
 
@@ -138,25 +138,27 @@ describe('SystemAudioHapticsEngine app source', () => {
 });
 
 describe('audio haptics session listing', () => {
-  it('parses helper session JSON defensively', async () => {
-    const sessionsPromise = listAudioHapticsSessions('system-audio');
+  it('keeps one monitor helper alive and returns cached snapshots', async () => {
+    const monitor = new AudioHapticsSessionMonitor();
+    const sessionsPromise = monitor.listSessions();
     const helper = childProcessMock.processes[0]!;
-    helper.stdout.emit('data', Buffer.from(JSON.stringify([{
-      processId: 2345,
-      displayName: 'Battlefront II',
-      executableName: 'starwarsbattlefrontii.exe',
-      processPath: 'C:\\Games\\Battlefront\\starwarsbattlefrontii.exe',
-      iconPath: '',
-      sessionIdentifier: 'session',
-      sessionInstanceIdentifier: 'instance',
-      state: 'active',
-      endpointName: 'Speakers',
-      isSelected: true
-    }, {
-      processId: 0,
-      displayName: 'bad'
-    }])));
-    helper.emit('exit', 0, null);
+    const snapshot = {
+      type: 'snapshot',
+      sessions: [{
+        processId: 2345,
+        displayName: 'Battlefront II',
+        executableName: 'starwarsbattlefrontii.exe',
+        processPath: 'C:\\Games\\Battlefront\\starwarsbattlefrontii.exe',
+        iconPath: '',
+        sessionIdentifier: 'session',
+        sessionInstanceIdentifier: 'instance',
+        state: 'active',
+        endpointName: 'Speakers',
+        isSelected: false
+      }]
+    };
+
+    helper.stdout.emit('data', Buffer.from(`${JSON.stringify(snapshot)}\n`));
 
     await expect(sessionsPromise).resolves.toEqual([{
       processId: 2345,
@@ -169,9 +171,16 @@ describe('audio haptics session listing', () => {
       sessionInstanceIdentifier: 'instance',
       state: 'active',
       endpointName: 'Speakers',
-      isSelected: true
+      isSelected: false
     }]);
+    await expect(monitor.listSessions()).resolves.toHaveLength(1);
+
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
+    expect(childProcessMock.spawn.mock.calls[0]![1]).toEqual(['--monitor-audio-sessions']);
+
+    await monitor.stop();
   });
+
 });
 
 describe('HostAudioEngine stdout frame parser', () => {

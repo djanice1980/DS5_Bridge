@@ -997,6 +997,31 @@ describe('BridgeService', () => {
     expect(snapshot.settings.audioReactiveHapticsSource).toEqual(appSource);
   });
 
+  it('does not poll app audio sessions while the controller is disconnected', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    const monitor = (service as unknown as {
+      audioHapticsSessionMonitor: {
+        listSessions: () => Promise<unknown[]>;
+        stop: () => Promise<void>;
+      };
+    }).audioHapticsSessionMonitor;
+    const listSessions = vi.spyOn(monitor, 'listSessions').mockResolvedValue([{
+      processId: 4321,
+      displayName: 'Battlefront II'
+    }]);
+    const stop = vi.spyOn(monitor, 'stop').mockResolvedValue(undefined);
+
+    await poll(service);
+
+    await expect(service.listAudioHapticsSessions()).resolves.toEqual([]);
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalled();
+  });
+
   it('does not request classic rumble suppression when audio reactive haptics is disabled', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
