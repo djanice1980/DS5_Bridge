@@ -5476,7 +5476,7 @@ export function App() {
                 </div>
               ) : (
               <div className="feature-card-grid">
-                <section className="feature-card">
+                <section className="feature-card preset-card">
                   <div className="feature-card-title">
                     <button
                       type="button"
@@ -5586,7 +5586,6 @@ export function App() {
                       <strong>{showClassicRumbleControl ? classicRumbleValue : hapticsValue}%</strong>
                     </label>
                   </div>
-                  <p>{showClassicRumbleControl ? 'Applies to game rumble output.' : 'Balanced feedback across both motors.'}</p>
                   <div className="segmented-row">
                     {HAPTICS_PRESETS.map(([label, value]) => {
                       const presetValue = snapHapticsValue(Number(value), hapticsSliderMax);
@@ -5733,7 +5732,7 @@ export function App() {
                 </div>
               </div>
               <div className="feature-card-grid">
-                <section className="feature-card">
+                <section className="feature-card preset-card">
                   <div className="feature-card-title">
                     <button
                       type="button"
@@ -5856,7 +5855,6 @@ export function App() {
                   </div>
                   {showMicrophoneControl ? (
                     <>
-                      <p>Use presets for quick microphone levels.</p>
                       <div className="segmented-row">
                         {MIC_VOLUME_PRESETS.map(([label, value]) => (
                           <button
@@ -5885,7 +5883,6 @@ export function App() {
                     </>
                   ) : (
                     <>
-                      <p>Use presets for quick {outputPresetLower} levels.</p>
                       <div className="segmented-row">
                         {SPEAKER_VOLUME_PRESETS.map(([label, value]) => (
                           <button
@@ -6017,7 +6014,7 @@ export function App() {
                 </div>
               ) : (
               <div className="feature-card-grid">
-                <section className="feature-card">
+                <section className="feature-card preset-card">
                   <div className="feature-card-title">
                     <button
                       type="button"
@@ -6075,7 +6072,6 @@ export function App() {
                       <strong>{triggerEffectIntensityValue}%</strong>
                     </label>
                   </div>
-                  <p>Use presets for quick trigger levels</p>
                   <div className="segmented-row">
                     {TRIGGER_EFFECT_PRESETS.map(([label, value]) => (
                       <button
@@ -6192,7 +6188,7 @@ export function App() {
                 </div>
               </div>
               <div className="feature-card-grid lighting-grid">
-                <section className="feature-card">
+                <section className="feature-card preset-card">
                   <div className="feature-card-title">
                     <button
                       type="button"
@@ -6248,7 +6244,6 @@ export function App() {
                       <strong>{lightbarBrightnessValue}%</strong>
                     </label>
                   </div>
-                  <p>Use presets for quick light bar levels</p>
                   <div className="segmented-row">
                     {LIGHTBAR_PRESETS.map(([label, value]) => (
                       <button

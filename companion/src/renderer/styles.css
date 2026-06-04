@@ -387,34 +387,22 @@ button {
 
 .dot {
   flex: 0 0 auto;
-  width: 7px;
-  height: 7px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: #778397;
-  box-shadow:
-    0 0 0 5px rgba(119, 131, 151, 0.12),
-    0 0 14px rgba(119, 131, 151, 0.08);
 }
 
 .dot.good {
   background: #73df63;
-  box-shadow:
-    0 0 0 5px rgba(111, 217, 95, 0.14),
-    0 0 15px rgba(111, 217, 95, 0.2);
 }
 
 .dot.bad {
   background: #ff5a70;
-  box-shadow:
-    0 0 0 5px rgba(255, 90, 112, 0.14),
-    0 0 15px rgba(255, 90, 112, 0.16);
 }
 
 .dot.warn {
   background: #f4c05d;
-  box-shadow:
-    0 0 0 5px rgba(244, 192, 93, 0.13),
-    0 0 15px rgba(244, 192, 93, 0.16);
 }
 
 .bridge-state {
@@ -3089,6 +3077,10 @@ button.feature-icon {
   margin-top: 16px;
 }
 
+.preset-card > .segmented-row {
+  margin-top: 8px;
+}
+
 .segmented-row.compact {
   grid-template-columns: 72px 72px 124px;
   gap: 8px;
@@ -3219,7 +3211,7 @@ button.feature-icon {
 }
 
 .audio-haptics-card > .segmented-row {
-  margin-top: 8px;
+  margin-top: 0;
 }
 
 .audio-haptics-routing-stack {
@@ -4667,7 +4659,6 @@ button.trigger-lab-chip {
 .health-label .dot {
   width: 9px;
   height: 9px;
-  box-shadow: 0 0 0 3px rgba(40, 124, 255, 0.16);
 }
 
 .card-flip-button {

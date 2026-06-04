@@ -31,10 +31,12 @@ try {
   const audioHapticsRows = [];
   const audioHapticsSelectorRows = [];
   const audioHapticsConfigControlRows = [];
+  const presetControlRows = [];
   const systemTypographyRows = [];
   let targetHeight = null;
   let targetIconLeft = null;
   let targetTextLeft = null;
+  let targetPresetTop = null;
 
   for (const tab of tabs) {
     await controlsNav.getByRole('tab', { name: tab }).click();
@@ -79,6 +81,38 @@ try {
     const tabHeightDelta = Math.abs(left.height - targetHeight);
     if (tabHeightDelta > tolerancePx) {
       failures.push(`${tab}: card height differs from other tabs by ${tabHeightDelta.toFixed(2)}px`);
+    }
+
+    const presetMeasurement = await page.evaluate(() => {
+      const activePage = document.querySelector('.control-page.active');
+      const card = activePage?.querySelector('.feature-card-grid > .preset-card');
+      const row = card?.querySelector(':scope > .segmented-row');
+      if (!card || !row) {
+        return null;
+      }
+      const cardRect = card.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      return {
+        top: rowRect.top - cardRect.top,
+        centerY: rowRect.top + rowRect.height / 2 - cardRect.top,
+        height: rowRect.height
+      };
+    });
+
+    if (presetMeasurement) {
+      targetPresetTop ??= presetMeasurement.top;
+      const topDelta = Math.abs(presetMeasurement.top - targetPresetTop);
+      presetControlRows.push({
+        tab,
+        rowTop: Number(presetMeasurement.top.toFixed(2)),
+        rowCenter: Number(presetMeasurement.centerY.toFixed(2)),
+        rowHeight: Number(presetMeasurement.height.toFixed(2)),
+        delta: Number((presetMeasurement.top - targetPresetTop).toFixed(2))
+      });
+
+      if (topDelta > tolerancePx) {
+        failures.push(`${tab}: preset row top is ${presetMeasurement.top.toFixed(2)}px, expected ${targetPresetTop.toFixed(2)}px`);
+      }
     }
   }
 
@@ -143,12 +177,21 @@ try {
         text: select?.textContent?.trim() ?? ''
       };
     });
+    const presetCard = activePage?.querySelector('.audio-haptics-card:first-child');
+    const presetRow = presetCard?.querySelector(':scope > .segmented-row');
+    const presetCardRect = presetCard?.getBoundingClientRect();
+    const presetRowRect = presetRow?.getBoundingClientRect();
 
     return {
       cards,
       leftChildren,
       selectors,
-      configControls
+      configControls,
+      presetRow: presetCardRect && presetRowRect ? {
+        top: presetRowRect.top - presetCardRect.top,
+        centerY: presetRowRect.top + presetRowRect.height / 2 - presetCardRect.top,
+        height: presetRowRect.height
+      } : null
     };
   });
 
@@ -183,6 +226,25 @@ try {
         failures.push(`Audio Haptics ${card.className}: content overflows by ${overflow.toFixed(2)}px`);
       }
     }
+  }
+
+  if (audioHapticsMeasurement.presetRow) {
+    const preset = audioHapticsMeasurement.presetRow;
+    const expectedTop = targetPresetTop ?? preset.top;
+    const topDelta = preset.top - expectedTop;
+    presetControlRows.push({
+      tab: 'Audio Haptics',
+      rowTop: Number(preset.top.toFixed(2)),
+      rowCenter: Number(preset.centerY.toFixed(2)),
+      rowHeight: Number(preset.height.toFixed(2)),
+      delta: Number(topDelta.toFixed(2))
+    });
+
+    if (Math.abs(topDelta) > tolerancePx) {
+      failures.push(`Audio Haptics: preset row top is ${preset.top.toFixed(2)}px, expected ${expectedTop.toFixed(2)}px`);
+    }
+  } else {
+    failures.push('Audio Haptics: preset row was not found');
   }
 
   for (let index = 1; index < audioHapticsMeasurement.leftChildren.length; index += 1) {
@@ -404,6 +466,7 @@ try {
   console.table(audioHapticsRows);
   console.table(audioHapticsSelectorRows);
   console.table(audioHapticsConfigControlRows);
+  console.table(presetControlRows);
   console.table(buttonRows);
   console.table(systemTypographyRows);
 
