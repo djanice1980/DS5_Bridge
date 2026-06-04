@@ -1643,6 +1643,11 @@ button {
   align-content: stretch;
 }
 
+.overview-sliders {
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+}
+
 .overview-panel-heading {
   display: flex;
   align-items: center;
@@ -1800,8 +1805,13 @@ button {
 }
 
 .overview-slider-list {
+  border: 1px solid rgba(142, 164, 194, 0.22);
+  border-radius: var(--card-radius);
+  padding: 16px 18px 12px;
   display: grid;
+  align-self: stretch;
   gap: 13px;
+  background: rgba(4, 10, 17, 0.18);
 }
 
 .overview-slider-row {

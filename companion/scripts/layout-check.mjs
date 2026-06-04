@@ -33,10 +33,63 @@ try {
   const audioHapticsConfigControlRows = [];
   const presetControlRows = [];
   const systemTypographyRows = [];
+  const overviewControlAlignmentRows = [];
   let targetHeight = null;
   let targetIconLeft = null;
   let targetTextLeft = null;
   let targetPresetTop = null;
+
+  await controlsNav.getByRole('tab', { name: 'Overview' }).click();
+  await page.waitForTimeout(150);
+
+  const overviewControlAlignment = await page.evaluate(() => {
+    const actionButtons = [
+      ...(document.querySelectorAll('.overview-quick-actions .overview-action-grid button') ?? [])
+    ];
+    const personaGrid = document.querySelector('.overview-quick-actions .overview-persona-grid');
+    const sliderList = document.querySelector('.overview-sliders .overview-slider-list');
+
+    if (actionButtons.length < 2 || !personaGrid || !sliderList) {
+      return null;
+    }
+
+    const actionButtonRects = actionButtons.slice(0, 2).map((button) => button.getBoundingClientRect());
+    const personaRect = personaGrid.getBoundingClientRect();
+    const sliderRect = sliderList.getBoundingClientRect();
+    const actionTop = Math.min(...actionButtonRects.map((rect) => rect.top));
+
+    return {
+      actionTop,
+      sliderTop: sliderRect.top,
+      personaBottom: personaRect.bottom,
+      sliderBottom: sliderRect.bottom,
+      topDelta: sliderRect.top - actionTop,
+      bottomDelta: sliderRect.bottom - personaRect.bottom,
+      sliderHeight: sliderRect.height
+    };
+  });
+
+  if (!overviewControlAlignment) {
+    failures.push('Overview: quick controls alignment targets were not found');
+  } else {
+    overviewControlAlignmentRows.push({
+      actionTop: Number(overviewControlAlignment.actionTop.toFixed(2)),
+      sliderTop: Number(overviewControlAlignment.sliderTop.toFixed(2)),
+      personaBottom: Number(overviewControlAlignment.personaBottom.toFixed(2)),
+      sliderBottom: Number(overviewControlAlignment.sliderBottom.toFixed(2)),
+      topDelta: Number(overviewControlAlignment.topDelta.toFixed(2)),
+      bottomDelta: Number(overviewControlAlignment.bottomDelta.toFixed(2)),
+      sliderHeight: Number(overviewControlAlignment.sliderHeight.toFixed(2))
+    });
+
+    if (Math.abs(overviewControlAlignment.topDelta) > tolerancePx) {
+      failures.push(`Overview: quick controls frame top differs from action buttons by ${overviewControlAlignment.topDelta.toFixed(2)}px`);
+    }
+
+    if (Math.abs(overviewControlAlignment.bottomDelta) > tolerancePx) {
+      failures.push(`Overview: quick controls frame bottom differs from persona row by ${overviewControlAlignment.bottomDelta.toFixed(2)}px`);
+    }
+  }
 
   for (const tab of tabs) {
     await controlsNav.getByRole('tab', { name: tab }).click();
@@ -469,6 +522,7 @@ try {
   console.table(presetControlRows);
   console.table(buttonRows);
   console.table(systemTypographyRows);
+  console.table(overviewControlAlignmentRows);
 
   if (failures.length > 0) {
     throw new Error(`Layout check failed:\n${failures.join('\n')}`);

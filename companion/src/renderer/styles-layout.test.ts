@@ -130,4 +130,17 @@ describe('companion layout CSS', () => {
       'border-color: rgba(255, 90, 112, 0.4);'
     );
   });
+
+  it('frames overview quick controls like tab slider containers', () => {
+    const overviewSliderList = cssBlock('.overview-slider-list', 'background: rgba(4, 10, 17, 0.18);');
+
+    expect(cssBlock('.overview-sliders', 'grid-template-rows: auto minmax(0, 1fr);')).toContain(
+      'grid-template-rows: auto minmax(0, 1fr);'
+    );
+    expect(overviewSliderList).toContain('border: 1px solid rgba(142, 164, 194, 0.22);');
+    expect(overviewSliderList).toContain('border-radius: var(--card-radius);');
+    expect(overviewSliderList).toContain('padding: 16px 18px 12px;');
+    expect(overviewSliderList).toContain('align-self: stretch;');
+    expect(overviewSliderList).toContain('background: rgba(4, 10, 17, 0.18);');
+  });
 });
