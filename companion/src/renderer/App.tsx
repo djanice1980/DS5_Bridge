@@ -2151,6 +2151,7 @@ export function App() {
   const personaTransitionActive = Boolean(personaTransition);
   const connected = snapshot?.state === 'connected';
   const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
+  const controllerControlsAvailable = connected && controllerConnected;
   const liveControllerType = snapshot?.status?.controllerType;
   const remapControllerType = snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown'
     ? liveControllerType
@@ -2710,21 +2711,15 @@ export function App() {
       ? 'Update Firmware'
       : !hapticsEnabled
         ? 'Haptics Off'
-        : audioReactiveHapticsCommitPending || pendingAction !== null
-          ? 'Command Pending'
-          : audioReactiveHapticsEnabled
-            ? 'Ready'
-            : 'Off';
+        : audioReactiveHapticsEnabled
+          ? 'Ready'
+          : 'Off';
   const audioReactiveHapticsStatusTone = audioReactiveHapticsEnabled
     && hapticsEnabled
     && audioReactiveHapticsRouteSupported
-    && !audioReactiveHapticsCommitPending
-    && pendingAction === null
     ? 'good'
     : connected && (
-        audioReactiveHapticsCommitPending
-        || pendingAction !== null
-        || !audioReactiveHapticsRouteSupported
+        !audioReactiveHapticsRouteSupported
         || !hapticsEnabled
       )
       ? 'warn'
@@ -2759,34 +2754,35 @@ export function App() {
     || lightbarCommitPending
     || testLocked
     || Boolean(snapshot?.status?.testHapticsBusy);
-  const hapticsTestReady = !testHapticsUnavailable;
-  const rumbleTestReady = !testRumbleUnavailable;
+  const hapticsStatusReady = connected
+    && hapticsEnabled
+    && !testLocked
+    && !snapshot?.status?.testHapticsBusy
+    && !snapshot?.status?.testHapticsCooldown;
+  const rumbleStatusReady = connected
+    && classicRumbleEnabled
+    && !testLocked
+    && !snapshot?.status?.testHapticsBusy;
   const hapticsStatusLabel = testLocked || snapshot?.status?.testHapticsBusy
     ? 'Testing'
       : snapshot?.status?.testHapticsCooldown
         ? 'Cooling Down'
-      : hapticsTestReady
+      : hapticsStatusReady
         ? 'Ready'
-        : connected && pendingAction !== null
-          ? 'Command Pending'
-          : 'Unavailable';
+        : 'Unavailable';
   const rumbleStatusLabel = testLocked
     ? 'Testing'
-    : rumbleTestReady
+    : rumbleStatusReady
       ? 'Ready'
-      : connected && pendingAction !== null
-        ? 'Command Pending'
-        : 'Unavailable';
-  const hapticsStatusTone = testLocked || snapshot?.status?.testHapticsBusy || hapticsTestReady
+      : 'Unavailable';
+  const hapticsStatusTone = testLocked || snapshot?.status?.testHapticsBusy || hapticsStatusReady
     ? 'good'
-    : connected && (snapshot?.status?.testHapticsCooldown || pendingAction !== null)
+    : connected && snapshot?.status?.testHapticsCooldown
       ? 'warn'
       : 'idle';
-  const rumbleStatusTone = testLocked || rumbleTestReady
+  const rumbleStatusTone = testLocked || rumbleStatusReady
     ? 'good'
-    : connected && pendingAction !== null
-      ? 'warn'
-      : 'idle';
+    : 'idle';
   const activeFeedbackTestUnavailable = showClassicRumbleControl ? testRumbleUnavailable : testHapticsUnavailable;
   const activeFeedbackStatusLabel = showClassicRumbleControl ? rumbleStatusLabel : hapticsStatusLabel;
   const activeFeedbackStatusTone = showClassicRumbleControl ? rumbleStatusTone : hapticsStatusTone;
@@ -2799,7 +2795,6 @@ export function App() {
     || speakerTestLocked
     || gameStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy);
-  const speakerTestReady = !testSpeakerUnavailable && !speakerOutputMissing;
   const testMicUnavailable = !connected
     || !hostAudioEnabled
     || !hostAudioActive
@@ -2809,45 +2804,53 @@ export function App() {
     || lightbarCommitPending
     || micTestLocked
     || gameStreamActive;
-  const micTestReady = !testMicUnavailable;
+  const speakerStatusReady = connected
+    && speakerVolumeSupported
+    && speakerEnabled
+    && !speakerTestLocked
+    && !speakerOutputMissing
+    && !gameStreamActive
+    && !snapshot?.status?.testHapticsBusy;
+  const micStatusReady = connected
+    && hostAudioEnabled
+    && hostAudioActive
+    && duplexMicEnabled
+    && !micTestLocked
+    && !gameStreamActive;
   const speakerStatusLabel = speakerTestLocked
     ? 'Playing'
     : connected && speakerTestError
       ? speakerTestError
     : connected && speakerOutputMissing
         ? BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE
-        : speakerTestReady
+        : speakerStatusReady
           ? 'Ready'
           : connected && gameStreamActive
             ? 'Game Audio Active'
-            : connected && pendingAction !== null
-              ? 'Command Pending'
-              : 'Unavailable';
-  const speakerStatusTone = speakerTestLocked || speakerTestReady
+            : 'Unavailable';
+  const speakerStatusTone = speakerTestLocked || speakerStatusReady
     ? 'good'
     : connected && (speakerTestError || speakerOutputMissing)
         ? 'bad'
-      : connected && (gameStreamActive || pendingAction !== null)
+      : connected && gameStreamActive
         ? 'warn'
         : 'idle';
   const micTestStatusLabel = micTestLocked
     ? 'Listening'
     : connected && micTestError
       ? micTestError
-      : micTestReady
+      : micStatusReady
         ? 'Ready'
         : connected && !hostAudioEnabled
           ? 'Host Encoding Off'
           : connected && !hostAudioActive
             ? 'Host Encoding Starting'
-            : connected && pendingAction !== null
-              ? 'Command Pending'
-              : 'Unavailable';
-  const micTestStatusTone = micTestLocked || micTestReady
+            : 'Unavailable';
+  const micTestStatusTone = micTestLocked || micStatusReady
     ? 'good'
     : connected && micTestError
       ? 'bad'
-      : connected && (hostAudioEnabled || pendingAction !== null)
+      : connected && hostAudioEnabled
         ? 'warn'
         : 'idle';
   const activeAudioTestUnavailable = showMicrophoneControl ? testMicUnavailable : testSpeakerUnavailable;
@@ -2955,19 +2958,22 @@ export function App() {
     || triggerTestLocked
     || adaptiveTriggerOutputActive
     || Boolean(snapshot?.status?.testAdaptiveTriggersBusy);
-  const triggerTestReady = !testTriggersUnavailable;
+  const triggerStatusReady = connected
+    && adaptiveTriggersSupported
+    && adaptiveTriggersEnabled
+    && !triggerTestLocked
+    && !adaptiveTriggerOutputActive
+    && !snapshot?.status?.testAdaptiveTriggersBusy;
   const triggerStatusLabel = triggerTestLocked || snapshot?.status?.testAdaptiveTriggersBusy
     ? 'Testing'
-    : triggerTestReady
+    : triggerStatusReady
       ? 'Ready'
       : connected && adaptiveTriggerOutputActive
         ? 'Game Triggers Active'
-        : connected && pendingAction !== null
-          ? 'Command Pending'
-          : 'Unavailable';
-  const triggerStatusTone = triggerTestLocked || snapshot?.status?.testAdaptiveTriggersBusy || triggerTestReady
+        : 'Unavailable';
+  const triggerStatusTone = triggerTestLocked || snapshot?.status?.testAdaptiveTriggersBusy || triggerStatusReady
     ? 'good'
-    : connected && (adaptiveTriggerOutputActive || pendingAction !== null)
+    : connected && adaptiveTriggerOutputActive
       ? 'warn'
       : 'idle';
   const lightbarStateActive = connected && lightbarSupported && lightbarEnabled;
@@ -4604,7 +4610,13 @@ export function App() {
   }
 
   return (
-    <div className={`shell ${windowDragging ? 'window-dragging' : ''}`}>
+    <div
+      className={[
+        'shell',
+        windowDragging ? 'window-dragging' : '',
+        controllerControlsAvailable ? '' : 'controller-unavailable'
+      ].filter(Boolean).join(' ')}
+    >
       <div
         className="window-bar"
         onMouseDown={(event) => {
@@ -5263,7 +5275,7 @@ export function App() {
                       role="switch"
                       aria-checked={activeHapticsFeatureEnabled}
                       className={`switch ${activeHapticsFeatureEnabled ? 'on' : ''}`}
-                      disabled={!connected || pendingAction !== null}
+                      disabled={!controllerControlsAvailable || pendingAction !== null}
                       onClick={showClassicRumbleControl ? toggleClassicRumbleEnabled : toggleHapticsEnabled}
                     >
                       <span />
@@ -5484,7 +5496,7 @@ export function App() {
                       aria-pressed={activeHapticsFeatureEnabled}
                       aria-label={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
                       title={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
-                      disabled={!connected || pendingAction !== null}
+                      disabled={!controllerControlsAvailable || pendingAction !== null}
                       onClick={showClassicRumbleControl ? toggleClassicRumbleEnabled : toggleHapticsEnabled}
                     >
                       {showClassicRumbleControl ? <Vibrate size={20} /> : <Sparkles size={20} />}
@@ -5704,7 +5716,7 @@ export function App() {
                         hostAudioEnabled ? 'on' : '',
                         hostAudioCaptureWarning ? 'warn' : ''
                       ].filter(Boolean).join(' ')}
-                      disabled={!connected || pendingAction !== null}
+                      disabled={!controllerControlsAvailable || pendingAction !== null}
                       onClick={toggleHostEncodedAudioEnabled}
                     >
                       <span />
@@ -5723,7 +5735,7 @@ export function App() {
                       aria-checked={audioEnabled}
                       aria-label="Enable audio"
                       className={`switch ${audioEnabled ? 'on' : ''}`}
-                      disabled={!connected || pendingAction !== null}
+                      disabled={!controllerControlsAvailable || pendingAction !== null}
                       onClick={toggleAudioEnabled}
                     >
                       <span />
@@ -5750,8 +5762,8 @@ export function App() {
                       title={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
                       disabled={
                         showMicrophoneControl
-                          ? !connected || !hostAudioEnabled || pendingAction !== null
-                          : !connected || !speakerVolumeSupported || pendingAction !== null
+                          ? !controllerControlsAvailable || !hostAudioEnabled || pendingAction !== null
+                          : !controllerControlsAvailable || !speakerVolumeSupported || pendingAction !== null
                       }
                       onClick={showMicrophoneControl ? toggleDuplexMicEnabled : toggleSpeakerEnabled}
                     >
@@ -5999,7 +6011,7 @@ export function App() {
                       role="switch"
                       aria-checked={snapshot.settings.adaptiveTriggersEnabled}
                       className={`switch ${snapshot.settings.adaptiveTriggersEnabled ? 'on' : ''}`}
-                      disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
+                      disabled={!controllerControlsAvailable || !adaptiveTriggersSupported || pendingAction !== null}
                       onClick={toggleAdaptiveTriggersEnabled}
                     >
                       <span />
@@ -6022,7 +6034,7 @@ export function App() {
                       aria-pressed={snapshot.settings.adaptiveTriggersEnabled}
                       aria-label="Enable adaptive triggers"
                       title="Enable adaptive triggers"
-                      disabled={!connected || !adaptiveTriggersSupported || pendingAction !== null}
+                      disabled={!controllerControlsAvailable || !adaptiveTriggersSupported || pendingAction !== null}
                       onClick={toggleAdaptiveTriggersEnabled}
                     >
                       <IconDeviceGamepad2 size={20} />
@@ -6180,7 +6192,7 @@ export function App() {
                     role="switch"
                     aria-checked={snapshot.settings.lightbarEnabled}
                     className={`switch ${snapshot.settings.lightbarEnabled ? 'on' : ''}`}
-                    disabled={!connected || !lightbarSupported || pendingAction !== null}
+                    disabled={!controllerControlsAvailable || !lightbarSupported || pendingAction !== null}
                     onClick={toggleLightbarEnabled}
                   >
                     <span />
@@ -6196,7 +6208,7 @@ export function App() {
                       aria-pressed={snapshot.settings.lightbarEnabled}
                       aria-label="Enable lighting"
                       title="Enable lighting"
-                      disabled={!connected || !lightbarSupported || pendingAction !== null}
+                      disabled={!controllerControlsAvailable || !lightbarSupported || pendingAction !== null}
                       onClick={toggleLightbarEnabled}
                     >
                       <IconBulb size={20} />

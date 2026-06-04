@@ -42,7 +42,7 @@ describe('renderer behavior guards', () => {
   it('does not block haptic testing just because audio is active', () => {
     const start = appSource.indexOf('const testHapticsUnavailable =');
     expect(start).toBeGreaterThanOrEqual(0);
-    const end = appSource.indexOf('const hapticsTestReady =', start);
+    const end = appSource.indexOf('const hapticsStatusReady =', start);
     const unavailableSource = appSource.slice(start, end);
 
     expect(unavailableSource).not.toContain('gameStreamActive');
@@ -54,7 +54,7 @@ describe('renderer behavior guards', () => {
   it('does not block rumble testing while game output is active', () => {
     const start = appSource.indexOf('const testRumbleUnavailable =');
     expect(start).toBeGreaterThanOrEqual(0);
-    const end = appSource.indexOf('const hapticsTestReady =', start);
+    const end = appSource.indexOf('const hapticsStatusReady =', start);
     const unavailableSource = appSource.slice(start, end);
 
     expect(unavailableSource).not.toContain('gameStreamActive');
@@ -72,6 +72,19 @@ describe('renderer behavior guards', () => {
     expect(buttonSource).not.toContain('Audio Active');
     expect(buttonSource).toContain('testLocked');
     expect(buttonSource).toContain('snapshot.status?.testHapticsCooldown');
+  });
+
+  it('does not show generic command-pending copy in renderer status badges', () => {
+    expect(appSource).not.toContain('Command Pending');
+  });
+
+  it('dims primary feature toggles when the controller is unavailable', () => {
+    expect(appSource).toContain('const controllerControlsAvailable = connected && controllerConnected;');
+    expect(appSource).toContain("controllerControlsAvailable ? '' : 'controller-unavailable'");
+    expect(appSource).toContain('disabled={!controllerControlsAvailable || pendingAction !== null}');
+    expect(appSource).toContain('!controllerControlsAvailable || !speakerVolumeSupported || pendingAction !== null');
+    expect(appSource).toContain('!controllerControlsAvailable || !adaptiveTriggersSupported || pendingAction !== null');
+    expect(appSource).toContain('!controllerControlsAvailable || !lightbarSupported || pendingAction !== null');
   });
 
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {

@@ -101,4 +101,21 @@ describe('companion layout CSS', () => {
     expect(appSource).not.toContain('Firmware and polling.');
     expect(appSource).not.toContain('Protocol and debug data.');
   });
+
+  it('mutes active toggles when the controller is unavailable', () => {
+    expect(cssBlock('.shell.controller-unavailable .inline-switch', 'color: rgba(199, 211, 228, 0.58);')).toContain(
+      'color: rgba(199, 211, 228, 0.58);'
+    );
+    expect(cssBlock('.shell.controller-unavailable .inline-switch .host-encoding-state', 'opacity: 0.62;')).toContain(
+      'opacity: 0.62;'
+    );
+    expect(cssBlock('.shell.controller-unavailable .inline-switch .switch.on', 'background: rgba(126, 145, 172, 0.2);')).toContain(
+      'background: rgba(126, 145, 172, 0.2);'
+    );
+    expect(cssBlock('.shell.controller-unavailable button.feature-icon.active', 'box-shadow: none;')).toContain(
+      'box-shadow: none;'
+    );
+    expect(normalizedStyles).not.toContain('.inline-switch:has(.switch:disabled)');
+    expect(normalizedStyles).not.toContain('opacity: 1; border-color: rgba(40, 124, 255, 0.88); background: #1667dc;');
+  });
 });

@@ -3011,12 +3011,25 @@ button.feature-icon {
   bottom: var(--card-padding);
 }
 
-.audio-enable-button:disabled,
-.audio-haptics-enable-button:disabled,
-.haptics-enable-button:disabled,
-.triggers-enable-button:disabled,
-.lighting-enable-button:disabled {
-  opacity: 0.62;
+.shell.controller-unavailable button.feature-icon:disabled,
+.shell.controller-unavailable button.feature-icon.active {
+  opacity: 1;
+  color: rgba(170, 181, 198, 0.64);
+  border-color: rgba(142, 164, 194, 0.16);
+  background: rgba(255, 255, 255, 0.026);
+  box-shadow: none;
+}
+
+.shell.controller-unavailable button.feature-icon.active.power-saving-active {
+  color: rgba(213, 223, 238, 0.72);
+  border-color: rgba(142, 164, 194, 0.22);
+  background: rgba(126, 145, 172, 0.16);
+  box-shadow: none;
+}
+
+.shell.controller-unavailable button.feature-icon:disabled svg,
+.shell.controller-unavailable button.feature-icon.active svg {
+  opacity: 0.72;
 }
 
 .feature-card > p,
@@ -4773,6 +4786,20 @@ button.trigger-lab-chip {
   font-weight: 650;
 }
 
+.shell.controller-unavailable .inline-switch {
+  color: rgba(199, 211, 228, 0.58);
+}
+
+.shell.controller-unavailable .inline-switch .host-encoding-state {
+  opacity: 0.62;
+}
+
+.shell.controller-unavailable .inline-switch .switch.on,
+.shell.controller-unavailable .inline-switch .switch.on.warn {
+  border-color: rgba(142, 164, 194, 0.24);
+  background: rgba(126, 145, 172, 0.2);
+}
+
 .slider-row,
 .toggle-row,
 .select-row,
@@ -5099,18 +5126,6 @@ input[type="range"]:disabled::-webkit-slider-thumb {
 .switch.on:disabled {
   border-color: rgba(142, 164, 194, 0.24);
   background: rgba(126, 145, 172, 0.2);
-}
-
-.feature-heading > .inline-switch .switch.on:disabled,
-.audio-heading-controls .switch.on:disabled {
-  opacity: 1;
-  border-color: rgba(40, 124, 255, 0.88);
-  background: #1667dc;
-}
-
-.audio-heading-controls .switch.on.warn:disabled {
-  border-color: rgba(244, 192, 93, 0.86);
-  background: #a96f18;
 }
 
 .switch.on span {
