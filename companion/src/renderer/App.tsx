@@ -2869,6 +2869,15 @@ export function App() {
     : connected
       ? 'Controller not connected'
       : 'Bridge not detected';
+  const sidebarDeviceTone = personaTransitionActive
+    ? 'warn'
+    : connected && controllerConnected
+      ? 'good'
+      : connected
+        ? 'warn'
+        : snapshot?.state === 'error' || snapshot?.state === 'incompatible'
+          ? 'bad'
+          : 'idle';
   const sidebarBatteryLabel = personaTransitionActive
     ? 'Reconnecting'
     : connected && controllerConnected
@@ -4716,14 +4725,13 @@ export function App() {
       <main className="app-content">
         <section className={`hero-card status-${statusTone}`}>
           <div className="sidebar-section-label">Device</div>
-          <div className="hero-main">
+          <div className={`hero-main device-status-${sidebarDeviceTone}`}>
             <img className="controller-art" src={controllerImage} alt="" />
             <div className="status-copy">
               <div className="connection-row">
                 <strong>{sidebarDeviceTitle}</strong>
               </div>
               <div className="bridge-state compact-device-status">
-                <span className={`dot ${personaTransitionActive ? 'warn' : connected && controllerConnected ? 'good' : connected ? 'warn' : ''}`} />
                 <span>{sidebarDeviceStatus}</span>
               </div>
               <div className="battery-row compact-battery-row">

@@ -346,6 +346,18 @@ button {
     0 10px 24px rgba(0, 0, 0, 0.14);
 }
 
+.hero-main.device-status-good {
+  border-color: rgba(115, 223, 99, 0.4);
+}
+
+.hero-main.device-status-warn {
+  border-color: rgba(244, 192, 93, 0.4);
+}
+
+.hero-main.device-status-bad {
+  border-color: rgba(255, 90, 112, 0.4);
+}
+
 .controller-art {
   width: min(84px, 100%);
   max-height: 52px;

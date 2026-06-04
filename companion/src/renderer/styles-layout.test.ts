@@ -118,4 +118,16 @@ describe('companion layout CSS', () => {
     expect(normalizedStyles).not.toContain('.inline-switch:has(.switch:disabled)');
     expect(normalizedStyles).not.toContain('opacity: 1; border-color: rgba(40, 124, 255, 0.88); background: #1667dc;');
   });
+
+  it('colors the device container border by device status', () => {
+    expect(cssBlock('.hero-main.device-status-good', 'border-color: rgba(115, 223, 99, 0.4);')).toContain(
+      'border-color: rgba(115, 223, 99, 0.4);'
+    );
+    expect(cssBlock('.hero-main.device-status-warn', 'border-color: rgba(244, 192, 93, 0.4);')).toContain(
+      'border-color: rgba(244, 192, 93, 0.4);'
+    );
+    expect(cssBlock('.hero-main.device-status-bad', 'border-color: rgba(255, 90, 112, 0.4);')).toContain(
+      'border-color: rgba(255, 90, 112, 0.4);'
+    );
+  });
 });

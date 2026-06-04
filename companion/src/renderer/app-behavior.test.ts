@@ -87,6 +87,17 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('!controllerControlsAvailable || !lightbarSupported || pendingAction !== null');
   });
 
+  it('uses the device container border instead of a compact status dot', () => {
+    expect(appSource).toContain('const sidebarDeviceTone =');
+    expect(appSource).toContain('className={`hero-main device-status-${sidebarDeviceTone}`}');
+    const start = appSource.indexOf('<div className="bridge-state compact-device-status">');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('</div>', start);
+    const compactStatusSource = appSource.slice(start, end);
+
+    expect(compactStatusSource).not.toContain('className={`dot');
+  });
+
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
     const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
     expect(start).toBeGreaterThanOrEqual(0);
