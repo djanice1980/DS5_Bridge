@@ -87,6 +87,7 @@ type StatusOverrides = {
   statusFlags?: number;
   hostPersonaMode?: 'dualsense' | 'xbox' | 'ds4';
   supportedHostPersonaModesMask?: number;
+  micMuted?: boolean;
 };
 
 const FULL_REAPPLY_COMMANDS = [
@@ -273,12 +274,13 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   writeU32(report, 21, overrides.uptimeSeconds ?? 10);
   report[25] = overrides.firmwareMajor ?? 1;
   report[26] = overrides.firmwareMinor ?? 5;
-  report[27] = overrides.firmwarePatch ?? 0;
+  report[27] = overrides.firmwarePatch ?? 5;
   report[28] = overrides.firmwareFlags ?? 1;
   writeU16(report, 29, overrides.speakerVolumePercent ?? 30);
   writeU16(report, 43, overrides.idleDisconnectTimeoutMinutes ?? 15);
   report[48] = overrides.hostPersonaMode === 'xbox' ? 1 : overrides.hostPersonaMode === 'ds4' ? 2 : 0;
   report[49] = overrides.supportedHostPersonaModesMask ?? 0;
+  report[51] = overrides.micMuted ? 1 : 0;
   return report;
 }
 
@@ -519,6 +521,31 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().message).toBe('Companion firmware connected');
   });
 
+  it('retries shortcut polling after a transient shortcut report read failure', async () => {
+    const service = serviceFixture({
+      hostEncodedAudioEnabled: false,
+      duplexMicEnabled: true,
+      micMuted: true,
+      muteButtonMode: 'normal'
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, micMuted: true });
+    device.shortcutReadError = new Error('could not read from HID device');
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await pollShortcut(service);
+
+    device.shortcutReadError = null;
+    (service as unknown as { shortcutFeaturePollRetryAt: number }).shortcutFeaturePollRetryAt = 0;
+    device.queueShortcutEvent(SHORTCUT_EVENT.MIC_MUTE_OFF);
+    await pollShortcut(service);
+    await flushImmediate();
+
+    expect(service.getSnapshot().settings.micMuted).toBe(false);
+  });
+
   it('does not start the companion interrupt input read loop', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
@@ -600,7 +627,7 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.4 update required');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.5 update required');
     expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
   });
 
@@ -615,9 +642,9 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('incompatible');
-    expect(snapshot.message).toBe('Firmware 1.5.4 update required');
+    expect(snapshot.message).toBe('Firmware 1.5.5 update required');
     expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
-    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.4 or newer');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.5 or newer');
     expect(device.sentReports).toEqual([]);
   });
 
@@ -652,6 +679,66 @@ describe('BridgeService', () => {
     await poll(service);
     await flushReapply();
     expect(device.sentReports).toHaveLength(FULL_REAPPLY_COMMANDS.length * 2);
+  });
+
+  it('ignores firmware-reported mic unmute when duplex mic is disabled', async () => {
+    const service = serviceFixture({ hostEncodedAudioEnabled: false, duplexMicEnabled: false, micMuted: true });
+    const device = new MockHidDevice();
+    device.settingsRevision = 4;
+    device.status = statusReport({
+      controllerConnected: true,
+      micMuted: false,
+      settingsRevision: 4,
+      uptimeSeconds: 30
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    expect(service.getSnapshot().settings.micMuted).toBe(true);
+
+    await flushReapply();
+    expect(device.sentReports.find((report) => report[7] === COMMAND_ID.SET_MIC_MUTE)?.[9]).toBe(1);
+
+    device.status = statusReport({
+      controllerConnected: true,
+      micMuted: false,
+      settingsRevision: device.settingsRevision,
+      uptimeSeconds: 31
+    });
+    await poll(service);
+
+    expect(service.getSnapshot().settings.micMuted).toBe(true);
+  });
+
+  it('syncs firmware-reported mic mute after startup settings reapply when duplex mic is enabled', async () => {
+    const service = serviceFixture({ hostEncodedAudioEnabled: false, duplexMicEnabled: true, micMuted: true });
+    const device = new MockHidDevice();
+    device.settingsRevision = 4;
+    device.status = statusReport({
+      controllerConnected: true,
+      micMuted: false,
+      settingsRevision: 4,
+      uptimeSeconds: 30
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    expect(service.getSnapshot().settings.micMuted).toBe(true);
+
+    await flushReapply();
+    expect(device.sentReports.find((report) => report[7] === COMMAND_ID.SET_MIC_MUTE)?.[9]).toBe(1);
+
+    device.status = statusReport({
+      controllerConnected: true,
+      micMuted: false,
+      settingsRevision: device.settingsRevision,
+      uptimeSeconds: 31
+    });
+    await poll(service);
+
+    expect(service.getSnapshot().settings.micMuted).toBe(false);
   });
 
   it('reapplies current settings without feature-bit fallbacks', async () => {
@@ -1149,6 +1236,86 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().status?.speakerVolumePercent).toBe(40);
     const volumeCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_SPEAKER_VOLUME).at(-1);
     expect(volumeCommand?.[9]).toBe(40);
+  });
+
+  it('applies controller mic mute events without waiting for a status poll', async () => {
+    const service = serviceFixture({
+      hostEncodedAudioEnabled: false,
+      duplexMicEnabled: true,
+      micMuted: true,
+      muteButtonMode: 'normal'
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, micMuted: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    device.queueShortcutEvent(SHORTCUT_EVENT.MIC_MUTE_OFF);
+    await pollShortcut(service);
+
+    expect(service.getSnapshot().settings.micMuted).toBe(false);
+    expect(service.getSnapshot().status?.micMuted).toBe(false);
+  });
+
+  it('emits controller mic mute snapshots before mic keepalive refresh completes', async () => {
+    const service = serviceFixture({
+      hostEncodedAudioEnabled: false,
+      duplexMicEnabled: true,
+      micMuted: true,
+      muteButtonMode: 'normal'
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: true, micMuted: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    let releaseKeepalive!: () => void;
+    const keepaliveRefresh = vi.fn(() => new Promise<void>((resolve) => {
+      releaseKeepalive = resolve;
+    }));
+    (service as unknown as {
+      updateMicKeepaliveEngine(controllerConnected: boolean): Promise<void>;
+    }).updateMicKeepaliveEngine = keepaliveRefresh;
+    const emittedMicStates: boolean[] = [];
+    service.on('snapshot', (snapshot) => {
+      emittedMicStates.push(snapshot.settings.micMuted);
+    });
+
+    device.queueShortcutEvent(SHORTCUT_EVENT.MIC_MUTE_OFF);
+    await pollShortcut(service);
+    await flushImmediate();
+
+    expect(keepaliveRefresh).toHaveBeenCalledWith(true);
+    expect(service.getSnapshot().settings.micMuted).toBe(false);
+    expect(emittedMicStates).toContain(false);
+
+    releaseKeepalive();
+    await flushImmediate();
+  });
+
+  it('ignores controller mic mute events when mic pass-through is not armed', async () => {
+    const service = serviceFixture({
+      hostEncodedAudioEnabled: false,
+      duplexMicEnabled: true,
+      micMuted: true,
+      muteButtonMode: 'keyboard'
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, micMuted: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    device.queueShortcutEvent(SHORTCUT_EVENT.MIC_MUTE_OFF);
+    await pollShortcut(service);
+
+    expect(service.getSnapshot().settings.micMuted).toBe(true);
+    expect(service.getSnapshot().status?.micMuted).toBe(true);
   });
 
   it('sends and stores classic rumble gain', async () => {

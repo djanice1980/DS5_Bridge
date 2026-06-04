@@ -129,6 +129,7 @@ describe('companion protocol', () => {
     report[47] = 1;
     report[48] = 2;
     report[49] = 0x07;
+    report[51] = 1;
     report[60] = 1;
     report[61] = 0x68;
     report[62] = 0x82;
@@ -152,6 +153,7 @@ describe('companion protocol', () => {
     expect(status.sleepKeybindEnabled).toBe(true);
     expect(status.testAdaptiveTriggersBusy).toBe(true);
     expect(status.adaptiveTriggerOutputRecent).toBe(true);
+    expect(status.micMuted).toBe(true);
     expect(status.idleDisconnectTimeoutMinutes).toBe(45);
     expect(status.signalStrengthDbm).toBe(-40);
     expect(status.muteButtonMode).toBe('keyboard');

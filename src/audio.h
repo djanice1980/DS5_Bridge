@@ -153,6 +153,7 @@ bool audio_duplex_active();
 void audio_get_host_status(audio_host_status *status);
 void audio_mic_add_packet(uint8_t const *data, uint16_t len);
 void audio_set_mic_output_state(uint8_t volume_percent, bool muted);
+void audio_set_mic_mute_led_passthrough(bool enabled);
 bool audio_set_reactive_haptics_config(
     bool enabled,
     uint8_t mode,

@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 9;
+export const PROTOCOL_MINOR = 10;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -22,7 +22,9 @@ export const REPORT_ID = {
 export const SHORTCUT_EVENT = {
   CONTROLLER_VOLUME_DOWN: 0x01,
   CONTROLLER_VOLUME_UP: 0x02,
-  SLEEP_CONTROLLER: 0x03
+  SLEEP_CONTROLLER: 0x03,
+  MIC_MUTE_ON: 0x04,
+  MIC_MUTE_OFF: 0x05
 } as const;
 
 export const AUDIO_DEBUG_EVENT = {
@@ -303,6 +305,7 @@ export interface BridgeStatusPayload {
     brightnessPercent: number;
   };
   lightbarOverrideEnabled: boolean;
+  micMuted: boolean;
   muteButtonMode: MuteButtonMode;
   muteKeyboardUsage: number;
   muteKeyboardModifiers: number;
@@ -618,6 +621,7 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
       brightnessPercent: report[34]
     },
     lightbarOverrideEnabled: report[59] === 1,
+    micMuted: report[51] === 1,
     muteButtonMode: muteButtonMode(report[60]),
     muteKeyboardUsage: report[61],
     muteKeyboardModifiers: report[62] & MUTE_KEYBOARD_MODIFIER_MASK,

@@ -283,9 +283,12 @@ static uint16_t mic_peak_permille = 0;
 static volatile bool mic_usb_playout_started = false;
 static volatile uint8_t mic_output_volume_percent = 100;
 static volatile bool mic_output_muted = false;
+static volatile bool mic_mute_led_passthrough = false;
 static bool controller_mic_state_valid = false;
 static uint8_t controller_mic_state_volume_percent = 0xff;
 static bool controller_mic_state_muted = true;
+static bool controller_mic_state_control_mute_led = false;
+static bool controller_mic_state_mute_led = false;
 static mic_decode_element mic_usb_pending{};
 static uint16_t mic_usb_pending_offset = 0;
 static uint16_t mic_usb_pending_len = 0;
@@ -371,19 +374,25 @@ static void refresh_controller_mic_transport_state(bool force = false) {
 
     const uint8_t volume_percent = mic_output_volume_percent;
     const bool muted = controller_mic_transport_muted();
+    const bool control_mute_led = mic_mute_led_passthrough;
+    const bool mute_led = control_mute_led && mic_output_muted;
     if (
         !force
         && controller_mic_state_valid
         && controller_mic_state_volume_percent == volume_percent
         && controller_mic_state_muted == muted
+        && controller_mic_state_control_mute_led == control_mute_led
+        && controller_mic_state_mute_led == mute_led
     ) {
         return;
     }
 
-    bt_set_microphone_state(volume_percent, muted);
+    bt_set_microphone_state(volume_percent, muted, control_mute_led, mute_led);
     controller_mic_state_valid = true;
     controller_mic_state_volume_percent = volume_percent;
     controller_mic_state_muted = muted;
+    controller_mic_state_control_mute_led = control_mute_led;
+    controller_mic_state_mute_led = mute_led;
 }
 
 static void reset_controller_audio_report_counters() {
@@ -1910,6 +1919,14 @@ void audio_set_mic_output_state(uint8_t volume_percent, bool muted) {
     if (muted && !was_muted) {
         clear_mic_queues();
     }
+    refresh_controller_mic_transport_state(true);
+}
+
+void audio_set_mic_mute_led_passthrough(bool enabled) {
+    if (mic_mute_led_passthrough == enabled) {
+        return;
+    }
+    mic_mute_led_passthrough = enabled;
     refresh_controller_mic_transport_state(true);
 }
 

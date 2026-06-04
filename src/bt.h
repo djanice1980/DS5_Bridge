@@ -49,7 +49,7 @@ struct bt_output_debug_stats {
 void bt_get_output_debug_stats(bt_output_debug_stats *stats);
 void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);
 void bt_set_mute_led(bool enabled);
-void bt_set_microphone_state(uint8_t volume_percent, bool muted);
+void bt_set_microphone_state(uint8_t volume_percent, bool muted, bool control_mute_led, bool mute_led);
 void bt_set_speaker_output_enabled(bool enabled, bool headset_plugged = false, bool force = false);
 void bt_rearm_speaker_output_route(bool headset_plugged);
 void bt_refresh_speaker_output();

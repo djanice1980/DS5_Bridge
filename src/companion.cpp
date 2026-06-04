@@ -20,11 +20,11 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 9;
+constexpr uint8_t kProtocolMinor = 10;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 5;
-constexpr uint8_t kFirmwarePatch = 4;
+constexpr uint8_t kFirmwarePatch = 5;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -156,6 +156,8 @@ enum ShortcutEvent : uint8_t {
     ShortcutEventControllerVolumeDown = 0x01,
     ShortcutEventControllerVolumeUp = 0x02,
     ShortcutEventSleepController = 0x03,
+    ShortcutEventMicMuteOn = 0x04,
+    ShortcutEventMicMuteOff = 0x05,
 };
 
 enum ShortcutSetting : uint8_t {
@@ -322,6 +324,7 @@ bool trigger_power_reset_pending = false;
 uint32_t last_game_trigger_update_us = 0;
 uint8_t companion_mic_volume_percent = 100;
 bool companion_mic_muted = false;
+bool companion_mic_enabled = false;
 uint8_t button_remap[RemapButtonCount]{};
 
 struct LastAck {
@@ -715,6 +718,8 @@ void restore_defaults() {
     );
     companion_mic_volume_percent = 100;
     companion_mic_muted = false;
+    companion_mic_enabled = false;
+    audio_set_mic_mute_led_passthrough(false);
     audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
     reset_button_remap();
     bt_set_mute_led(false);
@@ -777,6 +782,35 @@ bool valid_mute_button_action(uint16_t mode, uint8_t usage) {
     return true;
 }
 
+bool mic_mute_led_passthrough_enabled() {
+    return mute_button_mode == MuteButtonNormal && companion_mic_enabled;
+}
+
+bool desired_mute_led_enabled() {
+    return (mic_mute_led_passthrough_enabled() && companion_mic_muted) || audio_quiet_mode_enabled();
+}
+
+void refresh_mute_led_policy() {
+    audio_set_mic_mute_led_passthrough(mic_mute_led_passthrough_enabled());
+    bt_set_mute_led(desired_mute_led_enabled());
+}
+
+void set_companion_mic_muted(bool muted) {
+    companion_mic_muted = muted;
+    audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+    refresh_mute_led_policy();
+}
+
+void toggle_companion_mic_mute() {
+    if (!companion_mic_enabled) {
+        refresh_mute_led_policy();
+        return;
+    }
+    set_companion_mic_muted(!companion_mic_muted);
+    queue_shortcut_event(companion_mic_muted ? ShortcutEventMicMuteOn : ShortcutEventMicMuteOff);
+    settings_revision++;
+}
+
 void set_mute_button_action(uint8_t mode, uint8_t usage, uint8_t modifiers) {
     mute_button_mode = mode;
     mute_keyboard_usage = usage == 0 ? kDefaultMuteKeyboardUsage : usage;
@@ -788,10 +822,8 @@ void set_mute_button_action(uint8_t mode, uint8_t usage, uint8_t modifiers) {
 
     if (mute_button_mode != MuteButtonQuiet) {
         audio_set_quiet_mode(false);
-        bt_set_mute_led(false);
-    } else {
-        bt_set_mute_led(audio_quiet_mode_enabled());
     }
+    refresh_mute_led_policy();
 }
 
 bool mute_keyboard_hold_enabled() {
@@ -815,13 +847,13 @@ void queue_mute_keyboard_release() {
     mute_keyboard_pressed = true;
     mute_keyboard_release_at_us = time_us_32();
     mute_led_flash_pending = false;
-    bt_set_mute_led(false);
+    refresh_mute_led_policy();
 }
 
 void toggle_quiet_mode() {
     const bool enabled = !audio_quiet_mode_enabled();
     audio_set_quiet_mode(enabled);
-    bt_set_mute_led(enabled);
+    refresh_mute_led_policy();
 }
 
 uint8_t trigger_power_reduction(uint8_t intensity_percent) {
@@ -1281,9 +1313,7 @@ void mute_keyboard_loop() {
 
     if (mute_led_flash_pending && static_cast<int32_t>(now - mute_led_flash_until_us) >= 0) {
         mute_led_flash_pending = false;
-        if (!audio_quiet_mode_enabled()) {
-            bt_set_mute_led(false);
-        }
+        refresh_mute_led_policy();
     }
 
     const uint8_t keyboard_hid_instance = host_persona_keyboard_hid_instance();
@@ -1407,6 +1437,7 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[46] = game_trigger_update_recent() ? 1 : 0;
     buffer[47] = static_cast<uint8_t>(host_persona_active());
     buffer[48] = supported_host_persona_mask();
+    buffer[50] = companion_mic_muted ? 1 : 0;
     buffer[58] = lightbar_override_enabled ? 1 : 0;
     buffer[59] = mute_button_mode;
     buffer[60] = mute_keyboard_usage;
@@ -1716,8 +1747,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            companion_mic_muted = value == 1;
-            audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+            set_companion_mic_muted(value == 1);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -2081,7 +2111,12 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
+            if (value == 0) {
+                companion_mic_enabled = false;
+                set_companion_mic_muted(true);
+            }
             audio_host_set_requested(value == 1);
+            refresh_mute_led_policy();
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -2118,7 +2153,13 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            audio_host_set_duplex_requested(value == 1);
+            companion_mic_enabled = value == 1;
+            audio_host_set_duplex_requested(companion_mic_enabled);
+            if (!companion_mic_enabled) {
+                set_companion_mic_muted(true);
+            } else {
+                refresh_mute_led_policy();
+            }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -2345,12 +2386,12 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     }
 
     const bool pressed = (report[9] & kMuteButtonBit) != 0;
-    if (mute_button_mode != MuteButtonNormal) {
-        report[9] &= static_cast<uint8_t>(~kMuteButtonBit);
-    }
+    report[9] &= static_cast<uint8_t>(~kMuteButtonBit);
 
     if (pressed && !mute_button_last_pressed) {
-        if (mute_button_mode == MuteButtonKeyboard) {
+        if (mute_button_mode == MuteButtonNormal) {
+            toggle_companion_mic_mute();
+        } else if (mute_button_mode == MuteButtonKeyboard) {
             queue_mute_keyboard_press(mute_keyboard_hold_enabled());
         } else if (mute_button_mode == MuteButtonQuiet) {
             toggle_quiet_mode();

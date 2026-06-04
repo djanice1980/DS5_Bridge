@@ -84,6 +84,8 @@ import { SettingsStore, normalizeUiScalePercent } from './settings-store';
 import { WinUsbCompanionTransport } from './winusb-companion-transport';
 
 const POLL_INTERVAL_MS = 500;
+const SHORTCUT_POLL_INTERVAL_MS = 50;
+const SHORTCUT_POLL_ERROR_RETRY_MS = 250;
 const HOST_AUDIO_HEARTBEAT_MS = 250;
 const HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS = 5000;
 const HOST_AUDIO_STATUS_READ_INTERVAL_MS = 500;
@@ -102,7 +104,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.4';
+const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.5';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const TRIGGER_TRACE_LOG_LINE_LIMIT = 300;
@@ -221,7 +223,7 @@ function isSupportedFirmwareVersion(version: string): boolean {
   if (![major, minor, patch].every(Number.isFinite)) {
     return false;
   }
-  return major > 1 || (major === 1 && (minor > 5 || (minor === 5 && patch >= 0)));
+  return major > 1 || (major === 1 && (minor > 5 || (minor === 5 && patch >= 5)));
 }
 
 function hostAudioCaptureIssueMessage(
@@ -572,6 +574,8 @@ function parseShortcutEvent(data: Buffer | number[]): ShortcutEvent | null {
     case SHORTCUT_EVENT.CONTROLLER_VOLUME_DOWN:
     case SHORTCUT_EVENT.CONTROLLER_VOLUME_UP:
     case SHORTCUT_EVENT.SLEEP_CONTROLLER:
+    case SHORTCUT_EVENT.MIC_MUTE_ON:
+    case SHORTCUT_EVENT.MIC_MUTE_OFF:
       return event;
     default:
       return null;
@@ -1059,6 +1063,8 @@ export class BridgeService extends EventEmitter {
   private hostPersonaTransitionPollTimer: NodeJS.Timeout | null = null;
   private pollInFlight = false;
   private pollAgainRequested = false;
+  private shortcutPollTimer: NodeJS.Timeout | null = null;
+  private shortcutPollInFlight = false;
   private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
   private readonly hostAudioEngine = new HostAudioEngine();
   private readonly systemAudioHapticsEngine = new SystemAudioHapticsEngine();
@@ -1115,12 +1121,14 @@ export class BridgeService extends EventEmitter {
   private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
-  private shortcutFeaturePollingAvailable = true;
-  private volumeShortcutQueue: Promise<void> = Promise.resolve();
+  private shortcutFeaturePollRetryAt = 0;
+  private shortcutActionQueue: Promise<void> = Promise.resolve();
   private readonly shortcutActionHandlers: Record<ShortcutEvent, () => Promise<void>> = {
     [SHORTCUT_EVENT.CONTROLLER_VOLUME_DOWN]: () => this.applyControllerVolumeShortcut(-10),
     [SHORTCUT_EVENT.CONTROLLER_VOLUME_UP]: () => this.applyControllerVolumeShortcut(10),
-    [SHORTCUT_EVENT.SLEEP_CONTROLLER]: () => this.applySleepShortcut()
+    [SHORTCUT_EVENT.SLEEP_CONTROLLER]: () => this.applySleepShortcut(),
+    [SHORTCUT_EVENT.MIC_MUTE_ON]: () => this.applyControllerMicMuteEvent(true),
+    [SHORTCUT_EVENT.MIC_MUTE_OFF]: () => this.applyControllerMicMuteEvent(false)
   };
 
   constructor(private readonly settingsStore: SettingsStore) {
@@ -1178,7 +1186,7 @@ export class BridgeService extends EventEmitter {
   }
 
   private enqueueShortcutEvent(event: ShortcutEvent): void {
-    this.volumeShortcutQueue = this.volumeShortcutQueue
+    this.shortcutActionQueue = this.shortcutActionQueue
       .catch(() => {
         // Keep later shortcut events alive after a failed command.
       })
@@ -1187,19 +1195,22 @@ export class BridgeService extends EventEmitter {
 
   private async pollShortcutEvent(): Promise<void> {
     const device = this.device;
-    if (!device || !this.shortcutFeaturePollingAvailable) {
+    if (!device || Date.now() < this.shortcutFeaturePollRetryAt) {
       return;
     }
 
     try {
       const event = parseShortcutEvent(await device.getFeatureReport(REPORT_ID.INPUT, REPORT_LENGTH));
+      this.shortcutFeaturePollRetryAt = 0;
       if (event !== null) {
         this.enqueueShortcutEvent(event);
       }
     } catch {
       // Shortcut polling is optional and should never make the bridge look
-      // disconnected on its own.
-      this.shortcutFeaturePollingAvailable = false;
+      // disconnected on its own. Keep retrying so one transient control
+      // transfer failure does not leave controller shortcuts on the slow
+      // status-poll path.
+      this.shortcutFeaturePollRetryAt = Date.now() + SHORTCUT_POLL_ERROR_RETRY_MS;
     }
   }
 
@@ -1208,6 +1219,10 @@ export class BridgeService extends EventEmitter {
     this.pollTimer = setInterval(() => {
       this.runPoll();
     }, POLL_INTERVAL_MS);
+    this.runShortcutPoll();
+    this.shortcutPollTimer = setInterval(() => {
+      this.runShortcutPoll();
+    }, SHORTCUT_POLL_INTERVAL_MS);
     this.hostAudioHeartbeatTimer = setInterval(() => {
       this.pulseAudioHelpers().catch((error) => this.publishError(error));
     }, HOST_AUDIO_HEARTBEAT_MS);
@@ -1219,6 +1234,10 @@ export class BridgeService extends EventEmitter {
       this.pollTimer = null;
     }
     this.clearHostPersonaTransitionPollTimer();
+    if (this.shortcutPollTimer) {
+      clearInterval(this.shortcutPollTimer);
+      this.shortcutPollTimer = null;
+    }
     if (this.hostAudioHeartbeatTimer) {
       clearInterval(this.hostAudioHeartbeatTimer);
       this.hostAudioHeartbeatTimer = null;
@@ -1351,6 +1370,18 @@ export class BridgeService extends EventEmitter {
         } else {
           this.pollAgainRequested = false;
         }
+      });
+  }
+
+  private runShortcutPoll(): void {
+    if (this.shortcutPollInFlight) {
+      return;
+    }
+    this.shortcutPollInFlight = true;
+    this.pollShortcutEvent()
+      .catch((error) => this.publishError(error))
+      .finally(() => {
+        this.shortcutPollInFlight = false;
       });
   }
 
@@ -2028,8 +2059,8 @@ export class BridgeService extends EventEmitter {
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       micMuted: enabled
     }));
-    await this.updateMicKeepaliveEngine(Boolean(this.snapshot.status?.controllerConnected));
     this.emitSnapshot();
+    await this.updateMicKeepaliveEngine(Boolean(this.snapshot.status?.controllerConnected));
     return this.getSnapshot();
   }
 
@@ -2251,6 +2282,19 @@ export class BridgeService extends EventEmitter {
       return;
     }
     await this.sleepController();
+  }
+
+  private async applyControllerMicMuteEvent(micMuted: boolean): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.duplexMicEnabled || settings.muteButtonMode !== 'normal') {
+      return;
+    }
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({ micMuted }));
+    if (this.snapshot.status) {
+      this.snapshot.status.micMuted = micMuted;
+    }
+    this.emitSnapshot();
+    void this.updateMicKeepaliveEngine(Boolean(this.snapshot.status?.controllerConnected));
   }
 
   async setIdleDisconnectTimeoutMinutes(minutes: number): Promise<BridgeSnapshot> {
@@ -3193,7 +3237,14 @@ export class BridgeService extends EventEmitter {
     }
     this.lastUptimeSeconds = status.uptimeSeconds;
 
-    const settings = this.settingsStore.get();
+    let settings = this.settingsStore.get();
+    if (
+      this.reappliedSessionKey === this.sessionKey
+      && settings.duplexMicEnabled
+      && settings.micMuted !== status.micMuted
+    ) {
+      settings = this.settingsStore.update(customSettingUpdate({ micMuted: status.micMuted }));
+    }
     const state = transition ? 'transitioning' : 'connected';
 
     this.snapshot = {
@@ -3254,7 +3305,7 @@ export class BridgeService extends EventEmitter {
           void this.handleCompanionTransportClose(openedDevice);
         });
         this.devicePath = this.device.path;
-        this.shortcutFeaturePollingAvailable = true;
+        this.shortcutFeaturePollRetryAt = 0;
         this.lastUptimeSeconds = null;
         this.sessionKey = null;
         this.sessionPath = null;
