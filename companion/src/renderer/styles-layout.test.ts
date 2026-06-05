@@ -450,6 +450,19 @@ describe('companion layout CSS', () => {
     expect(shellTokens).toContain('--command-chip-muted-bg: color-mix(in srgb, var(--accent) 14%, var(--command-chip-base) 86%);');
   });
 
+  it('uses the main haptics gain control in the Audio Haptics card', () => {
+    expect(appSource).not.toContain('AUDIO_REACTIVE_HAPTICS_GAIN_PERCENT');
+    expect(appSource).not.toContain('audioReactiveHapticsGainValue');
+    expect(appSource).not.toContain('commitAudioReactiveHapticsGain');
+    expect(appSource).not.toContain('setAudioReactiveHapticsPreset');
+    expect(appSource).toContain('aria-label="Haptics gain"');
+    expect(appSource).toContain('value={hapticsValue}');
+    expect(appSource).toContain('max={hapticsSliderMax}');
+    expect(appSource).toContain('onPointerUp={() => void commitHapticsValue()}');
+    expect(appSource).toContain('{HAPTICS_PRESETS.map(([label, value]) => {');
+    expect(appSource).toContain('onClick={() => setHapticsPreset(presetValue)}');
+  });
+
   it('uses solid command-chip tokens for overview status actions', () => {
     expect(cssBlock('.overview-chip', 'background: var(--command-chip-bg);')).toContain(
       'border: 1px solid var(--command-chip-border);'

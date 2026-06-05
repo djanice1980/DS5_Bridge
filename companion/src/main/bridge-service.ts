@@ -129,6 +129,7 @@ const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
 const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
+const AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT = 100;
 const AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG = 0x80;
 const SONY_VENDOR_ID = 0x054c;
 const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
@@ -518,9 +519,7 @@ function normalizeAudioReactiveHapticsConfig(
     enabled: typeof config.enabled === 'boolean' ? config.enabled : settings.audioReactiveHapticsEnabled,
     source: normalizeAudioReactiveHapticsSource(config.source ?? settings.audioReactiveHapticsSource),
     mode: normalizeAudioReactiveHapticsMode(config.mode ?? settings.audioReactiveHapticsMode),
-    gainPercent: Number.isFinite(config.gainPercent)
-      ? Math.max(0, Math.min(200, Math.round(config.gainPercent!)))
-      : settings.audioReactiveHapticsGainPercent,
+    gainPercent: AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT,
     bassFocus: normalizeAudioReactiveHapticsBassFocus(config.bassFocus ?? settings.audioReactiveHapticsBassFocus),
     response: normalizeAudioReactiveHapticsResponse(config.response ?? settings.audioReactiveHapticsResponse),
     attack: normalizeAudioReactiveHapticsAttack(config.attack ?? settings.audioReactiveHapticsAttack),
@@ -1915,7 +1914,7 @@ export class BridgeService extends EventEmitter {
   private systemAudioHapticsConfig(settings: CompanionSettings): SystemAudioHapticsConfig {
     return {
       source: settings.audioReactiveHapticsSource,
-      gainPercent: settings.audioReactiveHapticsGainPercent,
+      gainPercent: AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT,
       bassFocus: settings.audioReactiveHapticsBassFocus,
       response: settings.audioReactiveHapticsResponse,
       attack: settings.audioReactiveHapticsAttack,
@@ -1924,7 +1923,7 @@ export class BridgeService extends EventEmitter {
   }
 
   private audioReactiveHapticsCommandPayload(settings: CompanionSettings): number[] {
-    const gain = Math.max(0, Math.min(200, Math.round(settings.audioReactiveHapticsGainPercent)));
+    const gain = AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT;
     const mode = audioReactiveHapticsModeValue(settings.audioReactiveHapticsMode)
       | (this.audioReactiveHapticsSuppressesClassicRumble(settings)
         ? AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG

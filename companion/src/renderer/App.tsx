@@ -179,8 +179,6 @@ type FeatureFocusTarget = 'host-encoding';
 const HAPTICS_STEP = 20;
 const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
 const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
-const AUDIO_REACTIVE_HAPTICS_STEP = 10;
-const AUDIO_REACTIVE_HAPTICS_GAIN_PERCENT = 200;
 const SPEAKER_VOLUME_STEP = 10;
 const MIC_VOLUME_STEP = 10;
 const LIGHTBAR_BRIGHTNESS_STEP = 10;
@@ -220,11 +218,6 @@ const HAPTICS_PRESETS: Array<[string, number]> = [
   ['Medium', 100],
   ['High', 150]
 ];
-const AUDIO_REACTIVE_HAPTICS_PRESETS: Array<[string, number]> = [
-  ['Low', 60],
-  ['Medium', 100],
-  ['High', 150]
-];
 const SPEAKER_VOLUME_PRESETS: Array<[string, number]> = [
   ['Low', 30],
   ['Medium', 70],
@@ -244,7 +237,6 @@ const PERCENT_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 10
 const TRIGGER_LAB_SLIDER_STEP = 5;
 const TRIGGER_LAB_SLIDER_TICKS = Array.from({ length: 21 }, (_, index) => index * TRIGGER_LAB_SLIDER_STEP);
 const STANDARD_HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
-const AUDIO_REACTIVE_HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
 const BRIDGE_AUDIO_OUTPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
 const BRIDGE_AUDIO_INPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
 const BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE = 'DualSense audio endpoint unavailable';
@@ -557,16 +549,6 @@ type CustomSelectProps<T extends SelectValue> = {
 
 function snapHapticsValue(value: number, max = STANDARD_FEEDBACK_GAIN_PERCENT): number {
   return Math.max(0, Math.min(max, Math.round(value / HAPTICS_STEP) * HAPTICS_STEP));
-}
-
-function snapAudioReactiveHapticsGain(value: number): number {
-  return Math.max(
-    0,
-    Math.min(
-      AUDIO_REACTIVE_HAPTICS_GAIN_PERCENT,
-      Math.round(value / AUDIO_REACTIVE_HAPTICS_STEP) * AUDIO_REACTIVE_HAPTICS_STEP
-    )
-  );
 }
 
 function audioHapticsAppSource(source: AudioReactiveHapticsSource | null | undefined) {
@@ -2127,7 +2109,6 @@ export function App() {
   const [classicRumbleValue, setClassicRumbleValue] = useState(100);
   const [speakerVolumeValue, setSpeakerVolumeValue] = useState(100);
   const [micVolumeValue, setMicVolumeValue] = useState(100);
-  const [audioReactiveHapticsGainValue, setAudioReactiveHapticsGainValue] = useState(100);
   const [lightbarColor, setLightbarColor] = useState('#ffff00');
   const [customLightbarColor, setCustomLightbarColor] = useState<string | null>(() => {
     const saved = window.localStorage.getItem('ds5bridge.customLightbarColor');
@@ -2200,7 +2181,6 @@ export function App() {
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
   const micVolumeEditingRef = useRef(false);
-  const audioReactiveHapticsEditingRef = useRef(false);
   const lightbarBrightnessEditingRef = useRef(false);
   const triggerEffectEditingRef = useRef(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
@@ -2317,9 +2297,6 @@ export function App() {
     }
     if (!micVolumeEditingRef.current) {
       setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
-    }
-    if (!audioReactiveHapticsEditingRef.current) {
-      setAudioReactiveHapticsGainValue(snapAudioReactiveHapticsGain(next.settings.audioReactiveHapticsGainPercent));
     }
     const nextLightbarColor = lightbarColorFromSnapshot(next);
     setLightbarColor(nextLightbarColor);
@@ -3545,7 +3522,6 @@ export function App() {
       || !hapticsEnabled
       || audioReactiveHapticsCommitPending
     ) {
-      audioReactiveHapticsEditingRef.current = false;
       return null;
     }
 
@@ -3560,29 +3536,6 @@ export function App() {
       return next;
     } finally {
       setAudioReactiveHapticsCommitPending(false);
-      audioReactiveHapticsEditingRef.current = false;
-    }
-  }
-
-  async function commitAudioReactiveHapticsGain(value = audioReactiveHapticsGainValue) {
-    const snappedValue = snapAudioReactiveHapticsGain(value);
-    if (
-      !snapshot
-      || snapshot.state !== 'connected'
-      || !audioReactiveHapticsSupported
-      || !hapticsEnabled
-      || !snapshot.settings.audioReactiveHapticsEnabled
-      || snappedValue === snapshot.settings.audioReactiveHapticsGainPercent
-      || audioReactiveHapticsCommitPending
-    ) {
-      audioReactiveHapticsEditingRef.current = false;
-      return;
-    }
-
-    audioReactiveHapticsEditingRef.current = true;
-    const next = await commitAudioReactiveHapticsConfig({ gainPercent: snappedValue });
-    if (next) {
-      setAudioReactiveHapticsGainValue(snapAudioReactiveHapticsGain(next.settings.audioReactiveHapticsGainPercent));
     }
   }
 
@@ -3629,13 +3582,6 @@ export function App() {
   function setAudioReactiveHapticsRelease(release: AudioReactiveHapticsRelease) {
     if (!snapshot || release === snapshot.settings.audioReactiveHapticsRelease) return;
     void commitAudioReactiveHapticsConfig({ release });
-  }
-
-  function setAudioReactiveHapticsPreset(value: number) {
-    const snappedValue = snapAudioReactiveHapticsGain(value);
-    audioReactiveHapticsEditingRef.current = true;
-    setAudioReactiveHapticsGainValue(snappedValue);
-    void commitAudioReactiveHapticsGain(snappedValue);
   }
 
   function setTriggerIntensityPreset(value: number) {
@@ -5442,51 +5388,57 @@ export function App() {
                           <input
                             type="range"
                             min="0"
-                            max={AUDIO_REACTIVE_HAPTICS_GAIN_PERCENT}
-                            step={AUDIO_REACTIVE_HAPTICS_STEP}
-                            value={audioReactiveHapticsGainValue}
-                            disabled={audioReactiveHapticsConfigDisabled}
-                            style={{ '--range-fill': `${(audioReactiveHapticsGainValue / AUDIO_REACTIVE_HAPTICS_GAIN_PERCENT) * 100}%` } as CSSProperties}
-                            aria-label="Audio haptics gain"
+                            max={hapticsSliderMax}
+                            step={HAPTICS_STEP}
+                            value={hapticsValue}
+                            disabled={!connected || !snapshot.settings.hapticsEnabled || hapticsCommitPending}
+                            style={{ '--range-fill': `${(hapticsValue / hapticsSliderMax) * 100}%` } as CSSProperties}
+                            aria-label="Haptics gain"
                             onPointerDown={() => {
-                              audioReactiveHapticsEditingRef.current = true;
+                              hapticsEditingRef.current = true;
                             }}
-                            onChange={(event) => setAudioReactiveHapticsGainValue(snapAudioReactiveHapticsGain(Number(event.currentTarget.value)))}
-                            onPointerUp={() => void commitAudioReactiveHapticsGain()}
+                            onChange={(event) => setHapticsValue(snapHapticsValue(
+                              Number(event.currentTarget.value),
+                              hapticsSliderMax
+                            ))}
+                            onPointerUp={() => void commitHapticsValue()}
                             onKeyDown={(event) => {
                               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
-                                audioReactiveHapticsEditingRef.current = true;
+                                hapticsEditingRef.current = true;
                               }
                             }}
                             onKeyUp={(event) => {
                               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
-                                void commitAudioReactiveHapticsGain();
+                                void commitHapticsValue();
                               }
                             }}
-                            onBlur={() => void commitAudioReactiveHapticsGain()}
+                            onBlur={() => void commitHapticsValue()}
                           />
                           <div className="range-ticks" aria-hidden="true">
-                            {AUDIO_REACTIVE_HAPTICS_SLIDER_TICKS.map((value) => (
-                              <span key={value} className={sliderTickClass(value, AUDIO_REACTIVE_HAPTICS_GAIN_PERCENT)} />
+                            {hapticsSliderTicks.map((value) => (
+                              <span key={value} className={sliderTickClass(value, hapticsSliderMax)} />
                             ))}
                           </div>
                         </div>
-                        <strong>{audioReactiveHapticsGainValue}%</strong>
+                        <strong>{hapticsValue}%</strong>
                       </label>
                     </div>
                     <span className="audio-haptics-slider-spacer" aria-hidden="true" />
                     <div className="segmented-row">
-                      {AUDIO_REACTIVE_HAPTICS_PRESETS.map(([label, value]) => (
-                        <button
-                          key={label}
-                          type="button"
-                          className={audioReactiveHapticsGainValue === value ? 'active' : ''}
-                          disabled={audioReactiveHapticsConfigDisabled}
-                          onClick={() => setAudioReactiveHapticsPreset(Number(value))}
-                        >
-                          {label}
-                        </button>
-                      ))}
+                      {HAPTICS_PRESETS.map(([label, value]) => {
+                        const presetValue = snapHapticsValue(Number(value), hapticsSliderMax);
+                        return (
+                          <button
+                            key={label}
+                            type="button"
+                            className={hapticsValue === presetValue ? 'active' : ''}
+                            disabled={!connected || !snapshot.settings.hapticsEnabled || hapticsCommitPending}
+                            onClick={() => setHapticsPreset(presetValue)}
+                          >
+                            {label}
+                          </button>
+                        );
+                      })}
                     </div>
                     <div className="audio-haptics-routing-stack">
                       <label className="audio-haptics-source-field">
