@@ -76,7 +76,7 @@ import {
   DEFAULT_UI_THEME_PRESET,
   UI_THEME_KOFI_BADGES,
   UI_THEME_OPTIONS,
-  UI_THEME_SWATCHES
+  UI_THEME_PREVIEW_SWATCHES
 } from './ui-themes';
 import { DEFAULT_BUTTON_REMAP_PROFILE_ID, DEFAULT_CONTROLLER_PROFILE_ID, REMAP_BUTTON_IDS, ackResultName } from '../shared/protocol';
 import type {
@@ -1965,10 +1965,10 @@ function CustomSelect<T extends SelectValue>({
 
 function ThemeOption({ label, value }: { label: string; value: UiThemePreset }) {
   return (
-    <span className="theme-option">
-      <span className="theme-option-swatches" aria-hidden="true">
-        {UI_THEME_SWATCHES[value].map((color, index) => (
-          <span key={`${value}-${index}`} style={{ background: color }} />
+      <span className="theme-option">
+        <span className="theme-option-swatches" aria-hidden="true">
+        {UI_THEME_PREVIEW_SWATCHES[value].map((swatch) => (
+          <span key={`${value}-${swatch.role}`} title={swatch.role} style={{ background: swatch.color }} />
         ))}
       </span>
       <span className="theme-option-label">{label}</span>

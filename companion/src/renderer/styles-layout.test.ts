@@ -134,6 +134,10 @@ describe('companion layout CSS', () => {
     }
     expect(appSource).toContain('ariaLabel="UI theme"');
     expect(appSource).toContain('settings-theme-select');
+    expect(appSource).toContain('UI_THEME_PREVIEW_SWATCHES[value].map((swatch)');
+    expect(themeSource).toContain('export type UiThemePreviewSwatch');
+    expect(themeSource).toContain("role: 'Canvas' | 'Surface' | 'Accent' | 'Signal';");
+    expect(themeSource).toContain('UI_THEME_PREVIEW_SWATCHES');
     expect(themeSource).toContain('support_me_on_kofi_badge_beige.png');
     expect(themeSource).toContain('support_me_on_kofi_badge_blue.png');
     expect(themeSource).toContain('support_me_on_kofi_badge_red.png');
