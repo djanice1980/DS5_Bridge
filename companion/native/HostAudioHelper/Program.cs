@@ -241,6 +241,8 @@ sealed class HostAudioHelper : IDisposable
     private bool timerResolutionRaised;
     private bool disposed;
 
+    private bool HapticsFrameOutput => options.HapticsOnly && options.StdoutOnly;
+
     public HostAudioHelper(HelperOptions options)
     {
         this.options = options;
@@ -642,6 +644,18 @@ sealed class HostAudioHelper : IDisposable
 
     private WaveFormat? TryStartHapticsMirrorOutput(MMDevice targetDevice, string targetName)
     {
+        if (HapticsFrameOutput)
+        {
+            hapticsMirrorFormat = null;
+            hapticsMirrorScratch = Array.Empty<byte>();
+            hapticsMirrorScratchLength = 0;
+            hapticsMirrorBuffer = null;
+            hapticsMirrorOutput = null;
+            Console.Error.WriteLine(
+                $"status: haptics-direct-output target='{EscapeStatusValue(targetName)}'");
+            return new WaveFormat(AudioConstants.TargetSampleRate, 16, 4);
+        }
+
         var targetFormat = targetDevice.AudioClient.MixFormat;
         if (targetFormat.Channels < 4)
         {
@@ -1331,6 +1345,12 @@ sealed class HostAudioHelper : IDisposable
 
     private void ProcessHapticsOnlyPcm(byte[] buffer, int byteCount, WaveFormat format)
     {
+        if (HapticsFrameOutput)
+        {
+            ProcessHapticsOnlyFramePcm(buffer, byteCount, format);
+            return;
+        }
+
         var targetFormat = hapticsMirrorFormat;
         if (targetFormat is null || hapticsMirrorBuffer is null)
         {
@@ -1371,6 +1391,43 @@ sealed class HostAudioHelper : IDisposable
             }
         }
         FlushHapticsMirrorScratch();
+    }
+
+    private void ProcessHapticsOnlyFramePcm(byte[] buffer, int byteCount, WaveFormat format)
+    {
+        var channels = Math.Max(1, format.Channels);
+        var bytesPerSample = Math.Max(1, format.BitsPerSample / 8);
+        var frameBytes = channels * bytesPerSample;
+        var frameCount = byteCount / frameBytes;
+        var outputPerInput = AudioConstants.TargetSampleRate / (double)format.SampleRate;
+        if (AudioConstants.DiagnosticsEnabled)
+        {
+            capturedCallbacks++;
+            capturedFrames += frameCount;
+        }
+
+        for (var frame = 0; frame < frameCount; frame++)
+        {
+            var offset = frame * frameBytes;
+            var left = ReadSample(buffer, byteCount, offset, format);
+            var right = channels > 1 ? ReadSample(buffer, byteCount, offset + bytesPerSample, format) : left;
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                var peak = (int)Math.Round(Math.Max(Math.Abs(left), Math.Abs(right)) * 1000);
+                if (peak > peakSamplePermille)
+                {
+                    Interlocked.Exchange(ref peakSamplePermille, peak);
+                }
+            }
+
+            resampleCredit += outputPerInput;
+            while (resampleCredit >= 1)
+            {
+                var processed = ProcessReactiveHapticsSample(left, right);
+                PushPicoInputSample(0, 0, processed.Left, processed.Right, true);
+                resampleCredit -= 1;
+            }
+        }
     }
 
     private static float ReadSample(byte[] buffer, int byteCount, int offset, WaveFormat format)

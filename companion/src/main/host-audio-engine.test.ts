@@ -132,6 +132,36 @@ describe('SystemAudioHapticsEngine app source', () => {
     expect(args).toContain('C:\\Games\\Game.exe');
     expect(args).toContain('--haptics-app-executable');
     expect(args).toContain('Game.exe');
+    expect(args).not.toContain('--stdout-only');
+
+    await engine.stop();
+  });
+
+  it('parses direct haptics frames from stdout', async () => {
+    const engine = new SystemAudioHapticsEngine();
+    const frames: HostAudioFramePayload[] = [];
+    engine.on('frame', (frame) => frames.push(frame));
+
+    const start = engine.start({
+      source: 'system-audio',
+      gainPercent: 100,
+      bassFocus: 'balanced',
+      response: 'balanced',
+      attack: 'balanced',
+      release: 'balanced',
+      directFrames: true
+    });
+    const helper = childProcessMock.processes[0]!;
+    helper.stderr.emit('data', Buffer.from('status: recording-started\n'));
+    await start;
+
+    helper.stdout.emit('data', frameRecord(42));
+
+    const args = childProcessMock.spawn.mock.calls[0]![1] as string[];
+    expect(args).toContain('--stdout-only');
+    expect(frames).toHaveLength(1);
+    expect(frames[0]!.sequence).toBe(0);
+    expect(frames[0]!.frame.slice(0, 4)).toEqual([42, 43, 44, 45]);
 
     await engine.stop();
   });

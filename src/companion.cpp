@@ -2167,7 +2167,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             const bool suppress_classic_rumble = protocol_minor >= 9
                 ? (mode_control & kAudioReactiveHapticsSuppressClassicRumbleFlag) != 0
                 : enabled && mode == AudioReactiveHapticsReplace;
-            const bool suppress_classic_rumble_active = enabled && suppress_classic_rumble;
             if (
                 value > 1
                 || !audio_set_reactive_haptics_config(
@@ -2178,13 +2177,13 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                     buffer[14],
                     protocol_minor >= 8 ? buffer[15] : AudioReactiveHapticsAttackBalanced,
                     protocol_minor >= 8 ? buffer[16] : AudioReactiveHapticsReleaseBalanced,
-                    suppress_classic_rumble_active
+                    suppress_classic_rumble
                 )
             ) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            if (suppress_classic_rumble_active) {
+            if (suppress_classic_rumble) {
                 stop_classic_rumble_test();
             }
             settings_revision++;

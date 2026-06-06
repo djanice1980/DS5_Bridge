@@ -1112,9 +1112,11 @@ bool audio_set_reactive_haptics_config(
     audio_reactive_haptics_attack = attack;
     audio_reactive_haptics_release = release;
     audio_reactive_haptics_suppress_classic_rumble = suppress_classic_rumble;
-    controller_output_policy_set_audio_haptics_replace_active(
-        audio_reactive_haptics_config_enabled && audio_reactive_haptics_suppress_classic_rumble
-    );
+    const bool previous_replace_active = controller_output_policy_audio_haptics_replace_active();
+    controller_output_policy_set_audio_haptics_replace_active(audio_reactive_haptics_suppress_classic_rumble);
+    if (previous_replace_active != controller_output_policy_audio_haptics_replace_active()) {
+        clear_latest_host_usb_haptics();
+    }
     if (controller_output_policy_audio_haptics_replace_active()) {
         bt_set_classic_rumble_output(0, 0);
     }
@@ -1946,6 +1948,7 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
     }
 
     uint8_t packet[HOST_AUDIO_REPORT_SIZE];
+    const bool allow_native_haptic_fallback = !controller_output_policy_audio_haptics_replace_active();
     if (len == HOST_AUDIO_COMPACT_REPORT_SIZE) {
 #ifdef ENABLE_COMPANION
         companion_note_feedback_trace_samples(
@@ -1960,7 +1963,7 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
 #endif
         build_host_audio_report_header(packet);
         memcpy(packet + 78, report, SAMPLE_SIZE);
-        if (!haptic_block_has_signal(packet + 78)) {
+        if (allow_native_haptic_fallback && !haptic_block_has_signal(packet + 78)) {
             (void)copy_latest_host_usb_haptics(packet + 78);
         }
         apply_haptics_gain_to_packet(packet + 78);
@@ -1972,7 +1975,7 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         memcpy(packet, report, sizeof(packet));
         copy_routed_state_data(packet + 13);
         packet[142] = (plug_headset ? 0x16 : 0x13) | (1 << 7);
-        if (!haptic_block_has_signal(packet + 78)) {
+        if (allow_native_haptic_fallback && !haptic_block_has_signal(packet + 78)) {
             (void)copy_latest_host_usb_haptics(packet + 78);
         }
         apply_haptics_gain_to_packet(packet + 78);

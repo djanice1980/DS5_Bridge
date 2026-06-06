@@ -111,6 +111,8 @@ const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
+const SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_BYTES = 64;
+const SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_TTL_MS = 35;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.5';
@@ -1252,6 +1254,7 @@ export class BridgeService extends EventEmitter {
   private hostAudioFrameCount = 0;
   private hostAudioChunkWriteCount = 0;
   private hostAudioFrameDropCount = 0;
+  private latestSystemAudioHapticsFrame: { haptics: number[]; expiresAt: number } | null = null;
   private hostAudioCaptureRetryAt = 0;
   private hostAudioCaptureIssue: HostAudioCaptureIssue | null = null;
   private hostAudioCaptureRetry: HostAudioCaptureRetry | null = null;
@@ -1297,6 +1300,9 @@ export class BridgeService extends EventEmitter {
     this.systemAudioHapticsEngine.on('error', (error: Error) => {
       this.appendAudioDebugLines([`[SystemHaptics] error: ${error.message}`]);
       this.emitSnapshot();
+    });
+    this.systemAudioHapticsEngine.on('frame', (frame: HostAudioFramePayload) => {
+      this.captureSystemAudioHapticsFrame(frame);
     });
     this.systemAudioHapticsEngine.on('status', (line: string) => {
       if (line) {
@@ -2029,6 +2035,14 @@ export class BridgeService extends EventEmitter {
       && settings.audioReactiveHapticsMode === 'replace';
   }
 
+  private directSystemAudioHapticsFrames(settings: CompanionSettings): boolean {
+    return settings.hostEncodedAudioEnabled
+      && settings.hapticsEnabled
+      && settings.audioReactiveHapticsEnabled
+      && settings.audioReactiveHapticsMode === 'replace'
+      && settings.audioReactiveHapticsSource !== 'controller-audio';
+  }
+
   private audioReactiveHapticsSupported(): boolean {
     return Boolean(this.snapshot.status?.firmwareFlags.audioReactiveHapticsControl);
   }
@@ -2049,7 +2063,8 @@ export class BridgeService extends EventEmitter {
       bassFocus: settings.audioReactiveHapticsBassFocus,
       response: settings.audioReactiveHapticsResponse,
       attack: settings.audioReactiveHapticsAttack,
-      release: settings.audioReactiveHapticsRelease
+      release: settings.audioReactiveHapticsRelease,
+      directFrames: this.directSystemAudioHapticsFrames(settings)
     };
   }
 
@@ -3129,8 +3144,10 @@ export class BridgeService extends EventEmitter {
       return;
     }
 
+    const frame = [...payload.frame];
+    this.applyDirectSystemAudioHapticsFrame(frame, settings);
     const reports = buildHostAudioFastFrameReports({
-      frame: payload.frame,
+      frame,
       frameSequence: payload.sequence
     });
 
@@ -3142,6 +3159,38 @@ export class BridgeService extends EventEmitter {
     this.hostAudioReportQueue.push(...reports);
     this.logHostAudioStage('enqueue');
     void this.pumpHostAudioReports();
+  }
+
+  private captureSystemAudioHapticsFrame(payload: HostAudioFramePayload): void {
+    const settings = this.settingsStore.get();
+    if (!this.directSystemAudioHapticsFrames(settings)) {
+      return;
+    }
+
+    this.latestSystemAudioHapticsFrame = {
+      haptics: payload.frame.slice(0, SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_BYTES),
+      expiresAt: Date.now() + SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_TTL_MS
+    };
+  }
+
+  private applyDirectSystemAudioHapticsFrame(frame: number[], settings: CompanionSettings): void {
+    if (!this.directSystemAudioHapticsFrames(settings)) {
+      return;
+    }
+
+    frame.fill(0, 0, SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_BYTES);
+    const latest = this.latestSystemAudioHapticsFrame;
+    const now = Date.now();
+    if (!latest || latest.expiresAt < now) {
+      if (latest) {
+        this.latestSystemAudioHapticsFrame = null;
+      }
+      return;
+    }
+
+    for (let index = 0; index < SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_BYTES; index += 1) {
+      frame[index] = latest.haptics[index] ?? 0;
+    }
   }
 
   private async pumpHostAudioReports(): Promise<void> {
@@ -3307,6 +3356,9 @@ export class BridgeService extends EventEmitter {
 
   private async updateSystemAudioHapticsEngine(): Promise<void> {
     const settings = this.settingsStore.get();
+    if (!this.directSystemAudioHapticsFrames(settings)) {
+      this.latestSystemAudioHapticsFrame = null;
+    }
     const hostAudioStartingOrRetrying = settings.hostEncodedAudioEnabled
       && (
         !this.hostAudioCommandActive
@@ -3323,6 +3375,7 @@ export class BridgeService extends EventEmitter {
       const wasPassthroughActive = this.systemAudioHapticsPassthroughActive;
       this.systemAudioHapticsPassthroughActive = false;
       this.systemAudioHapticsRetryAt = 0;
+      this.latestSystemAudioHapticsFrame = null;
       await this.systemAudioHapticsEngine.stop();
       if (wasPassthroughActive && this.device && this.audioReactiveHapticsSupported()) {
         await this.applyAudioReactiveHapticsSettings(settings, false);
@@ -3331,6 +3384,7 @@ export class BridgeService extends EventEmitter {
     }
 
     if (Date.now() < this.systemAudioHapticsRetryAt) {
+      this.latestSystemAudioHapticsFrame = null;
       await this.systemAudioHapticsEngine.stop();
       return;
     }
@@ -3344,6 +3398,7 @@ export class BridgeService extends EventEmitter {
       this.systemAudioHapticsRetryAt = 0;
     } catch (error) {
       await this.systemAudioHapticsEngine.stop();
+      this.latestSystemAudioHapticsFrame = null;
       if (this.systemAudioHapticsPassthroughActive) {
         this.systemAudioHapticsRetryAt = Date.now() + SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS;
         await this.applyAudioReactiveHapticsSettings(settings, false);

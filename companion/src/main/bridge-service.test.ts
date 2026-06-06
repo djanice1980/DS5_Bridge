@@ -11,6 +11,7 @@ import {
   COMPANION_USAGE,
   COMPANION_USAGE_PAGE,
   DEFAULT_CONTROLLER_PROFILE_ID,
+  HOST_AUDIO_PACKET_TYPE,
   MAGIC,
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
@@ -68,7 +69,7 @@ vi.mock('./winusb-companion-transport', () => ({
 }));
 
 import { BridgeService } from './bridge-service';
-import { HostAudioStartError } from './host-audio-engine';
+import { HostAudioStartError, type HostAudioFramePayload } from './host-audio-engine';
 import { SettingsStore } from './settings-store';
 
 type StatusOverrides = {
@@ -447,6 +448,18 @@ async function flushReapply(): Promise<void> {
 
 async function flushImmediate(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
+}
+
+function compactFrameFromFastReports(reports: number[][]): number[] {
+  const frame: number[] = [];
+  for (const report of reports) {
+    if (report[1] !== HOST_AUDIO_PACKET_TYPE.FAST_FRAME_FRAGMENT) {
+      continue;
+    }
+    const payloadLength = report[6] ?? 0;
+    frame.push(...report.slice(7, 7 + payloadLength));
+  }
+  return frame;
 }
 
 describe('BridgeService', () => {
@@ -2271,6 +2284,51 @@ describe('BridgeService', () => {
     expect(queuedSequences).toEqual([2, 3]);
     expect(internals.hostAudioReportQueue).toHaveLength(10);
     expect(internals.hostAudioFrameDropCount).toBe(1);
+  });
+
+  it('injects direct system haptics into host-audio frames during targeted replace mode', () => {
+    const appSource = {
+      kind: 'app-session' as const,
+      processId: 4321,
+      displayName: 'Apple Music',
+      executableName: 'AppleMusic.exe',
+      processPath: 'C:\\Program Files\\WindowsApps\\AppleMusic.exe'
+    };
+    const service = serviceFixture({
+      hostEncodedAudioEnabled: true,
+      hapticsEnabled: true,
+      audioReactiveHapticsEnabled: true,
+      audioReactiveHapticsMode: 'replace',
+      audioReactiveHapticsSource: appSource
+    });
+    const device = new MockHidDevice();
+    const internals = service as unknown as {
+      device: MockHidDevice;
+      hostAudioCommandActive: boolean;
+      hostAudioReportQueue: number[][];
+      captureSystemAudioHapticsFrame(payload: HostAudioFramePayload): void;
+      sendHostAudioFrame(payload: HostAudioFramePayload): void;
+    };
+    internals.device = device;
+    internals.hostAudioCommandActive = true;
+
+    const hostFrame = new Array<number>(264).fill(0).map((_, index) => (200 + index) & 0xff);
+    const appHapticsFrame = new Array<number>(264).fill(0).map((_, index) => (40 + index) & 0xff);
+    internals.captureSystemAudioHapticsFrame({
+      frame: appHapticsFrame,
+      sequence: 3,
+      encodedBytes: 200
+    });
+    internals.sendHostAudioFrame({
+      frame: hostFrame,
+      sequence: 17,
+      encodedBytes: 200
+    });
+
+    const compactFrame = compactFrameFromFastReports(internals.hostAudioReportQueue);
+    expect(compactFrame).toHaveLength(264);
+    expect(compactFrame.slice(0, 64)).toEqual(appHapticsFrame.slice(0, 64));
+    expect(compactFrame.slice(64)).toEqual(hostFrame.slice(64));
   });
 
   it('deactivates host audio and clears queued frames after an OUT report write failure', async () => {
