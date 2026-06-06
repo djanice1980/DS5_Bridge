@@ -86,7 +86,6 @@ import {
   CHORD_CONTROLLER_SETTING_STEP_DEFAULT,
   CHORD_CONTROLLER_SETTING_STEP_MAX,
   CHORD_CONTROLLER_SETTING_STEP_MIN,
-  CHORD_ASSIGNABLE_BUTTON_IDS,
   DEFAULT_BUTTON_REMAP_PROFILE_ID,
   DEFAULT_CONTROLLER_PROFILE_ID,
   MAX_CHORD_ASSIGNMENTS,
@@ -462,10 +461,33 @@ const REMAP_EDGE_BUTTON_IDS: DualSenseEdgeRemapButtonId[] = [
   ...REMAP_EDGE_TOP_BUTTON_IDS,
   ...REMAP_EDGE_BOTTOM_BUTTON_IDS
 ];
+const REMAP_TARGET_BUTTON_IDS: StandardRemapButtonId[] = [
+  'triangle',
+  'circle',
+  'cross',
+  'square',
+  'dpad-up',
+  'dpad-right',
+  'dpad-down',
+  'dpad-left',
+  'l1',
+  'r1',
+  'l2',
+  'r2',
+  'l3',
+  'r3',
+  'create',
+  'options'
+];
+const CHORD_BUTTON_MENU_IDS: ChordAssignableButtonId[] = [
+  ...REMAP_TARGET_BUTTON_IDS,
+  'lb',
+  'rb'
+];
 const REMAP_ALL_BUTTON_IDS = [...REMAP_BUTTON_IDS] as RemapButtonId[];
 const REMAP_STICK_CLICK_IDS: StandardRemapButtonId[] = ['l3', 'r3'];
 const REMAP_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> = [
-  ...REMAP_STANDARD_BUTTON_IDS
+  ...REMAP_TARGET_BUTTON_IDS
 ].map((id) => [REMAP_BUTTONS[id].label, id]);
 const CHORD_STARTERS: Record<ChordStarterId, ChordStarterDefinition> = {
   ps: { id: 'ps', label: 'PS Button', glyphUrl: psHomeGlyphUrl },
@@ -2346,7 +2368,7 @@ function AudioHapticsSourceOption({
 
 function remapTargetOptionsFor(buttonId: RemapButtonId): Array<[string, RemapButtonId]> {
   if ((REMAP_EDGE_BUTTON_IDS as readonly RemapButtonId[]).includes(buttonId)) {
-    return [[REMAP_BUTTONS[buttonId].label, buttonId], ...REMAP_TARGET_OPTIONS];
+    return [...REMAP_TARGET_OPTIONS, [REMAP_BUTTONS[buttonId].label, buttonId]];
   }
   return (REMAP_STICK_CLICK_IDS as readonly RemapButtonId[]).includes(buttonId)
     ? REMAP_STICK_CLICK_TARGET_OPTIONS
@@ -2818,8 +2840,8 @@ export function App() {
   ), [showDualSenseEdgeRemapButtons]);
   const chordAssignableButtonIds = useMemo<readonly ChordAssignableButtonId[]>(() => (
     (showDualSenseEdgeRemapButtons
-      ? CHORD_ASSIGNABLE_BUTTON_IDS
-      : REMAP_STANDARD_BUTTON_IDS) as readonly ChordAssignableButtonId[]
+      ? CHORD_BUTTON_MENU_IDS
+      : REMAP_TARGET_BUTTON_IDS) as readonly ChordAssignableButtonId[]
   ), [showDualSenseEdgeRemapButtons]);
   function chordButtonOptionsFor(
     starter: ChordStarterId,
@@ -7726,7 +7748,7 @@ export function App() {
                   <svg className="remapping-callout-layer" aria-hidden="true">
                     {remapCalloutLayout && (
                       <g>
-                        {REMAP_TARGET_OPTIONS.map(([, buttonId]) => {
+                        {REMAP_STANDARD_BUTTON_IDS.map((buttonId) => {
                           const remapped = remapDraft[buttonId] !== buttonId;
                           return (
                             <g key={buttonId} className={hoveredRemapButton === buttonId || remapped ? 'active' : undefined}>
