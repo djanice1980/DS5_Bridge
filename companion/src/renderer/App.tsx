@@ -1,4 +1,4 @@
-import { type CSSProperties, type DragEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type TablerIcon,
   IconAdjustmentsSpark,
@@ -167,6 +167,21 @@ type ChordAssignmentDraftRow = {
   starter: ChordStarterId;
   button: ChordAssignableButtonId | null;
   functionId: string;
+};
+type ChordAssignmentDropHint = {
+  targetId: string;
+  placement: 'before' | 'after';
+};
+type ChordAssignmentDragSession = {
+  active: boolean;
+  id: string;
+  offsetX: number;
+  offsetY: number;
+  overlay: HTMLElement | null;
+  startX: number;
+  startY: number;
+  cleanup: () => void;
+  dropHint: ChordAssignmentDropHint | null;
 };
 type TriggerLabProfileDialogMode = 'save' | 'rename' | 'delete';
 type TriggerLabBuiltinProfileId = 'default';
@@ -2483,6 +2498,7 @@ export function App() {
   const [chordFunctionNameDraft, setChordFunctionNameDraft] = useState('');
   const [chordAssignmentDraftRows, setChordAssignmentDraftRows] = useState<ChordAssignmentDraftRow[]>([]);
   const [draggedChordAssignmentId, setDraggedChordAssignmentId] = useState<string | null>(null);
+  const [chordAssignmentDropHint, setChordAssignmentDropHint] = useState<ChordAssignmentDropHint | null>(null);
   const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
   const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
   const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<StandardRemapButtonId, RemapCalloutLayout> | null>(null);
@@ -2536,6 +2552,8 @@ export function App() {
   const settingsFocusTimerRef = useRef<number | null>(null);
   const notificationFocusTimerRef = useRef<number | null>(null);
   const featureFocusTimerRef = useRef<number | null>(null);
+  const chordAssignmentDragRef = useRef<ChordAssignmentDragSession | null>(null);
+  const chordAssignmentListRef = useRef<HTMLDivElement>(null);
   const windowDraggingRef = useRef(false);
   const windowDragReleaseTimerRef = useRef<number | null>(null);
   const startupReadyTimerRef = useRef<number | null>(null);
@@ -2544,6 +2562,14 @@ export function App() {
   const deferredSnapshotRef = useRef<BridgeSnapshot | null>(null);
   const overviewSleepConfirmArmedRef = useRef(false);
   const appOpenedAtRef = useRef(Date.now());
+
+  useEffect(() => () => {
+    const session = chordAssignmentDragRef.current;
+    session?.cleanup();
+    session?.overlay?.remove();
+    document.body.classList.remove('chords-assignment-pointer-dragging');
+    chordAssignmentDragRef.current = null;
+  }, []);
 
   useEffect(() => {
     saveTriggerLabCustomProfiles(triggerLabCustomProfiles);
@@ -5020,48 +5046,151 @@ export function App() {
     commitChordConfiguration(chordFunctions, nextAssignments, `chords-reorder-assignment-${sourceId}`);
   }
 
-  function startChordAssignmentDrag(event: DragEvent<HTMLDivElement>, assignmentId: string) {
-    if (pendingAction !== null) {
-      event.preventDefault();
-      return;
+  function setChordAssignmentDragDropHint(nextHint: ChordAssignmentDropHint | null) {
+    const session = chordAssignmentDragRef.current;
+    if (session) {
+      session.dropHint = nextHint;
     }
-    const dragPreview = event.currentTarget.cloneNode(true) as HTMLElement;
-    dragPreview.classList.add('chords-assignment-drag-preview');
-    dragPreview.style.width = `${event.currentTarget.offsetWidth}px`;
-    dragPreview.style.position = 'fixed';
-    dragPreview.style.top = '-1000px';
-    dragPreview.style.left = '-1000px';
-    document.body.appendChild(dragPreview);
-    event.dataTransfer.setDragImage(
-      dragPreview,
-      event.nativeEvent.offsetX,
-      event.nativeEvent.offsetY
-    );
-    window.setTimeout(() => dragPreview.remove(), 0);
-    setDraggedChordAssignmentId(assignmentId);
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', assignmentId);
+    setChordAssignmentDropHint((current) => (
+      current?.targetId === nextHint?.targetId && current?.placement === nextHint?.placement
+        ? current
+        : nextHint
+    ));
   }
 
-  function dragOverChordAssignment(event: DragEvent<HTMLDivElement>, assignmentId: string) {
-    const sourceId = draggedChordAssignmentId ?? event.dataTransfer.getData('text/plain');
-    if (!sourceId || sourceId === assignmentId) {
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
+  function createChordAssignmentDragOverlay(sourceRow: HTMLDivElement): HTMLElement {
+    const overlay = sourceRow.cloneNode(true) as HTMLElement;
+    const rect = sourceRow.getBoundingClientRect();
+    overlay.classList.add('chords-assignment-drag-overlay');
+    overlay.classList.remove('dragging', 'drop-before', 'drop-after');
+    overlay.style.width = `${rect.width}px`;
+    overlay.style.height = `${rect.height}px`;
+    overlay.style.left = '0';
+    overlay.style.top = '0';
+    overlay.style.transform = `translate3d(${rect.left}px, ${rect.top}px, 0)`;
+    (sourceRow.closest<HTMLElement>('.shell') ?? document.body).appendChild(overlay);
+    return overlay;
   }
 
-  function dropChordAssignment(event: DragEvent<HTMLDivElement>, targetId: string) {
-    const sourceId = draggedChordAssignmentId ?? event.dataTransfer.getData('text/plain');
+  function moveChordAssignmentDragOverlay(session: ChordAssignmentDragSession, clientX: number, clientY: number) {
+    if (!session.overlay) {
+      return;
+    }
+    session.overlay.style.transform = `translate3d(${clientX - session.offsetX}px, ${clientY - session.offsetY}px, 0) scale(1.01)`;
+  }
+
+  function updateChordAssignmentDropTarget(sourceId: string, _clientX: number, clientY: number) {
+    const list = chordAssignmentListRef.current;
+    if (!list) {
+      setChordAssignmentDragDropHint(null);
+      return;
+    }
+    const rows = Array.from(
+      list.querySelectorAll<HTMLElement>('.chords-assignment-row[data-assignment-id]:not(.draft)')
+    ).filter((row) => row.dataset.assignmentId !== sourceId);
+    if (rows.length === 0) {
+      setChordAssignmentDragDropHint(null);
+      return;
+    }
+    let nearest: { targetId: string; placement: 'before' | 'after'; distance: number } | null = null;
+    for (const row of rows) {
+      const targetId = row.dataset.assignmentId;
+      if (!targetId) {
+        continue;
+      }
+      const rect = row.getBoundingClientRect();
+      const centerY = rect.top + rect.height / 2;
+      const placement = clientY > centerY ? 'after' : 'before';
+      const edgeY = placement === 'after' ? rect.bottom : rect.top;
+      const distance = Math.abs(clientY - edgeY);
+      if (!nearest || distance < nearest.distance) {
+        nearest = { targetId, placement, distance };
+      }
+    }
+    setChordAssignmentDragDropHint(nearest && {
+      targetId: nearest.targetId,
+      placement: nearest.placement
+    });
+  }
+
+  function finishChordAssignmentPointerDrag(cancelled = false) {
+    const session = chordAssignmentDragRef.current;
+    if (!session) {
+      return;
+    }
+    session.cleanup();
+    session.overlay?.remove();
+    document.body.classList.remove('chords-assignment-pointer-dragging');
+    chordAssignmentDragRef.current = null;
     setDraggedChordAssignmentId(null);
-    if (!sourceId || sourceId === targetId) {
+    setChordAssignmentDropHint(null);
+    if (!cancelled && session.active && session.dropHint) {
+      reorderChordAssignment(session.id, session.dropHint.targetId, session.dropHint.placement);
+    }
+    if (session.active) {
+      window.addEventListener('click', (clickEvent) => {
+        clickEvent.preventDefault();
+        clickEvent.stopPropagation();
+      }, { capture: true, once: true });
+    }
+  }
+
+  function startChordAssignmentPointerDrag(event: ReactPointerEvent<HTMLDivElement>, assignmentId: string) {
+    if (pendingAction !== null || event.button !== 0 || chordAssignmentDragRef.current) {
       return;
     }
-    event.preventDefault();
-    const targetRect = event.currentTarget.getBoundingClientRect();
-    const placement = event.clientY > targetRect.top + targetRect.height / 2 ? 'after' : 'before';
-    reorderChordAssignment(sourceId, targetId, placement);
+    const sourceRow = event.currentTarget;
+    const rect = sourceRow.getBoundingClientRect();
+    const session: ChordAssignmentDragSession = {
+      active: false,
+      id: assignmentId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      overlay: null,
+      startX: event.clientX,
+      startY: event.clientY,
+      cleanup: () => undefined,
+      dropHint: null
+    };
+    const activate = (clientX: number, clientY: number) => {
+      if (session.active) {
+        return;
+      }
+      session.active = true;
+      session.overlay = createChordAssignmentDragOverlay(sourceRow);
+      document.body.classList.add('chords-assignment-pointer-dragging');
+      setDraggedChordAssignmentId(assignmentId);
+      moveChordAssignmentDragOverlay(session, clientX, clientY);
+    };
+    const move = (moveEvent: PointerEvent) => {
+      const deltaX = moveEvent.clientX - session.startX;
+      const deltaY = moveEvent.clientY - session.startY;
+      if (!session.active && Math.hypot(deltaX, deltaY) < 5) {
+        return;
+      }
+      activate(moveEvent.clientX, moveEvent.clientY);
+      moveEvent.preventDefault();
+      moveChordAssignmentDragOverlay(session, moveEvent.clientX, moveEvent.clientY);
+      updateChordAssignmentDropTarget(assignmentId, moveEvent.clientX, moveEvent.clientY);
+    };
+    const end = () => finishChordAssignmentPointerDrag(false);
+    const cancel = () => finishChordAssignmentPointerDrag(true);
+    const keyDown = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key === 'Escape') {
+        finishChordAssignmentPointerDrag(true);
+      }
+    };
+    session.cleanup = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', end);
+      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('keydown', keyDown);
+    };
+    chordAssignmentDragRef.current = session;
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', end);
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('keydown', keyDown);
   }
 
   function toggleHapticsEnabled() {
@@ -7772,7 +7901,7 @@ export function App() {
                     </button>
                   </div>
 
-                  <div className="chords-assignment-list" aria-label="Chord assignments">
+                  <div className="chords-assignment-list" ref={chordAssignmentListRef} aria-label="Chord assignments">
                     {chordAssignments.length + chordAssignmentDraftRows.length > 0 ? (
                       <>
                         {chordAssignmentDraftRows.map((row) => {
@@ -7846,19 +7975,21 @@ export function App() {
                         {chordAssignments.map((assignment) => {
                         const func = chordFunctions.find((candidate) => candidate.id === assignment.functionId);
                         const hasConflict = chordAssignmentConflictState.conflictKeys.has(chordAssignmentKey(assignment));
+                        const dropPlacement = chordAssignmentDropHint?.targetId === assignment.id
+                          ? chordAssignmentDropHint.placement
+                          : null;
                         return (
                           <div
                             className={[
                               'chords-assignment-row',
                               hasConflict ? 'conflict' : '',
-                              draggedChordAssignmentId === assignment.id ? 'dragging' : ''
+                              draggedChordAssignmentId === assignment.id ? 'dragging' : '',
+                              dropPlacement === 'before' ? 'drop-before' : '',
+                              dropPlacement === 'after' ? 'drop-after' : ''
                             ].filter(Boolean).join(' ')}
                             key={assignment.id}
-                            draggable={pendingAction === null}
-                            onDragStart={(event) => startChordAssignmentDrag(event, assignment.id)}
-                            onDragOver={(event) => dragOverChordAssignment(event, assignment.id)}
-                            onDrop={(event) => dropChordAssignment(event, assignment.id)}
-                            onDragEnd={() => setDraggedChordAssignmentId(null)}
+                            data-assignment-id={assignment.id}
+                            onPointerDown={(event) => startChordAssignmentPointerDrag(event, assignment.id)}
                           >
                             <div
                               className="chords-assignment-binding"
