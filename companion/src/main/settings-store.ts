@@ -10,8 +10,10 @@ import {
   MAX_CHORD_FUNCTION_NAME_LENGTH,
   MAX_KEYBOARD_FUNCTION_KEYS,
   REMAP_BUTTON_IDS,
+  defaultChordControllerSettingStepPercent,
   isChordBindingAllowed,
   isRemapButtonId,
+  normalizeChordControllerSettingStepPercent,
   normalizeBridgePresetId
 } from '../shared/protocol';
 import type {
@@ -674,15 +676,21 @@ function normalizeChordFunction(value: unknown, index: number): ChordFunction | 
           ? candidate.action as ChordMediaAction
           : 'play-pause'
       };
-    case 'controller-setting':
+    case 'controller-setting': {
+      const action = CHORD_CONTROLLER_SETTING_ACTIONS.has(candidate.action as ChordControllerSettingAction)
+        ? candidate.action as ChordControllerSettingAction
+        : 'sleep-controller';
       return {
         id,
         name: normalizeChordName(candidate.name, 'Setting'),
         type: 'controller-setting',
-        action: CHORD_CONTROLLER_SETTING_ACTIONS.has(candidate.action as ChordControllerSettingAction)
-          ? candidate.action as ChordControllerSettingAction
-          : 'sleep-controller'
+        action,
+        stepPercent: normalizeChordControllerSettingStepPercent(
+          (candidate as { stepPercent?: unknown }).stepPercent,
+          defaultChordControllerSettingStepPercent(action)
+        )
       };
+    }
     default:
       return null;
   }
@@ -702,7 +710,6 @@ function normalizeChordFunctions(value: unknown): ChordFunction[] {
 function normalizeChordAssignment(
   value: unknown,
   functionIds: Set<string>,
-  usedBindings: Set<string>,
   index: number
 ): ChordAssignment | null {
   if (!value || typeof value !== 'object') {
@@ -721,11 +728,6 @@ function normalizeChordAssignment(
     ) {
       return null;
     }
-    const bindingKey = `chord:${candidate.starter}:${candidate.button}`;
-    if (usedBindings.has(bindingKey)) {
-      return null;
-    }
-    usedBindings.add(bindingKey);
     return {
       id,
       kind: 'chord',
@@ -739,9 +741,8 @@ function normalizeChordAssignment(
 
 function normalizeChordAssignments(value: unknown, functions: ChordFunction[]): ChordAssignment[] {
   const functionIds = new Set(functions.map((func) => func.id));
-  const usedBindings = new Set<string>();
   return (Array.isArray(value) ? value : [])
-    .map((assignment, index) => normalizeChordAssignment(assignment, functionIds, usedBindings, index))
+    .map((assignment, index) => normalizeChordAssignment(assignment, functionIds, index))
     .filter((assignment): assignment is ChordAssignment => assignment !== null)
     .slice(0, MAX_CHORD_ASSIGNMENTS);
 }

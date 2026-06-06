@@ -273,6 +273,12 @@ describe('SettingsStore', () => {
       starter: 'ps',
       button: 'triangle',
       functionId: 'open-task-manager'
+    }, {
+      id: 'duplicate-ps-triangle',
+      kind: 'chord',
+      starter: 'ps',
+      button: 'triangle',
+      functionId: 'media-play'
     }]);
     expect(new SettingsStore(userDataPath).get().chordAssignments).toEqual(updated.chordAssignments);
   });
@@ -284,18 +290,52 @@ describe('SettingsStore', () => {
       id: 'speaker-up',
       name: 'Speaker Up',
       type: 'controller-setting',
-      action: 'speaker-up'
+      action: 'speaker-up',
+      stepPercent: 10
     }, {
       id: 'triggers-down',
       name: 'Triggers Down',
       type: 'controller-setting',
-      action: 'triggers-down'
+      action: 'triggers-down',
+      stepPercent: 25
     }];
 
     const updated = store.setChordFunctions(functions);
 
     expect(updated.chordFunctions).toEqual(functions);
     expect(new SettingsStore(userDataPath).get().chordFunctions).toEqual(functions);
+  });
+
+  it('normalizes controller-setting chord step percent', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.setChordFunctions([{
+      id: 'haptics-up',
+      name: 'Haptics Up',
+      type: 'controller-setting',
+      action: 'haptics-up'
+    }, {
+      id: 'speaker-up',
+      name: 'Speaker Up',
+      type: 'controller-setting',
+      action: 'speaker-up',
+      stepPercent: 500
+    }] as unknown as ChordFunction[]);
+
+    expect(updated.chordFunctions).toEqual([{
+      id: 'haptics-up',
+      name: 'Haptics Up',
+      type: 'controller-setting',
+      action: 'haptics-up',
+      stepPercent: 20
+    }, {
+      id: 'speaker-up',
+      name: 'Speaker Up',
+      type: 'controller-setting',
+      action: 'speaker-up',
+      stepPercent: 100
+    }]);
   });
 
   it('deduplicates persisted custom profiles while preserving the selected winner', () => {

@@ -1323,7 +1323,8 @@ describe('BridgeService', () => {
       id: 'speaker-up',
       name: 'Speaker Up',
       type: 'controller-setting',
-      action: 'speaker-up'
+      action: 'speaker-up',
+      stepPercent: 25
     }], [{
       id: 'ps-triangle',
       kind: 'chord',
@@ -1337,9 +1338,9 @@ describe('BridgeService', () => {
     await flushReapply();
     await flushReapply();
 
-    expect(service.getSnapshot().settings.speakerVolumePercent).toBe(40);
+    expect(service.getSnapshot().settings.speakerVolumePercent).toBe(55);
     const volumeCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_SPEAKER_VOLUME).at(-1);
-    expect(volumeCommand?.[9]).toBe(40);
+    expect(volumeCommand?.[9]).toBe(55);
   });
 
   it('applies controller mic mute events without waiting for a status poll', async () => {

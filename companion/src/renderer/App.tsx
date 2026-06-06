@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type DragEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type TablerIcon,
   IconAdjustmentsSpark,
@@ -10,6 +10,7 @@ import {
   IconBell as Bell,
   IconBinary,
   IconBolt as Zap,
+  IconBooks,
   IconBulb,
   IconCheck as Check,
   IconChevronDown as ChevronDown,
@@ -81,6 +82,9 @@ import {
   UI_THEME_PREVIEW_SWATCHES
 } from './ui-themes';
 import {
+  CHORD_CONTROLLER_SETTING_STEP_DEFAULT,
+  CHORD_CONTROLLER_SETTING_STEP_MAX,
+  CHORD_CONTROLLER_SETTING_STEP_MIN,
   CHORD_ASSIGNABLE_BUTTON_IDS,
   DEFAULT_BUTTON_REMAP_PROFILE_ID,
   DEFAULT_CONTROLLER_PROFILE_ID,
@@ -89,6 +93,7 @@ import {
   MAX_KEYBOARD_FUNCTION_KEYS,
   REMAP_BUTTON_IDS,
   ackResultName,
+  normalizeChordControllerSettingStepPercent,
   isChordBindingAllowed
 } from '../shared/protocol';
 import type {
@@ -144,6 +149,7 @@ type ChordFunctionDraft = {
   keysText: string;
   mediaAction: ChordMediaAction;
   controllerAction: ChordControllerSettingAction;
+  controllerStepPercent: number;
 };
 type ChordNotchTargetId = 'speaker' | 'mic' | 'haptics' | 'rumble' | 'triggers' | 'lighting';
 type ChordNotchDirection = 'down' | 'up';
@@ -488,7 +494,8 @@ const EMPTY_CHORD_FUNCTION_DRAFT: ChordFunctionDraft = {
   type: 'keyboard',
   keysText: DEFAULT_CHORD_KEYBOARD_KEYS.join(' + '),
   mediaAction: 'play-pause',
-  controllerAction: 'sleep-controller'
+  controllerAction: 'sleep-controller',
+  controllerStepPercent: CHORD_CONTROLLER_SETTING_STEP_DEFAULT
 };
 const DEFAULT_REMAP_DRAFT = Object.fromEntries(
   REMAP_ALL_BUTTON_IDS.map((id) => [id, id])
@@ -2287,10 +2294,13 @@ function chordControllerSettingActionLabel(action: ChordControllerSettingAction)
   return CHORD_CONTROLLER_SETTING_ACTION_OPTIONS.find(([, value]) => value === action)?.[0] ?? 'Controller Setting';
 }
 
-function chordControllerSettingSummary(action: ChordControllerSettingAction): string {
+function chordControllerSettingSummary(action: ChordControllerSettingAction, stepPercent?: number): string {
   const notchTarget = chordNotchTargetForAction(action);
   if (notchTarget) {
-    return `${notchTarget.direction === 'up' ? 'Increase' : 'Decrease'} ${notchTarget.target.label}`;
+    const actionText = `${notchTarget.direction === 'up' ? 'Increase' : 'Decrease'} ${notchTarget.target.label}`;
+    return typeof stepPercent === 'number'
+      ? `${actionText} — ${stepPercent}% step`
+      : actionText;
   }
   switch (action) {
     case 'toggle-audio-haptics':
@@ -2303,6 +2313,14 @@ function chordControllerSettingSummary(action: ChordControllerSettingAction): st
       return 'Sleep Controller';
   }
   return 'Controller Setting';
+}
+
+function chordControllerSettingAdjustmentText(action: ChordControllerSettingAction): string {
+  const notchTarget = chordNotchTargetForAction(action);
+  if (!notchTarget) {
+    return chordControllerSettingSummary(action);
+  }
+  return `${notchTarget.direction === 'up' ? 'Increase' : 'Decrease'} ${notchTarget.target.label}`;
 }
 
 function chordStarterLabel(starter: ChordStarterId): string {
@@ -2320,7 +2338,7 @@ function chordFunctionSummary(func: ChordFunction): string {
     case 'media':
       return chordMediaActionLabel(func.action);
     case 'controller-setting':
-      return chordControllerSettingSummary(func.action);
+      return chordControllerSettingSummary(func.action, func.stepPercent);
   }
 }
 
@@ -2334,7 +2352,10 @@ function chordFunctionToDraft(func: ChordFunction | null): ChordFunctionDraft {
     type: func.type,
     keysText: func.type === 'keyboard' ? func.keys.join(' + ') : DEFAULT_CHORD_KEYBOARD_KEYS.join(' + '),
     mediaAction: func.type === 'media' ? func.action : 'play-pause',
-    controllerAction: func.type === 'controller-setting' ? func.action : 'sleep-controller'
+    controllerAction: func.type === 'controller-setting' ? func.action : 'sleep-controller',
+    controllerStepPercent: func.type === 'controller-setting'
+      ? normalizeChordControllerSettingStepPercent(func.stepPercent)
+      : CHORD_CONTROLLER_SETTING_STEP_DEFAULT
   };
 }
 
@@ -2393,7 +2414,8 @@ function chordFunctionFromDraft(draft: ChordFunctionDraft): ChordFunction {
         id,
         name,
         type: 'controller-setting',
-        action: draft.controllerAction
+        action: draft.controllerAction,
+        stepPercent: normalizeChordControllerSettingStepPercent(draft.controllerStepPercent)
       };
   }
 }
@@ -2402,8 +2424,16 @@ function chordAssignmentLabel(assignment: ChordAssignment): string {
   return `${chordStarterLabel(assignment.starter)} + ${chordButtonLabel(assignment.button)}`;
 }
 
+function chordBindingKey(starter: ChordStarterId, button: ChordAssignableButtonId): string {
+  return `chord:${starter}:${button}`;
+}
+
 function chordAssignmentKey(assignment: ChordAssignment): string {
-  return `chord:${assignment.starter}:${assignment.button}`;
+  return chordBindingKey(assignment.starter, assignment.button);
+}
+
+function createChordAssignmentId(starter: ChordStarterId, button: ChordAssignableButtonId): string {
+  return `chord-${starter}-${button}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function App() {
@@ -2452,6 +2482,7 @@ export function App() {
   const [chordFunctionDialog, setChordFunctionDialog] = useState<ChordFunctionDialogState | null>(null);
   const [chordFunctionNameDraft, setChordFunctionNameDraft] = useState('');
   const [chordAssignmentDraftRows, setChordAssignmentDraftRows] = useState<ChordAssignmentDraftRow[]>([]);
+  const [draggedChordAssignmentId, setDraggedChordAssignmentId] = useState<string | null>(null);
   const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
   const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
   const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<StandardRemapButtonId, RemapCalloutLayout> | null>(null);
@@ -2592,6 +2623,41 @@ export function App() {
   const chordFunctionDialogFunction = chordFunctionDialog
     ? chordFunctions.find((func) => func.id === chordFunctionDialog.functionId) ?? null
     : null;
+  const chordAssignmentConflictState = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const assignment of chordAssignments) {
+      const key = chordAssignmentKey(assignment);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    const conflictKeys = new Set<string>();
+    let conflictCount = 0;
+    for (const [key, count] of counts) {
+      if (count > 1) {
+        conflictKeys.add(key);
+        conflictCount += count - 1;
+      }
+    }
+    const shortcutKeys = new Set<string>();
+    if (snapshot?.settings.sleepKeybindEnabled) {
+      shortcutKeys.add(chordBindingKey('ps', 'triangle'));
+    }
+    if (snapshot?.settings.speakerVolumeShortcutEnabled) {
+      shortcutKeys.add(chordBindingKey('ps', 'dpad-up'));
+      shortcutKeys.add(chordBindingKey('ps', 'dpad-down'));
+    }
+    for (const assignment of chordAssignments) {
+      const key = chordAssignmentKey(assignment);
+      if (shortcutKeys.has(key)) {
+        conflictKeys.add(key);
+        conflictCount += 1;
+      }
+    }
+    return { conflictKeys, conflictCount };
+  }, [
+    chordAssignments,
+    snapshot?.settings.sleepKeybindEnabled,
+    snapshot?.settings.speakerVolumeShortcutEnabled
+  ]);
   const chordFunctionsSignature = useMemo(() => (
     chordFunctions.map((func) => `${func.id}:${func.name}:${chordFunctionSummary(func)}`).join('|')
   ), [chordFunctions]);
@@ -2628,6 +2694,9 @@ export function App() {
   }
   const canAddChordDraft = Boolean(defaultChordFunctionId)
     && chordAssignments.length + chordAssignmentDraftRows.length < MAX_CHORD_ASSIGNMENTS;
+  const chordAssignmentsSubtitle = showDualSenseEdgeRemapButtons
+    ? 'Pair PS, LFN, or RFN with a button.'
+    : 'Pair PS with a button.';
 
   useEffect(() => {
     if (snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown') {
@@ -4655,6 +4724,15 @@ export function App() {
     commitChordFunctionDraft(nextDraft);
   }
 
+  function setChordFunctionControllerStepPercent(stepPercent: number) {
+    const nextDraft = {
+      ...chordFunctionDraft,
+      controllerStepPercent: normalizeChordControllerSettingStepPercent(stepPercent)
+    };
+    setChordFunctionDraft(nextDraft);
+    commitChordFunctionDraft(nextDraft);
+  }
+
   function renderChordFunctionSummary(func: ChordFunction) {
     if (func.type !== 'controller-setting') {
       return (
@@ -4677,31 +4755,70 @@ export function App() {
 
     return (
       <div className="chords-function-summary chords-function-summary-stepper">
-        <div className="chords-function-summary-copy">
-          <strong>{notchTarget.target.label}</strong>
-          <span>{chordControllerSettingSummary(func.action)}</span>
+        <div className="chords-function-summary-header">
+          <span>Summary</span>
+          <div className="chords-function-summary-options">
+            <label className="chords-step-selector">
+              <span>Step</span>
+              <input
+                type="number"
+                min={CHORD_CONTROLLER_SETTING_STEP_MIN}
+                max={CHORD_CONTROLLER_SETTING_STEP_MAX}
+                step={1}
+                value={chordFunctionDraft.id === func.id ? chordFunctionDraft.controllerStepPercent : func.stepPercent}
+                disabled={pendingAction !== null}
+                aria-label={`${notchTarget.target.label} step percent`}
+                onChange={(event) => {
+                  const nextValue = normalizeChordControllerSettingStepPercent(event.target.value);
+                  setChordFunctionDraft((draft) => ({ ...draft, controllerStepPercent: nextValue }));
+                }}
+                onBlur={(event) => {
+                  setChordFunctionControllerStepPercent(Number(event.currentTarget.value));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.currentTarget.blur();
+                  }
+                }}
+              />
+              <small>%</small>
+            </label>
+            <div className="dual-selector chords-notch-direction-selector" role="group" aria-label={`${notchTarget.target.label} direction`}>
+              <button
+                type="button"
+                className={notchTarget.direction === 'down' ? 'active' : ''}
+                title={`Decrease ${notchTarget.target.label}`}
+                aria-label={`Decrease ${notchTarget.target.label}`}
+                disabled={pendingAction !== null}
+                onClick={() => setChordFunctionControllerAction(notchTarget.target.downAction)}
+              >
+                <Minus size={15} />
+              </button>
+              <button
+                type="button"
+                className={notchTarget.direction === 'up' ? 'active' : ''}
+                title={`Increase ${notchTarget.target.label}`}
+                aria-label={`Increase ${notchTarget.target.label}`}
+                disabled={pendingAction !== null}
+                onClick={() => setChordFunctionControllerAction(notchTarget.target.upAction)}
+              >
+                <Plus size={15} />
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="dual-selector chords-notch-direction-selector" role="group" aria-label={`${notchTarget.target.label} direction`}>
-          <button
-            type="button"
-            className={notchTarget.direction === 'down' ? 'active' : ''}
-            title={`Decrease ${notchTarget.target.label}`}
-            aria-label={`Decrease ${notchTarget.target.label}`}
-            disabled={pendingAction !== null}
-            onClick={() => setChordFunctionControllerAction(notchTarget.target.downAction)}
-          >
-            <Minus size={15} />
-          </button>
-          <button
-            type="button"
-            className={notchTarget.direction === 'up' ? 'active' : ''}
-            title={`Increase ${notchTarget.target.label}`}
-            aria-label={`Increase ${notchTarget.target.label}`}
-            disabled={pendingAction !== null}
-            onClick={() => setChordFunctionControllerAction(notchTarget.target.upAction)}
-          >
-            <Plus size={15} />
-          </button>
+        <div className="chords-function-summary-detail">
+          <div className="chords-function-summary-detail-row">
+            <span>Type</span>
+            <strong>{chordFunctionTypeLabel(func.type)}</strong>
+          </div>
+          <div className="chords-function-summary-detail-row">
+            <span>Adjustment</span>
+            <strong>
+              {chordControllerSettingAdjustmentText(func.action)}
+              <em> — {func.stepPercent}% step</em>
+            </strong>
+          </div>
         </div>
       </div>
     );
@@ -4758,36 +4875,17 @@ export function App() {
   }
 
   function commitChordAssignment(nextAssignment: ChordAssignment, replaceAssignmentId?: string) {
-    const nextBindingKey = chordAssignmentKey(nextAssignment);
-    const existingIndex = chordAssignments.findIndex((assignment) => (
-      assignment.id !== replaceAssignmentId && chordAssignmentKey(assignment) === nextBindingKey
-    ));
     const replacingExisting = replaceAssignmentId
       ? chordAssignments.some((assignment) => assignment.id === replaceAssignmentId)
       : false;
-    if (!replacingExisting && existingIndex === -1 && chordAssignments.length >= MAX_CHORD_ASSIGNMENTS) {
+    if (!replacingExisting && chordAssignments.length >= MAX_CHORD_ASSIGNMENTS) {
       return;
     }
-    const nextAssignments: ChordAssignment[] = [];
-    let inserted = false;
-    for (const assignment of chordAssignments) {
-      if (assignment.id === replaceAssignmentId) {
-        nextAssignments.push(nextAssignment);
-        inserted = true;
-        continue;
-      }
-      if (chordAssignmentKey(assignment) === nextBindingKey) {
-        if (!inserted && !replaceAssignmentId) {
-          nextAssignments.push(nextAssignment);
-          inserted = true;
-        }
-        continue;
-      }
-      nextAssignments.push(assignment);
-    }
-    if (!inserted) {
-      nextAssignments.push(nextAssignment);
-    }
+    const nextAssignments = replacingExisting
+      ? chordAssignments.map((assignment) => (
+        assignment.id === replaceAssignmentId ? nextAssignment : assignment
+      ))
+      : [...chordAssignments, nextAssignment];
     commitChordConfiguration(chordFunctions, nextAssignments, `chords-assignment-${nextAssignment.id}`);
   }
 
@@ -4811,7 +4909,7 @@ export function App() {
       return;
     }
     const nextAssignment: ChordAssignment = {
-      id: `chord-${row.starter}-${button}`,
+      id: createChordAssignmentId(row.starter, button),
       kind: 'chord',
       starter: row.starter,
       button,
@@ -4866,7 +4964,6 @@ export function App() {
     }
     commitChordAssignment({
       ...current,
-      id: `chord-${starter}-${button}`,
       starter,
       button
     }, assignmentId);
@@ -4882,7 +4979,6 @@ export function App() {
     }
     commitChordAssignment({
       ...current,
-      id: `chord-${current.starter}-${button}`,
       button
     }, assignmentId);
   }
@@ -4901,6 +4997,71 @@ export function App() {
   function deleteChordAssignment(assignmentId: string) {
     const nextAssignments = chordAssignments.filter((assignment) => assignment.id !== assignmentId);
     commitChordConfiguration(chordFunctions, nextAssignments, `chords-delete-assignment-${assignmentId}`);
+  }
+
+  function reorderChordAssignment(sourceId: string, targetId: string, placement: 'before' | 'after') {
+    if (sourceId === targetId) {
+      return;
+    }
+    const sourceIndex = chordAssignments.findIndex((assignment) => assignment.id === sourceId);
+    if (sourceIndex === -1 || !chordAssignments.some((assignment) => assignment.id === targetId)) {
+      return;
+    }
+    const nextAssignments = [...chordAssignments];
+    const [moved] = nextAssignments.splice(sourceIndex, 1);
+    if (!moved) {
+      return;
+    }
+    const targetIndex = nextAssignments.findIndex((assignment) => assignment.id === targetId);
+    if (targetIndex === -1) {
+      return;
+    }
+    nextAssignments.splice(placement === 'after' ? targetIndex + 1 : targetIndex, 0, moved);
+    commitChordConfiguration(chordFunctions, nextAssignments, `chords-reorder-assignment-${sourceId}`);
+  }
+
+  function startChordAssignmentDrag(event: DragEvent<HTMLDivElement>, assignmentId: string) {
+    if (pendingAction !== null) {
+      event.preventDefault();
+      return;
+    }
+    const dragPreview = event.currentTarget.cloneNode(true) as HTMLElement;
+    dragPreview.classList.add('chords-assignment-drag-preview');
+    dragPreview.style.width = `${event.currentTarget.offsetWidth}px`;
+    dragPreview.style.position = 'fixed';
+    dragPreview.style.top = '-1000px';
+    dragPreview.style.left = '-1000px';
+    document.body.appendChild(dragPreview);
+    event.dataTransfer.setDragImage(
+      dragPreview,
+      event.nativeEvent.offsetX,
+      event.nativeEvent.offsetY
+    );
+    window.setTimeout(() => dragPreview.remove(), 0);
+    setDraggedChordAssignmentId(assignmentId);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', assignmentId);
+  }
+
+  function dragOverChordAssignment(event: DragEvent<HTMLDivElement>, assignmentId: string) {
+    const sourceId = draggedChordAssignmentId ?? event.dataTransfer.getData('text/plain');
+    if (!sourceId || sourceId === assignmentId) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }
+
+  function dropChordAssignment(event: DragEvent<HTMLDivElement>, targetId: string) {
+    const sourceId = draggedChordAssignmentId ?? event.dataTransfer.getData('text/plain');
+    setDraggedChordAssignmentId(null);
+    if (!sourceId || sourceId === targetId) {
+      return;
+    }
+    event.preventDefault();
+    const targetRect = event.currentTarget.getBoundingClientRect();
+    const placement = event.clientY > targetRect.top + targetRect.height / 2 ? 'after' : 'before';
+    reorderChordAssignment(sourceId, targetId, placement);
   }
 
   function toggleHapticsEnabled() {
@@ -7417,7 +7578,7 @@ export function App() {
                 <section className="feature-card chords-card chords-function-card">
                   <div className="feature-card-title">
                     <span className="feature-icon">
-                      <Keyboard size={24} />
+                      <IconBooks size={24} />
                     </span>
                     <div className="title-copy">
                       <h3>Function Library</h3>
@@ -7589,8 +7750,14 @@ export function App() {
                     </span>
                     <div className="title-copy">
                       <h3>Assignments</h3>
-                      <p>PS, LFN, or RFN starters.</p>
+                      <p>{chordAssignmentsSubtitle}</p>
                     </div>
+                    {chordAssignmentConflictState.conflictCount > 0 ? (
+                      <span className="chords-conflict-badge" title="Duplicate or shortcut-shadowed chord bindings">
+                        <strong>{chordAssignmentConflictState.conflictCount}x</strong>
+                        {chordAssignmentConflictState.conflictCount === 1 ? 'Conflict' : 'Conflicts'}
+                      </span>
+                    ) : null}
                   </div>
 
                   <div className="chords-assignment-builder">
@@ -7678,8 +7845,21 @@ export function App() {
                         })}
                         {chordAssignments.map((assignment) => {
                         const func = chordFunctions.find((candidate) => candidate.id === assignment.functionId);
+                        const hasConflict = chordAssignmentConflictState.conflictKeys.has(chordAssignmentKey(assignment));
                         return (
-                          <div className="chords-assignment-row" key={assignment.id}>
+                          <div
+                            className={[
+                              'chords-assignment-row',
+                              hasConflict ? 'conflict' : '',
+                              draggedChordAssignmentId === assignment.id ? 'dragging' : ''
+                            ].filter(Boolean).join(' ')}
+                            key={assignment.id}
+                            draggable={pendingAction === null}
+                            onDragStart={(event) => startChordAssignmentDrag(event, assignment.id)}
+                            onDragOver={(event) => dragOverChordAssignment(event, assignment.id)}
+                            onDrop={(event) => dropChordAssignment(event, assignment.id)}
+                            onDragEnd={() => setDraggedChordAssignmentId(null)}
+                          >
                             <div
                               className="chords-assignment-binding"
                               aria-label={chordAssignmentLabel(assignment)}
@@ -7749,7 +7929,7 @@ export function App() {
                       <div className="chords-empty chords-empty-assignments">
                         <IconDeviceGamepad3 size={26} />
                         <strong>No assignments</strong>
-                        <span>Create a function, then add a chord.</span>
+                        <span>Use New Chord to pair a starter, button, and function.</span>
                       </div>
                     )}
                   </div>

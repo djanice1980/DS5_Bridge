@@ -143,6 +143,9 @@ export const CHORD_FUNCTION_EVENT_BASE = 0x20;
 export const MAX_CHORD_ASSIGNMENTS = 16;
 export const MAX_CHORD_FUNCTION_NAME_LENGTH = 16;
 export const MAX_KEYBOARD_FUNCTION_KEYS = 4;
+export const CHORD_CONTROLLER_SETTING_STEP_MIN = 1;
+export const CHORD_CONTROLLER_SETTING_STEP_MAX = 100;
+export const CHORD_CONTROLLER_SETTING_STEP_DEFAULT = 10;
 export interface AudioReactiveHapticsAppSource {
   kind: 'app-session';
   processId: number;
@@ -259,6 +262,7 @@ export interface ChordControllerSettingFunction {
   name: string;
   type: 'controller-setting';
   action: ChordControllerSettingAction;
+  stepPercent: number;
 }
 export type ChordFunction = ChordKeyboardFunction | ChordMediaFunction | ChordControllerSettingFunction;
 export interface ChordComboAssignment {
@@ -350,6 +354,30 @@ export function isChordAssignableButtonId(value: unknown): value is ChordAssigna
 
 export function isChordBindingAllowed(starter: ChordStarterId, button: ChordAssignableButtonId): boolean {
   return starter === 'ps' || !(CHORD_EDGE_RESERVED_FACE_BUTTON_IDS as readonly string[]).includes(button);
+}
+
+export function defaultChordControllerSettingStepPercent(action: ChordControllerSettingAction): number {
+  switch (action) {
+    case 'haptics-down':
+    case 'haptics-up':
+    case 'rumble-down':
+    case 'rumble-up':
+      return 20;
+    default:
+      return CHORD_CONTROLLER_SETTING_STEP_DEFAULT;
+  }
+}
+
+export function normalizeChordControllerSettingStepPercent(
+  value: unknown,
+  fallback = CHORD_CONTROLLER_SETTING_STEP_DEFAULT
+): number {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  const resolved = Number.isFinite(numeric) ? numeric : fallback;
+  return Math.max(
+    CHORD_CONTROLLER_SETTING_STEP_MIN,
+    Math.min(CHORD_CONTROLLER_SETTING_STEP_MAX, Math.round(resolved))
+  );
 }
 
 export function remapButtonIdValue(buttonId: RemapButtonId): number {

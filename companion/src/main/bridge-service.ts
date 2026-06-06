@@ -30,6 +30,7 @@ import {
   SHORTCUT_EVENT,
   buildButtonRemapPayload,
   hostPersonaModeValue,
+  normalizeChordControllerSettingStepPercent,
   normalizeBridgePresetId,
   pollingRateModeValue
 } from '../shared/protocol';
@@ -2547,13 +2548,17 @@ export class BridgeService extends EventEmitter {
         await sendVirtualKeySequence([MEDIA_ACTION_KEY_CODES[func.action]]);
         return;
       case 'controller-setting':
-        await this.executeChordControllerSettingAction(func.action);
+        await this.executeChordControllerSettingAction(func.action, func.stepPercent);
         return;
     }
   }
 
-  private async executeChordControllerSettingAction(action: Extract<ChordFunction, { type: 'controller-setting' }>['action']): Promise<void> {
+  private async executeChordControllerSettingAction(
+    action: Extract<ChordFunction, { type: 'controller-setting' }>['action'],
+    stepPercent: number
+  ): Promise<void> {
     const settings = this.settingsStore.get();
+    const step = normalizeChordControllerSettingStepPercent(stepPercent);
     switch (action) {
       case 'toggle-audio-haptics':
         await this.setAudioReactiveHapticsConfig({ enabled: !settings.audioReactiveHapticsEnabled });
@@ -2571,40 +2576,40 @@ export class BridgeService extends EventEmitter {
         await this.sleepController();
         return;
       case 'speaker-down':
-        await this.stepSpeakerVolume(-SPEAKER_VOLUME_STEP);
+        await this.stepSpeakerVolume(-step);
         return;
       case 'speaker-up':
-        await this.stepSpeakerVolume(SPEAKER_VOLUME_STEP);
+        await this.stepSpeakerVolume(step);
         return;
       case 'mic-down':
-        await this.stepMicVolume(-MIC_VOLUME_STEP);
+        await this.stepMicVolume(-step);
         return;
       case 'mic-up':
-        await this.stepMicVolume(MIC_VOLUME_STEP);
+        await this.stepMicVolume(step);
         return;
       case 'haptics-down':
-        await this.stepHapticsGain(-HAPTICS_STEP);
+        await this.stepHapticsGain(-step);
         return;
       case 'haptics-up':
-        await this.stepHapticsGain(HAPTICS_STEP);
+        await this.stepHapticsGain(step);
         return;
       case 'rumble-down':
-        await this.stepClassicRumbleGain(-HAPTICS_STEP);
+        await this.stepClassicRumbleGain(-step);
         return;
       case 'rumble-up':
-        await this.stepClassicRumbleGain(HAPTICS_STEP);
+        await this.stepClassicRumbleGain(step);
         return;
       case 'triggers-down':
-        await this.stepTriggerEffectIntensity(-TRIGGER_EFFECT_STEP);
+        await this.stepTriggerEffectIntensity(-step);
         return;
       case 'triggers-up':
-        await this.stepTriggerEffectIntensity(TRIGGER_EFFECT_STEP);
+        await this.stepTriggerEffectIntensity(step);
         return;
       case 'lighting-down':
-        await this.stepLightbarBrightness(-LIGHTBAR_BRIGHTNESS_STEP);
+        await this.stepLightbarBrightness(-step);
         return;
       case 'lighting-up':
-        await this.stepLightbarBrightness(LIGHTBAR_BRIGHTNESS_STEP);
+        await this.stepLightbarBrightness(step);
         return;
     }
   }
