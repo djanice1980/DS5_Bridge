@@ -2606,6 +2606,10 @@ button {
   box-shadow: inset 0 -2px 0 var(--success-border);
 }
 
+.shell[data-theme="kiwi"] .overview-persona-button.persona-xbox.active {
+  color: var(--text-strong);
+}
+
 .overview-persona-button:disabled {
   cursor: default;
   opacity: var(--disabled-opacity);
@@ -5692,6 +5696,98 @@ button.trigger-lab-chip {
   max-height: min(var(--custom-select-menu-max-height), 178px);
 }
 
+.chords-keyboard-shortcut-builder {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--surface-border-strong);
+  border-radius: var(--control-radius);
+  background: var(--surface-control);
+  overflow: visible;
+}
+
+.chords-keyboard-key-select {
+  flex: 0 0 calc(var(--chords-keyboard-key-label-width) + 38px);
+  width: calc(var(--chords-keyboard-key-label-width) + 38px);
+  min-width: 0;
+  height: 100%;
+  border-right: 1px solid var(--surface-border-strong);
+}
+
+.chords-keyboard-key-select .custom-select-button {
+  height: 36px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 0;
+  padding: 0 8px 0 11px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.chords-keyboard-key-select.open .custom-select-button {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.chords-keyboard-key-select .custom-select-menu {
+  min-width: 150px;
+}
+
+.chords-keyboard-key-select .custom-select-menu button {
+  min-height: 28px;
+  padding: 0 7px 0 9px;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.chords-keyboard-key-select .custom-select-menu button span {
+  font-size: inherit;
+  line-height: 1.2;
+}
+
+.chords-keyboard-modifiers {
+  min-width: 0;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.chords-keyboard-modifiers button {
+  height: 28px;
+  min-width: 0;
+  border: 0;
+  border-radius: calc(var(--control-radius) - 2px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  color: var(--text-control);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.chords-keyboard-modifiers button:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.chords-keyboard-modifiers button.active {
+  color: var(--accent-text);
+  background: var(--accent-selected);
+}
+
+.chords-keyboard-modifiers button:disabled {
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
 .chords-function-summary {
   box-sizing: border-box;
   width: 100%;
@@ -5703,15 +5799,10 @@ button.trigger-lab-chip {
   overflow: hidden;
 }
 
-.chords-function-summary-stepper {
+.chords-function-summary-grouped {
   grid-template-columns: 1fr;
   align-items: stretch;
   gap: 0;
-}
-
-.chords-function-summary:not(.chords-function-summary-stepper) {
-  gap: 4px;
-  padding: 9px 10px;
 }
 
 .chords-function-summary-header {

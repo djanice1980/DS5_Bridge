@@ -146,11 +146,13 @@ type ChordFunctionDraft = {
   id: string;
   name: string;
   type: ChordFunctionType;
-  keysText: string;
+  keyboardKey: string;
+  keyboardModifiers: ChordKeyboardModifier[];
   mediaAction: ChordMediaAction;
   controllerAction: ChordControllerSettingAction;
   controllerStepPercent: number;
 };
+type ChordKeyboardModifier = 'Ctrl' | 'Shift' | 'Alt' | 'Win';
 type ChordNotchTargetId = 'speaker' | 'mic' | 'haptics' | 'rumble' | 'triggers' | 'lighting';
 type ChordNotchDirection = 'down' | 'up';
 type ChordNotchAction = Extract<ChordControllerSettingAction, `${ChordNotchTargetId}-${ChordNotchDirection}`>;
@@ -507,12 +509,47 @@ const CHORD_CONTROLLER_SETTING_ACTION_OPTIONS: Array<[string, ChordControllerSet
   ['Sleep Controller', 'sleep-controller'],
   ...CHORD_NOTCH_TARGETS.map((target): [string, ChordNotchTargetId] => [target.label, target.id])
 ];
+const CHORD_KEYBOARD_KEY_OPTIONS: Array<[string, string]> = [
+  ['Esc', 'Esc'],
+  ['Enter', 'Enter'],
+  ['Space', 'Space'],
+  ['Tab', 'Tab'],
+  ['Backspace', 'Backspace'],
+  ['Delete', 'Delete'],
+  ['Insert', 'Insert'],
+  ['Home', 'Home'],
+  ['End', 'End'],
+  ['Page Up', 'Page Up'],
+  ['Page Down', 'Page Down'],
+  ['Up Arrow', 'Up'],
+  ['Down Arrow', 'Down'],
+  ['Left Arrow', 'Left'],
+  ['Right Arrow', 'Right'],
+  ['Pause', 'Pause'],
+  ['Caps Lock', 'Caps Lock'],
+  ['Num Lock', 'Num Lock'],
+  ['Scroll Lock', 'Scroll Lock'],
+  ['Menu', 'Menu'],
+  ...Array.from({ length: 24 }, (_, index): [string, string] => [`F${index + 1}`, `F${index + 1}`]),
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter): [string, string] => [letter, letter]),
+  ...'1234567890'.split('').map((digit): [string, string] => [digit, digit])
+];
+const CHORD_KEYBOARD_KEY_MAX_LABEL_LENGTH = Math.max(
+  ...CHORD_KEYBOARD_KEY_OPTIONS.map(([label]) => label.length)
+);
+const CHORD_KEYBOARD_MODIFIER_OPTIONS: Array<[ChordKeyboardModifier, ChordKeyboardModifier]> = [
+  ['Ctrl', 'Ctrl'],
+  ['Shift', 'Shift'],
+  ['Alt', 'Alt'],
+  ['Win', 'Win']
+];
 const DEFAULT_CHORD_KEYBOARD_KEYS = ['Ctrl', 'Shift', 'Esc'];
 const EMPTY_CHORD_FUNCTION_DRAFT: ChordFunctionDraft = {
   id: '',
   name: 'Task Manager',
   type: 'keyboard',
-  keysText: DEFAULT_CHORD_KEYBOARD_KEYS.join(' + '),
+  keyboardKey: 'Esc',
+  keyboardModifiers: ['Ctrl', 'Shift'],
   mediaAction: 'play-pause',
   controllerAction: 'sleep-controller',
   controllerStepPercent: CHORD_CONTROLLER_SETTING_STEP_DEFAULT
@@ -2366,11 +2403,15 @@ function chordFunctionToDraft(func: ChordFunction | null): ChordFunctionDraft {
   if (!func) {
     return { ...EMPTY_CHORD_FUNCTION_DRAFT };
   }
+  const keyboardParts = func.type === 'keyboard'
+    ? chordKeyboardParts(func.keys)
+    : chordKeyboardParts(DEFAULT_CHORD_KEYBOARD_KEYS);
   return {
     id: func.id,
     name: func.name,
     type: func.type,
-    keysText: func.type === 'keyboard' ? func.keys.join(' + ') : DEFAULT_CHORD_KEYBOARD_KEYS.join(' + '),
+    keyboardKey: keyboardParts.key,
+    keyboardModifiers: keyboardParts.modifiers,
     mediaAction: func.type === 'media' ? func.action : 'play-pause',
     controllerAction: func.type === 'controller-setting' ? func.action : 'sleep-controller',
     controllerStepPercent: func.type === 'controller-setting'
@@ -2396,32 +2437,44 @@ function normalizeChordKeyLabel(key: string): string {
     case 'spacebar':
     case 'space':
       return 'Space';
+    case 'left arrow':
+      return 'Left';
+    case 'right arrow':
+      return 'Right';
+    case 'up arrow':
+      return 'Up';
+    case 'down arrow':
+      return 'Down';
     default:
       return trimmed.length === 1 ? trimmed.toUpperCase() : trimmed;
   }
 }
 
-function parseChordKeys(text: string): string[] {
-  return text
-    .split(/[+,;]/)
-    .map(normalizeChordKeyLabel)
-    .filter(Boolean)
-    .slice(0, MAX_KEYBOARD_FUNCTION_KEYS);
+function chordKeyboardParts(keys: string[]): {
+  key: string;
+  modifiers: ChordKeyboardModifier[];
+} {
+  const normalizedKeys = keys.map(normalizeChordKeyLabel);
+  const modifiers = CHORD_KEYBOARD_MODIFIER_OPTIONS
+    .map(([, modifier]) => modifier)
+    .filter((modifier) => normalizedKeys.includes(modifier))
+    .slice(0, MAX_KEYBOARD_FUNCTION_KEYS - 1);
+  const supportedKeys = new Set(CHORD_KEYBOARD_KEY_OPTIONS.map(([, value]) => value));
+  const key = normalizedKeys.find((candidate) => supportedKeys.has(candidate)) ?? 'Esc';
+  return { key, modifiers };
 }
 
 function chordFunctionFromDraft(draft: ChordFunctionDraft): ChordFunction {
   const name = (draft.name.trim() || chordFunctionTypeLabel(draft.type)).slice(0, MAX_CHORD_FUNCTION_NAME_LENGTH);
   const id = draft.id || `function-${Date.now().toString(36)}`;
   switch (draft.type) {
-    case 'keyboard': {
-      const keys = parseChordKeys(draft.keysText);
+    case 'keyboard':
       return {
         id,
         name,
         type: 'keyboard',
-        keys: keys.length > 0 ? keys : DEFAULT_CHORD_KEYBOARD_KEYS
+        keys: [...draft.keyboardModifiers, draft.keyboardKey].slice(0, MAX_KEYBOARD_FUNCTION_KEYS)
       };
-    }
     case 'media':
       return {
         id,
@@ -4772,6 +4825,29 @@ export function App() {
     commitChordConfiguration(nextFunctions, chordAssignments, `chords-function-${nextFunction.id}`);
   }
 
+  function setChordFunctionKeyboardKey(keyboardKey: string) {
+    const nextDraft = { ...chordFunctionDraft, keyboardKey };
+    setChordFunctionDraft(nextDraft);
+    commitChordFunctionDraft(nextDraft);
+  }
+
+  function toggleChordFunctionKeyboardModifier(modifier: ChordKeyboardModifier) {
+    const enabled = chordFunctionDraft.keyboardModifiers.includes(modifier);
+    if (!enabled && chordFunctionDraft.keyboardModifiers.length >= MAX_KEYBOARD_FUNCTION_KEYS - 1) {
+      return;
+    }
+    const keyboardModifiers = enabled
+      ? chordFunctionDraft.keyboardModifiers.filter((candidate) => candidate !== modifier)
+      : CHORD_KEYBOARD_MODIFIER_OPTIONS
+        .map(([, candidate]) => candidate)
+        .filter((candidate) => (
+          candidate === modifier || chordFunctionDraft.keyboardModifiers.includes(candidate)
+        ));
+    const nextDraft = { ...chordFunctionDraft, keyboardModifiers };
+    setChordFunctionDraft(nextDraft);
+    commitChordFunctionDraft(nextDraft);
+  }
+
   function setChordFunctionControllerAction(action: ChordControllerSettingAction) {
     const nextDraft = { ...chordFunctionDraft, controllerAction: action };
     setChordFunctionDraft(nextDraft);
@@ -4788,78 +4864,73 @@ export function App() {
   }
 
   function renderChordFunctionSummary(func: ChordFunction) {
-    if (func.type !== 'controller-setting') {
-      return (
-        <div className="chords-function-summary">
-          <strong>{chordFunctionTypeLabel(func.type)}</strong>
-          <span>{chordFunctionSummary(func)}</span>
-        </div>
-      );
-    }
-
-    const notchTarget = chordNotchTargetForAction(func.action);
-    if (!notchTarget) {
-      return (
-        <div className="chords-function-summary">
-          <strong>{chordFunctionTypeLabel(func.type)}</strong>
-          <span>{chordFunctionSummary(func)}</span>
-        </div>
-      );
-    }
+    const notchTarget = func.type === 'controller-setting'
+      ? chordNotchTargetForAction(func.action)
+      : null;
+    const detailLabel = func.type === 'keyboard'
+      ? 'Keys'
+      : notchTarget
+        ? 'Adjustment'
+        : 'Action';
+    const detailValue = func.type === 'controller-setting' && notchTarget
+      ? chordControllerSettingAdjustmentText(func.action)
+      : chordFunctionSummary(func);
 
     return (
-      <div className="chords-function-summary chords-function-summary-stepper">
+      <div className="chords-function-summary chords-function-summary-grouped">
         <div className="chords-function-summary-header">
           <span>Summary</span>
-          <div className="chords-function-summary-options">
-            <label className="chords-step-selector">
-              <span>Step</span>
-              <input
-                type="number"
-                min={CHORD_CONTROLLER_SETTING_STEP_MIN}
-                max={CHORD_CONTROLLER_SETTING_STEP_MAX}
-                step={1}
-                value={chordFunctionDraft.id === func.id ? chordFunctionDraft.controllerStepPercent : func.stepPercent}
-                disabled={pendingAction !== null}
-                aria-label={`${notchTarget.target.label} step percent`}
-                onChange={(event) => {
-                  const nextValue = normalizeChordControllerSettingStepPercent(event.target.value);
-                  setChordFunctionDraft((draft) => ({ ...draft, controllerStepPercent: nextValue }));
-                }}
-                onBlur={(event) => {
-                  setChordFunctionControllerStepPercent(Number(event.currentTarget.value));
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.currentTarget.blur();
-                  }
-                }}
-              />
-              <small>%</small>
-            </label>
-            <div className="dual-selector chords-notch-direction-selector" role="group" aria-label={`${notchTarget.target.label} direction`}>
-              <button
-                type="button"
-                className={notchTarget.direction === 'down' ? 'active' : ''}
-                title={`Decrease ${notchTarget.target.label}`}
-                aria-label={`Decrease ${notchTarget.target.label}`}
-                disabled={pendingAction !== null}
-                onClick={() => setChordFunctionControllerAction(notchTarget.target.downAction)}
-              >
-                <Minus size={15} />
-              </button>
-              <button
-                type="button"
-                className={notchTarget.direction === 'up' ? 'active' : ''}
-                title={`Increase ${notchTarget.target.label}`}
-                aria-label={`Increase ${notchTarget.target.label}`}
-                disabled={pendingAction !== null}
-                onClick={() => setChordFunctionControllerAction(notchTarget.target.upAction)}
-              >
-                <Plus size={15} />
-              </button>
+          {func.type === 'controller-setting' && notchTarget ? (
+            <div className="chords-function-summary-options">
+              <label className="chords-step-selector">
+                <span>Step</span>
+                <input
+                  type="number"
+                  min={CHORD_CONTROLLER_SETTING_STEP_MIN}
+                  max={CHORD_CONTROLLER_SETTING_STEP_MAX}
+                  step={1}
+                  value={chordFunctionDraft.id === func.id ? chordFunctionDraft.controllerStepPercent : func.stepPercent}
+                  disabled={pendingAction !== null}
+                  aria-label={`${notchTarget.target.label} step percent`}
+                  onChange={(event) => {
+                    const nextValue = normalizeChordControllerSettingStepPercent(event.target.value);
+                    setChordFunctionDraft((draft) => ({ ...draft, controllerStepPercent: nextValue }));
+                  }}
+                  onBlur={(event) => {
+                    setChordFunctionControllerStepPercent(Number(event.currentTarget.value));
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.currentTarget.blur();
+                    }
+                  }}
+                />
+                <small>%</small>
+              </label>
+              <div className="dual-selector chords-notch-direction-selector" role="group" aria-label={`${notchTarget.target.label} direction`}>
+                <button
+                  type="button"
+                  className={notchTarget.direction === 'down' ? 'active' : ''}
+                  title={`Decrease ${notchTarget.target.label}`}
+                  aria-label={`Decrease ${notchTarget.target.label}`}
+                  disabled={pendingAction !== null}
+                  onClick={() => setChordFunctionControllerAction(notchTarget.target.downAction)}
+                >
+                  <Minus size={15} />
+                </button>
+                <button
+                  type="button"
+                  className={notchTarget.direction === 'up' ? 'active' : ''}
+                  title={`Increase ${notchTarget.target.label}`}
+                  aria-label={`Increase ${notchTarget.target.label}`}
+                  disabled={pendingAction !== null}
+                  onClick={() => setChordFunctionControllerAction(notchTarget.target.upAction)}
+                >
+                  <Plus size={15} />
+                </button>
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
         <div className="chords-function-summary-detail">
           <div className="chords-function-summary-detail-row">
@@ -4867,10 +4938,12 @@ export function App() {
             <strong>{chordFunctionTypeLabel(func.type)}</strong>
           </div>
           <div className="chords-function-summary-detail-row">
-            <span>Adjustment</span>
+            <span>{detailLabel}</span>
             <strong>
-              {chordControllerSettingAdjustmentText(func.action)}
-              <em> — {func.stepPercent}% step</em>
+              {detailValue}
+              {func.type === 'controller-setting' && notchTarget ? (
+                <em> — {func.stepPercent}% step</em>
+              ) : null}
             </strong>
           </div>
         </div>
@@ -7862,38 +7935,41 @@ export function App() {
                       </label>
 
                       {chordFunctionDraft.type === 'keyboard' && (
-                        <label className="chords-field">
-                          <span>Keys</span>
-                          <input
-                            value={chordFunctionDraft.keysText}
+                        <div
+                          className="chords-keyboard-shortcut-builder"
+                          aria-label="Keyboard shortcut"
+                          style={{
+                            '--chords-keyboard-key-label-width': `${CHORD_KEYBOARD_KEY_MAX_LABEL_LENGTH}ch`
+                          } as CSSProperties}
+                        >
+                          <CustomSelect
+                            className="chords-keyboard-key-select"
+                            value={chordFunctionDraft.keyboardKey}
+                            options={CHORD_KEYBOARD_KEY_OPTIONS}
                             disabled={pendingAction !== null}
-                            placeholder="Ctrl + Shift + Esc"
-                            onChange={(event) => {
-                              const keys = parseChordKeys(event.target.value);
-                              setChordFunctionDraft((draft) => ({
-                                ...draft,
-                                keysText: keys.length > MAX_KEYBOARD_FUNCTION_KEYS
-                                  ? keys.slice(0, MAX_KEYBOARD_FUNCTION_KEYS).join(' + ')
-                                  : event.target.value
-                              }));
-                            }}
-                            onBlur={() => {
-                              const keys = parseChordKeys(chordFunctionDraft.keysText);
-                              const nextDraft = {
-                                ...chordFunctionDraft,
-                                keysText: (keys.length > 0 ? keys : DEFAULT_CHORD_KEYBOARD_KEYS).join(' + ')
-                              };
-                              setChordFunctionDraft(nextDraft);
-                              commitChordFunctionDraft(nextDraft);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.currentTarget.blur();
-                              }
-                            }}
+                            ariaLabel="Keyboard shortcut key"
+                            onChange={setChordFunctionKeyboardKey}
                           />
-                          <small>Up to {MAX_KEYBOARD_FUNCTION_KEYS} keys, including modifiers.</small>
-                        </label>
+                          <div className="chords-keyboard-modifiers" aria-label="Keyboard shortcut modifiers">
+                            {CHORD_KEYBOARD_MODIFIER_OPTIONS.map(([label, modifier]) => {
+                              const active = chordFunctionDraft.keyboardModifiers.includes(modifier);
+                              const unavailable = !active
+                                && chordFunctionDraft.keyboardModifiers.length >= MAX_KEYBOARD_FUNCTION_KEYS - 1;
+                              return (
+                                <button
+                                  key={modifier}
+                                  type="button"
+                                  className={active ? 'active' : ''}
+                                  aria-pressed={active}
+                                  disabled={pendingAction !== null || unavailable}
+                                  onClick={() => toggleChordFunctionKeyboardModifier(modifier)}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
                       )}
 
                       {chordFunctionDraft.type === 'media' && (
