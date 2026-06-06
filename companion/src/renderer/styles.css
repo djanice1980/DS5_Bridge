@@ -5520,6 +5520,7 @@ button.trigger-lab-chip {
 .chords-editor,
 .chords-function-strip,
 .chords-assignment-builder,
+.chords-assignment-scroll-region,
 .chords-assignment-list {
   min-height: 0;
 }
@@ -5952,18 +5953,60 @@ button.trigger-lab-chip {
   color: var(--text-muted);
 }
 
+.chords-assignment-scroll-region {
+  position: relative;
+  display: grid;
+}
+
 .chords-assignment-list {
+  width: 100%;
+  height: 100%;
   display: grid;
   align-content: start;
   gap: 8px;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-right: 2px;
+  scrollbar-width: none;
+}
+
+.chords-assignment-list:not(:has(.chords-empty-assignments)) {
+  padding-top: 8px;
+}
+
+.chords-assignment-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .chords-assignment-list:has(.chords-empty-assignments) {
   align-content: stretch;
   grid-template-rows: minmax(0, 1fr);
+}
+
+.chords-assignment-scrollbar {
+  position: absolute;
+  top: 0;
+  right: -12px;
+  bottom: 0;
+  width: 6px;
+  border-radius: 999px;
+  background: var(--scrollbar-track);
+  pointer-events: none;
+}
+
+.chords-assignment-scrollbar-thumb {
+  width: 6px;
+  min-height: 30px;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  will-change: transform;
+}
+
+.chords-assignment-scrollbar-thumb:active {
+  cursor: grabbing;
 }
 
 .chords-assignment-row {
@@ -6043,7 +6086,7 @@ button.trigger-lab-chip {
 }
 
 .chords-assignment-row.drop-before.drop-list-start::before {
-  top: 1px;
+  top: -6px;
 }
 
 .chords-assignment-row.drop-after::after {

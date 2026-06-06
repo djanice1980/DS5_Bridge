@@ -183,6 +183,11 @@ type ChordAssignmentDragSession = {
   cleanup: () => void;
   dropHint: ChordAssignmentDropHint | null;
 };
+type ChordAssignmentScrollbarState = {
+  visible: boolean;
+  top: number;
+  height: number;
+};
 type TriggerLabProfileDialogMode = 'save' | 'rename' | 'delete';
 type TriggerLabBuiltinProfileId = 'default';
 type TriggerLabCustomProfileId = 'custom' | `custom-${string}`;
@@ -2499,6 +2504,11 @@ export function App() {
   const [chordAssignmentDraftRows, setChordAssignmentDraftRows] = useState<ChordAssignmentDraftRow[]>([]);
   const [draggedChordAssignmentId, setDraggedChordAssignmentId] = useState<string | null>(null);
   const [chordAssignmentDropHint, setChordAssignmentDropHint] = useState<ChordAssignmentDropHint | null>(null);
+  const [chordAssignmentScrollbar, setChordAssignmentScrollbar] = useState<ChordAssignmentScrollbarState>({
+    visible: false,
+    top: 0,
+    height: 0
+  });
   const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
   const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
   const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<StandardRemapButtonId, RemapCalloutLayout> | null>(null);
@@ -2723,6 +2733,24 @@ export function App() {
   const chordAssignmentsSubtitle = showDualSenseEdgeRemapButtons
     ? 'Pair PS, LFN, or RFN with a button.'
     : 'Pair PS with a button.';
+
+  useEffect(() => {
+    const list = chordAssignmentListRef.current;
+    if (!list || activeControlTab !== 'chords') {
+      return;
+    }
+    const frame = window.requestAnimationFrame(updateChordAssignmentScrollbar);
+    const observer = new ResizeObserver(updateChordAssignmentScrollbar);
+    observer.observe(list);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [
+    activeControlTab,
+    chordAssignments.length,
+    chordAssignmentDraftRows.length
+  ]);
 
   useEffect(() => {
     if (snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown') {
@@ -5023,6 +5051,53 @@ export function App() {
   function deleteChordAssignment(assignmentId: string) {
     const nextAssignments = chordAssignments.filter((assignment) => assignment.id !== assignmentId);
     commitChordConfiguration(chordFunctions, nextAssignments, `chords-delete-assignment-${assignmentId}`);
+  }
+
+  function updateChordAssignmentScrollbar() {
+    const list = chordAssignmentListRef.current;
+    if (!list) {
+      return;
+    }
+    const maxScroll = list.scrollHeight - list.clientHeight;
+    if (maxScroll <= 1) {
+      setChordAssignmentScrollbar((current) => (
+        current.visible ? { visible: false, top: 0, height: 0 } : current
+      ));
+      return;
+    }
+    const trackHeight = list.clientHeight;
+    const height = Math.max(30, Math.round((list.clientHeight / list.scrollHeight) * trackHeight));
+    const top = Math.round((list.scrollTop / maxScroll) * (trackHeight - height));
+    setChordAssignmentScrollbar((current) => (
+      current.visible && current.top === top && current.height === height
+        ? current
+        : { visible: true, top, height }
+    ));
+  }
+
+  function startChordAssignmentScrollbarDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    const list = chordAssignmentListRef.current;
+    if (!list || !chordAssignmentScrollbar.visible || event.button !== 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const startY = event.clientY;
+    const startScrollTop = list.scrollTop;
+    const maxScroll = list.scrollHeight - list.clientHeight;
+    const thumbTravel = list.clientHeight - chordAssignmentScrollbar.height;
+    const move = (moveEvent: PointerEvent) => {
+      moveEvent.preventDefault();
+      list.scrollTop = startScrollTop + ((moveEvent.clientY - startY) / thumbTravel) * maxScroll;
+    };
+    const finish = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+    };
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
   }
 
   function reorderChordAssignment(sourceId: string, targetId: string, placement: 'before' | 'after') {
@@ -7901,9 +7976,15 @@ export function App() {
                     </button>
                   </div>
 
-                  <div className="chords-assignment-list" ref={chordAssignmentListRef} aria-label="Chord assignments">
-                    {chordAssignments.length + chordAssignmentDraftRows.length > 0 ? (
-                      <>
+                  <div className="chords-assignment-scroll-region">
+                    <div
+                      className="chords-assignment-list"
+                      ref={chordAssignmentListRef}
+                      aria-label="Chord assignments"
+                      onScroll={updateChordAssignmentScrollbar}
+                    >
+                      {chordAssignments.length + chordAssignmentDraftRows.length > 0 ? (
+                        <>
                         {chordAssignmentDraftRows.map((row) => {
                           const func = chordFunctions.find((candidate) => candidate.id === row.functionId);
                           return (
@@ -8056,14 +8137,27 @@ export function App() {
                           </div>
                         );
                         })}
-                      </>
-                    ) : (
-                      <div className="chords-empty chords-empty-assignments">
-                        <IconDeviceGamepad3 size={26} />
-                        <strong>No assignments</strong>
-                        <span>Use New Chord to pair a starter, button, and function.</span>
+                        </>
+                      ) : (
+                        <div className="chords-empty chords-empty-assignments">
+                          <IconDeviceGamepad3 size={26} />
+                          <strong>No assignments</strong>
+                          <span>Use New Chord to pair a starter, button, and function.</span>
+                        </div>
+                      )}
+                    </div>
+                    {chordAssignmentScrollbar.visible ? (
+                      <div className="chords-assignment-scrollbar" aria-hidden="true">
+                        <div
+                          className="chords-assignment-scrollbar-thumb"
+                          style={{
+                            height: `${chordAssignmentScrollbar.height}px`,
+                            transform: `translateY(${chordAssignmentScrollbar.top}px)`
+                          }}
+                          onPointerDown={startChordAssignmentScrollbarDrag}
+                        />
                       </div>
-                    )}
+                    ) : null}
                   </div>
                 </section>
               </div>
