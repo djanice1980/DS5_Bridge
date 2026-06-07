@@ -485,7 +485,6 @@ const CHORD_BUTTON_MENU_IDS: ChordAssignableButtonId[] = [
   'rb'
 ];
 const REMAP_ALL_BUTTON_IDS = [...REMAP_BUTTON_IDS] as RemapButtonId[];
-const REMAP_STICK_CLICK_IDS: StandardRemapButtonId[] = ['l3', 'r3'];
 const REMAP_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> = [
   ...REMAP_TARGET_BUTTON_IDS
 ].map((id) => [REMAP_BUTTONS[id].label, id]);
@@ -580,10 +579,6 @@ const EMPTY_CHORD_FUNCTION_DRAFT: ChordFunctionDraft = {
 const DEFAULT_REMAP_DRAFT = Object.fromEntries(
   REMAP_ALL_BUTTON_IDS.map((id) => [id, id])
 ) as Record<RemapButtonId, RemapButtonId>;
-const REMAP_STICK_CLICK_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> = REMAP_STICK_CLICK_IDS.map((id) => [
-  REMAP_BUTTONS[id].label,
-  id
-]);
 const REMAP_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]>> = {
   l2: [[2.4, 3.17], [118.22, 3.17], [171.1, 93.49]],
   l1: [[2.4, 63.71], [121.9, 63.71], [153.13, 118.36]],
@@ -728,6 +723,7 @@ type CustomSelectProps<T extends SelectValue> = {
   className?: string;
   floatingMenu?: boolean;
   floatingMenuMinWidth?: number;
+  suspendOutsideClose?: boolean;
   showSelectedCheck?: boolean;
   closeOnSelect?: boolean;
   getOptionClassName?: (label: string, value: T) => string | undefined;
@@ -1987,6 +1983,7 @@ function CustomSelect<T extends SelectValue>({
   className = '',
   floatingMenu = false,
   floatingMenuMinWidth,
+  suspendOutsideClose = false,
   showSelectedCheck = true,
   closeOnSelect = true,
   getOptionClassName,
@@ -2058,13 +2055,17 @@ function CustomSelect<T extends SelectValue>({
     if (!open) return undefined;
     function closeIfOutside(event: MouseEvent) {
       const target = event.target as Node;
-      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+      if (
+        !suspendOutsideClose
+        && !rootRef.current?.contains(target)
+        && !menuRef.current?.contains(target)
+      ) {
         setOpen(false);
       }
     }
     document.addEventListener('mousedown', closeIfOutside);
     return () => document.removeEventListener('mousedown', closeIfOutside);
-  }, [open]);
+  }, [open, suspendOutsideClose]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -2176,7 +2177,7 @@ function CustomSelect<T extends SelectValue>({
       {floatingMenu && portalTarget && menu
         ? createPortal(
           <div
-            className={`custom-select custom-select-floating-layer open menu-${menuPlacement} ${className}`}
+            className={`custom-select custom-select-floating-layer open menu-${menuPlacement} ${suspendOutsideClose ? 'dialog-suspended' : ''} ${className}`}
             style={floatingMenuStyle}
           >
             {menu}
@@ -2370,9 +2371,7 @@ function remapTargetOptionsFor(buttonId: RemapButtonId): Array<[string, RemapBut
   if ((REMAP_EDGE_BUTTON_IDS as readonly RemapButtonId[]).includes(buttonId)) {
     return [...REMAP_TARGET_OPTIONS, [REMAP_BUTTONS[buttonId].label, buttonId]];
   }
-  return (REMAP_STICK_CLICK_IDS as readonly RemapButtonId[]).includes(buttonId)
-    ? REMAP_STICK_CLICK_TARGET_OPTIONS
-    : REMAP_TARGET_OPTIONS;
+  return REMAP_TARGET_OPTIONS;
 }
 
 function chordFunctionTypeLabel(type: ChordFunctionType): string {
@@ -5769,8 +5768,9 @@ export function App() {
               className="trigger-lab-profile-select"
               closeOnSelect={false}
               floatingMenu
+              suspendOutsideClose={triggerLabProfileDialog?.side === side}
               onChange={(profileId) => setTriggerLabProfile(side, profileId)}
-              renderMenuFooter={(closeMenu) => {
+              renderMenuFooter={() => {
                 const customProfile = triggerLabProfileIsCustom(draft.profileId);
                 return (
                   <div className="trigger-lab-profile-actions">
@@ -5779,7 +5779,6 @@ export function App() {
                       aria-label="Save new trigger profile"
                       title="Save New"
                       onClick={() => {
-                        closeMenu();
                         openTriggerLabProfileDialog('save', side);
                       }}
                     >
@@ -5791,7 +5790,6 @@ export function App() {
                       title="Rename"
                       disabled={!customProfile}
                       onClick={() => {
-                        closeMenu();
                         openTriggerLabProfileDialog('rename', side);
                       }}
                     >
@@ -5803,7 +5801,6 @@ export function App() {
                       title="Delete"
                       disabled={!customProfile}
                       onClick={() => {
-                        closeMenu();
                         openTriggerLabProfileDialog('delete', side);
                       }}
                     >
@@ -7952,12 +7949,13 @@ export function App() {
                       ariaLabel="Chord function"
                       className="chords-function-select"
                       closeOnSelect={false}
+                      suspendOutsideClose={chordFunctionDialog !== null}
                       onChange={(value) => {
                         const next = chordFunctions.find((func) => func.id === value) ?? null;
                         setSelectedChordFunctionId(value);
                         setChordFunctionDraft(chordFunctionToDraft(next));
                       }}
-                      renderMenuFooter={(closeMenu) => (
+                      renderMenuFooter={() => (
                         selectedChordFunction ? (
                           <div className="trigger-lab-profile-actions chords-function-menu-actions">
                             <button
@@ -7965,7 +7963,6 @@ export function App() {
                               title="Rename"
                               disabled={pendingAction !== null}
                               onClick={() => {
-                                closeMenu();
                                 openChordFunctionDialog('rename');
                               }}
                             >
@@ -7976,7 +7973,6 @@ export function App() {
                               title="Delete"
                               disabled={pendingAction !== null}
                               onClick={() => {
-                                closeMenu();
                                 openChordFunctionDialog('delete');
                               }}
                             >

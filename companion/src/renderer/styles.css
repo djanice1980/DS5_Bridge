@@ -6808,6 +6808,10 @@ button.trigger-lab-chip {
   pointer-events: none;
 }
 
+.custom-select-floating-layer.dialog-suspended {
+  z-index: 90;
+}
+
 .custom-select-floating-layer .custom-select-menu {
   position: static;
   width: 100%;
