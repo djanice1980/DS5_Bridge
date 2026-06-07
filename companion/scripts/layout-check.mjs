@@ -23,9 +23,47 @@ try {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForSelector('.hero-card', { timeout: 10000 });
   await page.waitForTimeout(250);
-  const controlsNav = page.getByRole('tablist', { name: 'Controls' });
 
   const failures = [];
+  const assertNoModalOverflow = async (locator, label) => {
+    const overflow = await locator.evaluate((element) => ({
+      horizontal: Math.max(0, element.scrollWidth - element.clientWidth),
+      vertical: Math.max(0, element.scrollHeight - element.clientHeight)
+    }));
+
+    if (overflow.horizontal > tolerancePx || overflow.vertical > tolerancePx) {
+      failures.push(`${label}: modal overflowed by ${overflow.horizontal}px horizontal and ${overflow.vertical}px vertical`);
+    }
+  };
+  const assertNaturalImageRatio = async (locator, label) => {
+    const ratio = await locator.evaluate((element) => {
+      const image = element;
+      const rect = image.getBoundingClientRect();
+      return {
+        natural: image.naturalWidth / image.naturalHeight,
+        rendered: rect.width / rect.height
+      };
+    });
+
+    if (Math.abs(ratio.natural - ratio.rendered) > 0.02) {
+      failures.push(`${label}: rendered ratio ${ratio.rendered.toFixed(2)} differs from natural ratio ${ratio.natural.toFixed(2)}`);
+    }
+  };
+
+  const startupTutorial = page.getByRole('dialog', { name: 'Feature tile tutorial' });
+  if (await startupTutorial.count()) {
+    await assertNoModalOverflow(startupTutorial, 'Feature tile tutorial');
+    await page.getByLabel('Toggle example effect').click();
+    await page.getByRole('button', { name: /Next/ }).click();
+    const supportTutorial = page.getByRole('dialog', { name: 'Support DS5 Bridge' });
+    await assertNoModalOverflow(supportTutorial, 'Support tutorial');
+    await assertNaturalImageRatio(supportTutorial.locator('.startup-tutorial-kofi-button img'), 'Support tutorial Ko-fi badge');
+    await page.getByRole('button', { name: 'Continue' }).click({ timeout: 7000 });
+    await page.waitForTimeout(150);
+  }
+
+  const controlsNav = page.getByRole('tablist', { name: 'Controls' });
+
   const rows = [];
   const buttonRows = [];
   const audioHapticsRows = [];

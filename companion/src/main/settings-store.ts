@@ -51,7 +51,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerEnabled: true,
   speakerVolumePercent: 100,
   micVolumePercent: 100,
-  micMuted: true,
+  micMuted: false,
   audioReactiveHapticsEnabled: false,
   audioReactiveHapticsSource: 'system-audio',
   audioReactiveHapticsMode: 'mix',
@@ -72,7 +72,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerVolumeShortcutEnabled: false,
   pollingRateMode: '1000',
   hostEncodedAudioEnabled: true,
-  duplexMicEnabled: false,
+  duplexMicEnabled: true,
   controllerPowerSavingEnabled: false
 };
 

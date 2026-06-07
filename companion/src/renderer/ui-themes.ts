@@ -1,7 +1,7 @@
-import kofiBadgeBeigeUrl from '../../../assets/brand/support_me_on_kofi_badge_beige.png';
-import kofiBadgeBlueUrl from '../../../assets/brand/support_me_on_kofi_badge_blue.png';
-import kofiBadgeDarkUrl from '../../../assets/brand/support_me_on_kofi_badge_dark.png';
-import kofiBadgeRedUrl from '../../../assets/brand/support_me_on_kofi_badge_red.png';
+import kofiBadgeBeigeUrl from '../../../assets/brand/support_me_on_kofi_beige.png';
+import kofiBadgeBlueUrl from '../../../assets/brand/support_me_on_kofi_blue.png';
+import kofiBadgeDarkUrl from '../../../assets/brand/support_me_on_kofi_dark.png';
+import kofiBadgeRedUrl from '../../../assets/brand/support_me_on_kofi_red.png';
 import type { UiThemePreset } from '../shared/types';
 
 export const DEFAULT_UI_THEME_PRESET: UiThemePreset = 'dark';

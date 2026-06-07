@@ -50,18 +50,18 @@ describe('SettingsStore', () => {
       settings: {
         speakerVolumePercent: 100,
         micVolumePercent: 100,
-        micMuted: true,
+        micMuted: false,
         hostEncodedAudioEnabled: true,
-        duplexMicEnabled: false,
+        duplexMicEnabled: true,
         feedbackBoostEnabled: false,
         lightbarColor: '#0000ff'
       }
     });
     expect(settings.hostEncodedAudioEnabled).toBe(true);
-    expect(settings.duplexMicEnabled).toBe(false);
+    expect(settings.duplexMicEnabled).toBe(true);
     expect(settings.uiThemePreset).toBe('dark');
     expect(settings.micVolumePercent).toBe(100);
-    expect(settings.micMuted).toBe(true);
+    expect(settings.micMuted).toBe(false);
     expect(settings.lightbarColor).toBe('#0000ff');
   });
 

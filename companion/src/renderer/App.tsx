@@ -25,6 +25,7 @@ import {
   IconDeviceAudioTape,
   IconBrandXbox,
   IconBrandGithub,
+  IconHeart as Heart,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
   IconKeyboard as Keyboard,
@@ -124,6 +125,7 @@ import type {
 import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system';
+type StartupTutorialStep = 'feature-toggle' | 'support' | 'done';
 type ControllerType = BridgeStatusPayload['controllerType'];
 type KnownControllerType = Exclude<ControllerType, 'unknown'>;
 type RemapButtonDefinition = {
@@ -1162,6 +1164,110 @@ function StartupScreen({ ready }: { ready: boolean }) {
         </div>
       </section>
     </main>
+  );
+}
+
+function StartupTutorial({
+  step,
+  featureExampleActive,
+  supportCountdown,
+  kofiBadgeUrl,
+  onFeatureExampleToggle,
+  onFeatureStepComplete,
+  onSupport,
+  onFinish
+}: {
+  step: Exclude<StartupTutorialStep, 'done'>;
+  featureExampleActive: boolean;
+  supportCountdown: number;
+  kofiBadgeUrl: string;
+  onFeatureExampleToggle: () => void;
+  onFeatureStepComplete: () => void;
+  onSupport: () => void;
+  onFinish: () => void;
+}) {
+  return (
+    <div className="modal-backdrop startup-tutorial-backdrop" role="presentation">
+      <section
+        className="settings-menu bridge-settings-modal startup-tutorial-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={step === 'feature-toggle' ? 'Feature tile tutorial' : 'Support DS5 Bridge'}
+      >
+        {step === 'feature-toggle' ? (
+          <>
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                <IconSparkleHighlight size={16} />
+                <span>Feature Tiles</span>
+              </div>
+              <span className="startup-tutorial-step">1 / 2</span>
+            </div>
+            <div className="startup-tutorial-copy">
+              <h2>Click The Square</h2>
+              <p>Feature tiles turn effects on and off. Try it once here, then keep going.</p>
+            </div>
+            <div className="startup-tutorial-feature-demo">
+              <button
+                className={`startup-tutorial-feature-icon ${featureExampleActive ? 'active' : ''}`}
+                type="button"
+                aria-pressed={featureExampleActive}
+                aria-label="Toggle example effect"
+                onClick={onFeatureExampleToggle}
+              >
+                <IconSparkleHighlight size={24} />
+              </button>
+              <span>
+                <strong>Example Effect</strong>
+                <span>{featureExampleActive ? 'On' : 'Off'}</span>
+              </span>
+            </div>
+            <div className="startup-tutorial-actions">
+              <button
+                type="button"
+                className="primary-action"
+                disabled={!featureExampleActive}
+                onClick={onFeatureStepComplete}
+              >
+                Next <ArrowRight size={16} />
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                <Heart size={16} />
+                <span>One Tiny Ask</span>
+              </div>
+              <span className="startup-tutorial-step">2 / 2</span>
+            </div>
+            <div className="startup-tutorial-copy">
+              <h2>Enjoying DS5 Bridge?</h2>
+              <p>If this app makes your setup better, please consider supporting the work on Ko-fi.</p>
+            </div>
+            <button
+              className="startup-tutorial-kofi-button"
+              type="button"
+              aria-label="Support SundayMoments on Ko-fi"
+              onClick={onSupport}
+            >
+              <img src={kofiBadgeUrl} alt="" />
+            </button>
+            <div className="startup-tutorial-actions">
+              <button
+                type="button"
+                className="primary-action"
+                disabled={supportCountdown > 0}
+                onClick={onFinish}
+              >
+                {supportCountdown > 0 ? `Continue In ${supportCountdown}` : 'Continue'}
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -2672,6 +2778,9 @@ export function App() {
   const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
   const [hostEncodingDisableConfirmVisible, setHostEncodingDisableConfirmVisible] = useState(false);
   const [deviceCleanupConfirmVisible, setDeviceCleanupConfirmVisible] = useState(false);
+  const [startupTutorialStep, setStartupTutorialStep] = useState<StartupTutorialStep>('feature-toggle');
+  const [startupTutorialFeatureActive, setStartupTutorialFeatureActive] = useState(false);
+  const [startupTutorialSupportCountdown, setStartupTutorialSupportCountdown] = useState(5);
   const [deviceCleanupMessage, setDeviceCleanupMessage] = useState<string | null>(null);
   const [deviceCleanupError, setDeviceCleanupError] = useState<string | null>(null);
   const hapticsEditingRef = useRef(false);
@@ -2736,6 +2845,20 @@ export function App() {
       }
     };
   }, [Boolean(snapshot), startupVisible]);
+
+  useEffect(() => {
+    if (startupTutorialStep !== 'support') {
+      return undefined;
+    }
+
+    setStartupTutorialSupportCountdown(5);
+    const interval = window.setInterval(() => {
+      setStartupTutorialSupportCountdown((value) => Math.max(0, value - 1));
+    }, 1000);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [startupTutorialStep]);
 
   useEffect(() => {
     saveTriggerLabWorkspaceState({
@@ -8624,6 +8747,19 @@ export function App() {
         </div>
       </section>
       </main>
+
+      {startupTutorialStep !== 'done' && (
+        <StartupTutorial
+          step={startupTutorialStep}
+          featureExampleActive={startupTutorialFeatureActive}
+          supportCountdown={startupTutorialSupportCountdown}
+          kofiBadgeUrl={kofiBadgeUrl}
+          onFeatureExampleToggle={() => setStartupTutorialFeatureActive((active) => !active)}
+          onFeatureStepComplete={() => setStartupTutorialStep('support')}
+          onSupport={() => void window.bridge.openExternal('https://ko-fi.com/sundaymoments')}
+          onFinish={() => setStartupTutorialStep('done')}
+        />
+      )}
 
       {hostEncodingDisableConfirmVisible && (
         <div
