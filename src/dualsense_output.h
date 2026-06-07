@@ -34,7 +34,7 @@ constexpr uint8_t kFlag2CompatibleVibration2 = 0x04;
 
 constexpr uint8_t kAudioFlagsOutputPathHeadphones = 0x00;
 constexpr uint8_t kAudioFlagsOutputPathSpeaker = 0x30;
-constexpr uint8_t kAudioFlags2SpeakerPreampGain = 0x02;
+constexpr uint8_t kAudioFlags2SpeakerPreampGain = 0x07;
 constexpr uint8_t kPowerSaveControlMicMute = 0x10;
 
 constexpr uint8_t kHeadphoneVolumeMax = 0x7f;
