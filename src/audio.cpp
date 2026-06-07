@@ -56,6 +56,7 @@
 #define SPEAKER_SILENCE_PREROLL_USB_PACKETS 24
 #define SPEAKER_SILENCE_PREROLL_INTERVAL_US 10666
 #define SPEAKER_TRANSITION_FADE_SAMPLES 1920.0f
+#define USB_HOST_VOLUME_COMPENSATION_MAX 32.0f
 #define HOST_HEARTBEAT_TIMEOUT_US 750000
 #define HOST_STREAM_TIMEOUT_US 250000
 #define HOST_STREAM_START_GRACE_US 2000000
@@ -1464,6 +1465,25 @@ static int16_t mix_i16(int16_t native_sample, int16_t derived_sample) {
     return soft_clip_i16_from_float(static_cast<float>(native_sample) + static_cast<float>(derived_sample));
 }
 
+static float host_render_volume_compensation_gain() {
+    // The 4-channel USB render stream carries speaker audio and native haptics.
+    // Cancel host endpoint volume here so Companion owns the final levels.
+    const float minimum_gain = 1.0f / USB_HOST_VOLUME_COMPENSATION_MAX;
+    const float host_gain = clamp(usb_host_speaker_gain, minimum_gain, 1.0f);
+    return 1.0f / host_gain;
+}
+
+static int16_t compensate_host_render_sample(int16_t sample, float compensation_gain) {
+    const float scaled = static_cast<float>(sample) * compensation_gain;
+    return static_cast<int16_t>(
+        clamp(
+            static_cast<int32_t>(scaled),
+            static_cast<int32_t>(-32768),
+            static_cast<int32_t>(32767)
+        )
+    );
+}
+
 static void process_audio_reactive_haptic_frame(
     int16_t speaker_l,
     int16_t speaker_r,
@@ -2413,12 +2433,17 @@ static bool process_usb_audio_packet() {
     WDL_ResampleSample *in_buf;
     const int requested_haptic_frames = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
     const int haptic_input_frames = std::min(frames, requested_haptic_frames);
-    const float speaker_gain = usb_host_mute[0] ? 0.0f : clamp(volume[0], 0.0f, 1.0f) * usb_host_speaker_gain;
+    const float speaker_gain = usb_host_mute[0] ? 0.0f : clamp(volume[0], 0.0f, 1.0f);
     const float haptic_gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
+    const float host_compensation_gain = host_render_volume_compensation_gain();
     for (int i = 0; i < frames; i++) {
+        const int16_t speaker_l = compensate_host_render_sample(raw[i * INPUT_CHANNELS], host_compensation_gain);
+        const int16_t speaker_r = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 1], host_compensation_gain);
+        const int16_t haptic_l = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 2], host_compensation_gain);
+        const int16_t haptic_r = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 3], host_compensation_gain);
         const float transition_gain = next_fallback_speaker_gain();
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * speaker_gain * transition_gain;
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * speaker_gain * transition_gain;
+        audio_buf[audio_buf_pos++] = static_cast<float>(speaker_l) / 32768.0f * speaker_gain * transition_gain;
+        audio_buf[audio_buf_pos++] = static_cast<float>(speaker_r) / 32768.0f * speaker_gain * transition_gain;
         if (audio_buf_pos == 512 * 2) {
             static audio_raw_element element{};
             memcpy(element.data,audio_buf,512 * 2 * 4);
@@ -2449,10 +2474,10 @@ static bool process_usb_audio_packet() {
 
         if (i < haptic_input_frames) {
             process_audio_reactive_haptic_frame_for_resampler(
-                raw[i * INPUT_CHANNELS],
-                raw[i * INPUT_CHANNELS + 1],
-                raw[i * INPUT_CHANNELS + 2],
-                raw[i * INPUT_CHANNELS + 3],
+                speaker_l,
+                speaker_r,
+                haptic_l,
+                haptic_r,
                 in_buf[i * OUTPUT_CHANNELS],
                 in_buf[i * OUTPUT_CHANNELS + 1]
             );
@@ -2490,16 +2515,21 @@ static bool process_usb_audio_raw_pcm_return_packet() {
     WDL_ResampleSample *in_buf;
     const int requested_haptic_frames = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
     const int haptic_input_frames = std::min(frames, requested_haptic_frames);
+    const float host_compensation_gain = host_render_volume_compensation_gain();
     for (int i = 0; i < frames; i++) {
-        line[i * HOST_RAW_PCM_RETURN_CHANNELS] = raw[i * INPUT_CHANNELS];
-        line[i * HOST_RAW_PCM_RETURN_CHANNELS + 1] = raw[i * INPUT_CHANNELS + 1];
+        const int16_t speaker_l = compensate_host_render_sample(raw[i * INPUT_CHANNELS], host_compensation_gain);
+        const int16_t speaker_r = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 1], host_compensation_gain);
+        const int16_t haptic_l = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 2], host_compensation_gain);
+        const int16_t haptic_r = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 3], host_compensation_gain);
+        line[i * HOST_RAW_PCM_RETURN_CHANNELS] = speaker_l;
+        line[i * HOST_RAW_PCM_RETURN_CHANNELS + 1] = speaker_r;
 
         if (i < haptic_input_frames) {
             process_audio_reactive_haptic_frame_for_resampler(
-                raw[i * INPUT_CHANNELS],
-                raw[i * INPUT_CHANNELS + 1],
-                raw[i * INPUT_CHANNELS + 2],
-                raw[i * INPUT_CHANNELS + 3],
+                speaker_l,
+                speaker_r,
+                haptic_l,
+                haptic_r,
                 in_buf[i * OUTPUT_CHANNELS],
                 in_buf[i * OUTPUT_CHANNELS + 1]
             );
