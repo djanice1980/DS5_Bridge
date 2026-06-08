@@ -389,12 +389,13 @@ static void start_inquiry_if_needed() {
         || device_found
         || acl_connection_pending
         || acl_handle != HCI_CON_HANDLE_INVALID
-        || usb_pm_should_pause_inquiry()
     ) {
         return;
     }
 
     DS5_LOG("[HCI] Start inquiry\n");
+    gap_connectable_control(1);
+    gap_discoverable_control(1);
     gap_inquiry_start(30);
     inquiry_active = true;
 }
@@ -1063,6 +1064,29 @@ bool bt_disconnect() {
     return true;
 }
 
+bool bt_power_off_controller() {
+    if (hid_control_cid == 0) {
+        return false;
+    }
+
+    uint8_t set_feature[49]{};
+    // DualSense Bluetooth control feature report 0x08: 1 = on, 2 = off.
+    set_feature[0] = 0x53;
+    set_feature[1] = 0x08;
+    set_feature[2] = 0x02;
+    if (!fill_feature_report_checksum(set_feature + 1, sizeof(set_feature) - 1)) {
+        return false;
+    }
+
+    const uint8_t status = l2cap_send(hid_control_cid, set_feature, sizeof(set_feature));
+    if (status != 0) {
+        DS5_LOG("[L2CAP] Power-off feature send failed status=0x%02X\n", status);
+        enqueue_control_packet(set_feature, sizeof(set_feature), false);
+        return false;
+    }
+    return true;
+}
+
 bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes) {
     if (
         minutes < MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES
@@ -1166,7 +1190,6 @@ void bt_inquiry_loop() {
         || device_found
         || acl_connection_pending
         || acl_handle != HCI_CON_HANDLE_INVALID
-        || usb_pm_should_pause_inquiry()
     ) {
         return;
     }
@@ -1632,10 +1655,12 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     controller_type = ControllerTypeDualSenseEdge;
                     controller_type_check_pending = false;
                     DS5_LOG("[L2CAP] Connected controller detected as DualSense Edge\n");
+                    usb_handle_controller_transport_ready();
                 } else if (size > 0 && packet[0] == 0x02) {
                     controller_type = ControllerTypeDualSense;
                     controller_type_check_pending = false;
                     DS5_LOG("[L2CAP] Connected controller detected as DualSense\n");
+                    usb_handle_controller_transport_ready();
                 }
             }
             if (size >= 2 && packet[0] == 0xA3) {
@@ -1692,7 +1717,6 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     bt_set_lightbar_color(0x00, 0x00, 0xff, 100);
                     bt_schedule_lightbar_restore(250);
 
-                    usb_handle_controller_transport_ready();
                 } else {
                     DS5_LOG("[L2CAP] Unknown Channel psm: 0x%02X", psm);
                 }
