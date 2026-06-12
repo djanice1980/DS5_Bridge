@@ -13,15 +13,12 @@ function extractFunction(name: string): string {
 }
 
 describe('renderer behavior guards', () => {
-  it('requires explicit confirmation before disabling Host Encoding', () => {
-    const toggleFunction = extractFunction('toggleHostEncodedAudioEnabled');
-    const confirmFunction = extractFunction('confirmDisableHostEncoding');
-
-    expect(toggleFunction).toContain('setHostEncodingDisableConfirmVisible(true)');
-    expect(toggleFunction).not.toContain('setHostEncodedAudioEnabled(false)');
-    expect(confirmFunction).toContain('setHostEncodedAudioEnabled(false)');
-    expect(appSource).toContain('Disable Host Encoding?');
-    expect(appSource).toContain('Turning it off may cause audio stuttering.');
+  it('does not expose retired host encoder controls', () => {
+    expect(appSource).not.toContain('toggleHost' + 'EncodedAudioEnabled');
+    expect(appSource).not.toContain('setHost' + 'EncodedAudioEnabled');
+    expect(appSource).not.toContain('Disable Host ' + 'Encoding?');
+    expect(appSource).not.toContain('Enable host ' + 'encoded audio');
+    expect(appSource).toContain('Pico Local');
   });
 
   it('requires explicit confirmation and a disconnected controller before emergency device repair', () => {
@@ -47,7 +44,7 @@ describe('renderer behavior guards', () => {
 
     expect(unavailableSource).not.toContain('gameStreamActive');
     expect(unavailableSource).not.toContain('audioRecent');
-    expect(unavailableSource).not.toContain('hostAudioActive');
+    expect(unavailableSource).not.toContain('host' + 'AudioActive');
     expect(unavailableSource).not.toContain('streamActive');
   });
 
@@ -59,7 +56,7 @@ describe('renderer behavior guards', () => {
 
     expect(unavailableSource).not.toContain('gameStreamActive');
     expect(unavailableSource).not.toContain('audioRecent');
-    expect(unavailableSource).not.toContain('hostAudioActive');
+    expect(unavailableSource).not.toContain('host' + 'AudioActive');
     expect(unavailableSource).not.toContain('streamActive');
   });
 

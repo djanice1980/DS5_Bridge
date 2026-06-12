@@ -11,7 +11,6 @@ import {
   COMPANION_USAGE,
   COMPANION_USAGE_PAGE,
   DEFAULT_CONTROLLER_PROFILE_ID,
-  HOST_AUDIO_PACKET_TYPE,
   MAGIC,
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
@@ -69,7 +68,6 @@ vi.mock('./winusb-companion-transport', () => ({
 }));
 
 import { BridgeService } from './bridge-service';
-import { HostAudioStartError, type HostAudioFramePayload } from './host-audio-engine';
 import { SettingsStore } from './settings-store';
 
 type StatusOverrides = {
@@ -123,7 +121,7 @@ class MockHidDevice extends EventEmitter {
   status = statusReport();
   audioDebugReports: number[][] = [];
   audioStatsReports: number[][] = [];
-  hostAudioStatusReports: number[][] = [];
+  audioStatusReports: number[][] = [];
   shortcutEvents: number[] = [];
   shortcutReadError: Error | null = null;
   featureReportIds: number[] = [];
@@ -172,8 +170,8 @@ class MockHidDevice extends EventEmitter {
     if (reportId === REPORT_ID.AUDIO_STATS) {
       return [...(this.audioStatsReports.shift() ?? audioStatsReport())];
     }
-    if (reportId === REPORT_ID.HOST_AUDIO_STATUS) {
-      return [...(this.hostAudioStatusReports.shift() ?? hostAudioStatusReport())];
+    if (reportId === REPORT_ID.AUDIO_STATUS) {
+      return [...(this.audioStatusReports.shift() ?? audioStatusReport())];
     }
     if (reportId === REPORT_ID.INPUT) {
       if (this.shortcutReadError) {
@@ -376,38 +374,25 @@ function audioStatsReport(values: Partial<{
   return report;
 }
 
-function hostAudioStatusReport(overrides: Partial<{
-  mode: number;
-  fallbackReason: number;
-  hostRequested: boolean;
-  heartbeatHealthy: boolean;
-  streamActive: boolean;
-  streamHealthy: boolean;
+function audioStatusReport(overrides: Partial<{
   duplexRequested: boolean;
   duplexActive: boolean;
   controllerStateReady: boolean;
   headsetPlugged: boolean;
   headsetAudioRoute: boolean;
-  streamGeneration: number;
   micUsbConcealCount: number;
   micPlcCount: number;
 }> = {}): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
-  report[0] = REPORT_ID.HOST_AUDIO_STATUS;
+  report[0] = REPORT_ID.AUDIO_STATUS;
   writeMagic(report);
   writeVersion(report);
-  report[7] = overrides.mode ?? 0;
-  report[8] = overrides.fallbackReason ?? 1;
-  report[9] = (overrides.hostRequested ? 0x01 : 0x00)
-    | (overrides.heartbeatHealthy ? 0x02 : 0x00)
-    | (overrides.streamActive ? 0x04 : 0x00)
-    | (overrides.streamHealthy ? 0x08 : 0x00)
-    | (overrides.duplexRequested ? 0x10 : 0x00)
+  report[7] = 1;
+  report[9] = (overrides.duplexRequested ? 0x10 : 0x00)
     | (overrides.duplexActive ? 0x20 : 0x00)
     | (overrides.controllerStateReady ? 0x40 : 0x00);
   report[10] = (overrides.headsetPlugged ? 0x01 : 0x00)
     | (overrides.headsetAudioRoute ? 0x02 : 0x00);
-  writeU16(report, 11, overrides.streamGeneration ?? 0);
   writeU32(report, 49, overrides.micUsbConcealCount ?? 0);
   writeU32(report, 53, overrides.micPlcCount ?? 0);
   return report;
@@ -447,18 +432,6 @@ async function flushReapply(): Promise<void> {
 
 async function flushImmediate(): Promise<void> {
   await new Promise((resolve) => setImmediate(resolve));
-}
-
-function compactFrameFromFastReports(reports: number[][]): number[] {
-  const frame: number[] = [];
-  for (const report of reports) {
-    if (report[1] !== HOST_AUDIO_PACKET_TYPE.FAST_FRAME_FRAGMENT) {
-      continue;
-    }
-    const payloadLength = report[6] ?? 0;
-    frame.push(...report.slice(7, 7 + payloadLength));
-  }
-  return frame;
 }
 
 describe('BridgeService', () => {
@@ -538,7 +511,6 @@ describe('BridgeService', () => {
 
   it('retries shortcut polling after a transient shortcut report read failure', async () => {
     const service = serviceFixture({
-      hostEncodedAudioEnabled: false,
       duplexMicEnabled: true,
       micMuted: true,
       muteButtonMode: 'normal'
@@ -664,7 +636,7 @@ describe('BridgeService', () => {
   });
 
   it('reapplies saved settings once per companion session and again after uptime drops', async () => {
-    const service = serviceFixture({ hostEncodedAudioEnabled: false });
+    const service = serviceFixture();
     const device = new MockHidDevice();
     device.settingsRevision = 4;
     device.status = statusReport({ controllerConnected: true, settingsRevision: 4, uptimeSeconds: 30 });
@@ -697,7 +669,7 @@ describe('BridgeService', () => {
   });
 
   it('ignores firmware-reported mic unmute when duplex mic is disabled', async () => {
-    const service = serviceFixture({ hostEncodedAudioEnabled: false, duplexMicEnabled: false, micMuted: true });
+    const service = serviceFixture({ duplexMicEnabled: false, micMuted: true });
     const device = new MockHidDevice();
     device.settingsRevision = 4;
     device.status = statusReport({
@@ -727,7 +699,7 @@ describe('BridgeService', () => {
   });
 
   it('syncs firmware-reported mic mute after startup settings reapply when duplex mic is enabled', async () => {
-    const service = serviceFixture({ hostEncodedAudioEnabled: false, duplexMicEnabled: true, micMuted: true });
+    const service = serviceFixture({ duplexMicEnabled: true, micMuted: true });
     const device = new MockHidDevice();
     device.settingsRevision = 4;
     device.status = statusReport({
@@ -757,7 +729,7 @@ describe('BridgeService', () => {
   });
 
   it('reapplies current settings without feature-bit fallbacks', async () => {
-    const service = serviceFixture({ hostEncodedAudioEnabled: false });
+    const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({
       controllerConnected: true,
@@ -859,18 +831,18 @@ describe('BridgeService', () => {
     };
     internals.device = device;
 
-    const [lightbarAck, hostAudioAck] = await Promise.all([
+    const [lightbarAck, speakerAck] = await Promise.all([
       internals.sendCommand(COMMAND_ID.SET_LIGHTBAR_COLOR, 60, { extraPayload: [1, 2, 3] }),
-      internals.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1)
+      internals.sendCommand(COMMAND_ID.SET_SPEAKER_VOLUME, 80)
     ]);
 
     expect(lightbarAck.commandId).toBe(COMMAND_ID.SET_LIGHTBAR_COLOR);
-    expect(hostAudioAck.commandId).toBe(COMMAND_ID.SET_HOST_AUDIO_ENABLED);
+    expect(speakerAck.commandId).toBe(COMMAND_ID.SET_SPEAKER_VOLUME);
     expect(lightbarAck.commandSequence).toBe(1);
-    expect(hostAudioAck.commandSequence).toBe(2);
+    expect(speakerAck.commandSequence).toBe(2);
     expect(device.sentReports.map((report) => report[7])).toEqual([
       COMMAND_ID.SET_LIGHTBAR_COLOR,
-      COMMAND_ID.SET_HOST_AUDIO_ENABLED
+      COMMAND_ID.SET_SPEAKER_VOLUME
     ]);
     expect(service.getSnapshot().diagnostics.lastError).toBeNull();
   });
@@ -930,12 +902,11 @@ describe('BridgeService', () => {
 
   it('caps power-hungry controller settings while headphones are plugged in', async () => {
     const service = serviceFixture({
-      hostEncodedAudioEnabled: false,
       controllerPowerSavingEnabled: true
     });
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: false });
-    device.hostAudioStatusReports = [hostAudioStatusReport({ headsetPlugged: true })];
+    device.audioStatusReports = [audioStatusReport({ headsetPlugged: true })];
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
@@ -969,7 +940,6 @@ describe('BridgeService', () => {
 
   it('applies and removes power-saving caps as headphones connect and disconnect', async () => {
     const service = serviceFixture({
-      hostEncodedAudioEnabled: false,
       controllerPowerSavingEnabled: true,
       hapticsGainPercent: 100,
       classicRumbleGainPercent: 120,
@@ -978,14 +948,14 @@ describe('BridgeService', () => {
     });
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: false });
-    device.hostAudioStatusReports = [hostAudioStatusReport({ headsetPlugged: false })];
+    device.audioStatusReports = [audioStatusReport({ headsetPlugged: false })];
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
     await poll(service);
     expect(device.sentReports).toEqual([]);
 
-    device.hostAudioStatusReports = [hostAudioStatusReport({ headsetPlugged: true })];
+    device.audioStatusReports = [audioStatusReport({ headsetPlugged: true })];
     await poll(service);
     expect(device.sentReports.map((report) => [report[7], report[9]])).toEqual([
       [COMMAND_ID.SET_HAPTICS_GAIN, 60],
@@ -1003,7 +973,7 @@ describe('BridgeService', () => {
     });
 
     device.sentReports = [];
-    device.hostAudioStatusReports = [hostAudioStatusReport({ headsetPlugged: false })];
+    device.audioStatusReports = [audioStatusReport({ headsetPlugged: false })];
     await poll(service);
     expect(device.sentReports.map((report) => [report[7], report[9]])).toEqual([
       [COMMAND_ID.SET_HAPTICS_GAIN, 100],
@@ -1077,8 +1047,7 @@ describe('BridgeService', () => {
 
   it('restarts system audio haptics immediately after a route change', async () => {
     const service = serviceFixture({
-      audioReactiveHapticsEnabled: true,
-      hostEncodedAudioEnabled: false
+      audioReactiveHapticsEnabled: true
     });
     const device = new MockHidDevice();
     hidMock.state.devicesList = [companionDeviceInfo()];
@@ -1346,7 +1315,6 @@ describe('BridgeService', () => {
 
   it('applies controller mic mute events without waiting for a status poll', async () => {
     const service = serviceFixture({
-      hostEncodedAudioEnabled: false,
       duplexMicEnabled: true,
       micMuted: true,
       muteButtonMode: 'normal'
@@ -1367,7 +1335,6 @@ describe('BridgeService', () => {
 
   it('emits controller mic mute snapshots before mic keepalive refresh completes', async () => {
     const service = serviceFixture({
-      hostEncodedAudioEnabled: false,
       duplexMicEnabled: true,
       micMuted: true,
       muteButtonMode: 'normal'
@@ -1405,7 +1372,6 @@ describe('BridgeService', () => {
 
   it('ignores controller mic mute events when mic pass-through is not armed', async () => {
     const service = serviceFixture({
-      hostEncodedAudioEnabled: false,
       duplexMicEnabled: true,
       micMuted: true,
       muteButtonMode: 'keyboard'
@@ -1598,7 +1564,6 @@ describe('BridgeService', () => {
     expect(maskedSnapshot.state).toBe('transitioning');
     expect(maskedSnapshot.message).toBe('Switching to Xbox Controller mode');
     expect(maskedSnapshot.diagnostics.lastError).toBeNull();
-    expect(maskedSnapshot.diagnostics.hostAudioCaptureIssue).toBeNull();
     expect(maskedSnapshot.personaTransition?.to).toBe('xbox');
   });
 
@@ -1769,7 +1734,7 @@ describe('BridgeService', () => {
   });
 
   it('emits controller connect and disconnect toasts on status transitions', async () => {
-    const service = serviceFixture({ hostEncodedAudioEnabled: false });
+    const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: false });
     const toasts: Array<{ title: string; body: string }> = [];
@@ -1792,7 +1757,7 @@ describe('BridgeService', () => {
   });
 
   it('emits controller toasts when the companion interface disappears and returns', async () => {
-    const service = serviceFixture({ hostEncodedAudioEnabled: false });
+    const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: true });
     const toasts: Array<{ title: string; body: string }> = [];
@@ -1816,7 +1781,7 @@ describe('BridgeService', () => {
   });
 
   it('emits low battery toasts once until battery recovers', async () => {
-    const service = serviceFixture({ hostEncodedAudioEnabled: false });
+    const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: true, batteryPercent: 30 });
     const toasts: Array<{ title: string; body: string }> = [];
@@ -2226,168 +2191,37 @@ describe('BridgeService', () => {
     expect(device.sentReports.at(-1)?.[13]).toBe(75);
   });
 
-  it('publishes host-audio status reads into the snapshot immediately', async () => {
+  it('publishes local audio status reads into the snapshot immediately', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
     await poll(service);
-    expect(service.getSnapshot().diagnostics.hostAudioStatus).toMatchObject({
-      mode: 'fallback-pico-local',
-      fallbackReason: 'host-disabled'
+    expect(service.getSnapshot().diagnostics.audioStatus).toMatchObject({
+      duplexRequested: false,
+      headsetPlugged: false
     });
 
-    device.hostAudioStatusReports = [
-      hostAudioStatusReport({
-        mode: 1,
-        fallbackReason: 0,
-        hostRequested: true,
-        heartbeatHealthy: true,
-        streamActive: true,
-        streamHealthy: true,
-        controllerStateReady: true
+    device.audioStatusReports = [
+      audioStatusReport({
+        controllerStateReady: true,
+        duplexRequested: true,
+        duplexActive: true,
+        headsetPlugged: true,
+        headsetAudioRoute: true
       })
     ];
 
-    await (service as unknown as { readHostAudioStatus(): Promise<void> }).readHostAudioStatus();
+    await (service as unknown as { readAudioStatus(): Promise<void> }).readAudioStatus();
 
-    expect(service.getSnapshot().diagnostics.hostAudioStatus).toMatchObject({
-      mode: 'host-encoded-active',
-      fallbackReason: 'none',
-      streamActive: true,
-      streamHealthy: true
+    expect(service.getSnapshot().diagnostics.audioStatus).toMatchObject({
+      controllerStateReady: true,
+      duplexRequested: true,
+      duplexActive: true,
+      headsetPlugged: true,
+      headsetAudioRoute: true
     });
-  });
-
-  it.skip('drops the oldest host-audio frame when the companion write queue backs up', async () => {
-    const service = serviceFixture();
-    const device = new MockHidDevice();
-    const internals = service as unknown as {
-      device: MockHidDevice;
-      hostAudioCommandActive: boolean;
-      hostAudioReportQueue: number[][];
-      hostAudioFrameDropCount: number;
-      sendHostAudioFrame(payload: { frame: number[]; sequence: number }): void;
-    };
-    internals.device = device;
-    internals.hostAudioCommandActive = true;
-
-    const makeFrame = (sequence: number) => new Array<number>(264).fill(0).map((_, index) => (
-      (sequence * 31 + index) & 0xff
-    ));
-
-    internals.sendHostAudioFrame({ frame: makeFrame(1), sequence: 1 });
-    internals.sendHostAudioFrame({ frame: makeFrame(2), sequence: 2 });
-    internals.sendHostAudioFrame({ frame: makeFrame(3), sequence: 3 });
-
-    const queuedSequences = [...new Set(internals.hostAudioReportQueue.map((report) => (
-      report[2] | (report[3] << 8)
-    )))];
-    expect(queuedSequences).toEqual([2, 3]);
-    expect(internals.hostAudioReportQueue).toHaveLength(10);
-    expect(internals.hostAudioFrameDropCount).toBe(1);
-  });
-
-  it.skip('injects direct system haptics into host-audio frames during targeted replace mode', () => {
-    const appSource = {
-      kind: 'app-session' as const,
-      processId: 4321,
-      displayName: 'Apple Music',
-      executableName: 'AppleMusic.exe',
-      processPath: 'C:\\Program Files\\WindowsApps\\AppleMusic.exe'
-    };
-    const service = serviceFixture({
-      hostEncodedAudioEnabled: true,
-      hapticsEnabled: true,
-      audioReactiveHapticsEnabled: true,
-      audioReactiveHapticsMode: 'replace',
-      audioReactiveHapticsSource: appSource
-    });
-    const device = new MockHidDevice();
-    const internals = service as unknown as {
-      device: MockHidDevice;
-      hostAudioCommandActive: boolean;
-      hostAudioReportQueue: number[][];
-      captureSystemAudioHapticsFrame(payload: HostAudioFramePayload): void;
-      sendHostAudioFrame(payload: HostAudioFramePayload): void;
-    };
-    internals.device = device;
-    internals.hostAudioCommandActive = true;
-
-    const hostFrame = new Array<number>(264).fill(0).map((_, index) => (200 + index) & 0xff);
-    const appHapticsFrame = new Array<number>(264).fill(0).map((_, index) => (40 + index) & 0xff);
-    internals.captureSystemAudioHapticsFrame({
-      frame: appHapticsFrame,
-      sequence: 3,
-      encodedBytes: 200
-    });
-    internals.sendHostAudioFrame({
-      frame: hostFrame,
-      sequence: 17,
-      encodedBytes: 200
-    });
-
-    const compactFrame = compactFrameFromFastReports(internals.hostAudioReportQueue);
-    expect(compactFrame).toHaveLength(264);
-    expect(compactFrame.slice(0, 64)).toEqual(appHapticsFrame.slice(0, 64));
-    expect(compactFrame.slice(64)).toEqual(hostFrame.slice(64));
-  });
-
-  it.skip('deactivates host audio and clears queued frames after an OUT report write failure', async () => {
-    const service = serviceFixture();
-    const device = new MockHidDevice();
-    device.writeError = new Error('bulk pipe disappeared');
-    const internals = service as unknown as {
-      device: MockHidDevice;
-      hostAudioCommandActive: boolean;
-      hostAudioReportQueue: number[][];
-      sendHostAudioFrame(payload: { frame: number[]; sequence: number }): void;
-    };
-    internals.device = device;
-    internals.hostAudioCommandActive = true;
-
-    internals.sendHostAudioFrame({
-      frame: new Array<number>(264).fill(0).map((_, index) => index & 0xff),
-      sequence: 17
-    });
-    await flushImmediate();
-    await flushImmediate();
-
-    expect(internals.hostAudioCommandActive).toBe(false);
-    expect(internals.hostAudioReportQueue).toEqual([]);
-    expect(service.getSnapshot().diagnostics.audioDebugLogLines.at(-1)).toContain('stage=write-failed');
-  });
-
-  it('does not publish a host-audio retry when helper startup is intentionally cancelled', async () => {
-    const service = serviceFixture();
-    const start = vi.fn(async () => {
-      throw new HostAudioStartError('Host audio helper startup was cancelled.', 'start-cancelled');
-    });
-    const internals = service as unknown as {
-      hostAudioEngine: {
-        start: typeof start;
-        stop(): Promise<void>;
-        isActive(): boolean;
-        setSpeakerVolumePercent(percent: number): void;
-      };
-      ensureHostAudioCapture(speakerVolumePercent: number): Promise<boolean>;
-    };
-    internals.hostAudioEngine = {
-      start,
-      stop: vi.fn(async () => undefined),
-      isActive: () => false,
-      setSpeakerVolumePercent: vi.fn()
-    };
-
-    await expect(internals.ensureHostAudioCapture(75)).resolves.toBe(false);
-
-    const diagnostics = service.getSnapshot().diagnostics;
-    expect(start).toHaveBeenCalledWith(null, 75);
-    expect(diagnostics.hostAudioCaptureRetry).toBeNull();
-    expect(diagnostics.hostAudioCaptureIssue).toBeNull();
-    expect(diagnostics.lastError).toBeNull();
-    expect(diagnostics.audioDebugLogLines.at(-1)).toBe('[HostBridge] host audio capture start cancelled');
   });
 
   it('rejects accepted setting commands that do not advance settings_revision', async () => {

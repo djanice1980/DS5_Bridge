@@ -54,11 +54,9 @@ vi.mock('node:fs', () => ({
 
 import {
   AudioHapticsSessionMonitor,
-  HostAudioEngine,
-  HostAudioStartError,
   SystemAudioHapticsEngine,
-  type HostAudioFramePayload
-} from './host-audio-engine';
+  type AudioHapticsFramePayload
+} from './audio-helper';
 
 const FRAME_LENGTH = 264;
 
@@ -77,30 +75,6 @@ function frameRecord(seed: number): Buffer {
   }
   return record;
 }
-
-function pushStdout(engine: HostAudioEngine, chunk: Buffer): void {
-  (engine as unknown as { processStdout(chunk: Buffer): void }).processStdout(chunk);
-}
-
-describe('HostAudioEngine startup lifecycle', () => {
-  it('reports an intentional stop during startup as cancellation instead of helper exit', async () => {
-    const engine = new HostAudioEngine();
-    const statuses: string[] = [];
-    engine.on('status', (line) => statuses.push(line));
-
-    const startPromise = engine.start('hid-path', 80);
-    const startResult = expect(startPromise).rejects.toMatchObject({
-      reason: 'start-cancelled'
-    } satisfies Partial<HostAudioStartError>);
-
-    await engine.stop();
-    await startResult;
-
-    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
-    expect(statuses).not.toContain('host audio helper exited (SIGTERM)');
-    expect(engine.isActive()).toBe(false);
-  });
-});
 
 describe('SystemAudioHapticsEngine app source', () => {
   it('passes selected app session identity to the helper', async () => {
@@ -139,7 +113,7 @@ describe('SystemAudioHapticsEngine app source', () => {
 
   it('parses direct haptics frames from stdout', async () => {
     const engine = new SystemAudioHapticsEngine();
-    const frames: HostAudioFramePayload[] = [];
+    const frames: AudioHapticsFramePayload[] = [];
     engine.on('frame', (frame) => frames.push(frame));
 
     const start = engine.start({
@@ -209,58 +183,5 @@ describe('audio haptics session listing', () => {
     expect(childProcessMock.spawn.mock.calls[0]![1]).toEqual(['--monitor-audio-sessions']);
 
     await monitor.stop();
-  });
-
-});
-
-describe('HostAudioEngine stdout frame parser', () => {
-  it('buffers partial records and emits complete frames in sequence order', () => {
-    const engine = new HostAudioEngine();
-    const frames: HostAudioFramePayload[] = [];
-    engine.on('frame', (frame) => frames.push(frame));
-    const first = frameRecord(10);
-    const second = frameRecord(90);
-    const combined = Buffer.concat([first, second]);
-
-    pushStdout(engine, combined.subarray(0, 7));
-    expect(frames).toEqual([]);
-
-    pushStdout(engine, combined.subarray(7, first.length + 12));
-    expect(frames).toHaveLength(1);
-    expect(frames[0]).toMatchObject({
-      sequence: 0,
-      encodedBytes: 200
-    });
-    expect(frames[0]!.frame.slice(0, 4)).toEqual([10, 11, 12, 13]);
-
-    pushStdout(engine, combined.subarray(first.length + 12));
-    expect(frames).toHaveLength(2);
-    expect(frames[1]).toMatchObject({
-      sequence: 1,
-      encodedBytes: 200
-    });
-    expect(frames[1]!.frame.slice(0, 4)).toEqual([90, 91, 92, 93]);
-  });
-
-  it('emits an error and discards buffered data when a helper record has the wrong length', () => {
-    const engine = new HostAudioEngine();
-    const errors: Error[] = [];
-    const frames: HostAudioFramePayload[] = [];
-    engine.on('error', (error) => errors.push(error));
-    engine.on('frame', (frame) => frames.push(frame));
-
-    const bad = Buffer.alloc(2);
-    bad.writeUInt16LE(123, 0);
-    pushStdout(engine, Buffer.concat([bad, frameRecord(1)]));
-
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.message).toBe('Unexpected host audio frame length 123');
-    expect(frames).toEqual([]);
-
-    pushStdout(engine, frameRecord(2));
-
-    expect(frames).toHaveLength(1);
-    expect(frames[0]!.sequence).toBe(0);
-    expect(frames[0]!.frame[0]).toBe(2);
   });
 });

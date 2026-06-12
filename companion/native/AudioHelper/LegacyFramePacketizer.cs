@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-static class HostPacketizer
+static class LegacyFramePacketizer
 {
     public static void WriteStdoutFrame(Stream stdout, byte[] prefix, byte[] frame)
     {
@@ -24,7 +24,7 @@ static class HostPacketizer
         {
             Array.Clear(hidReport);
             var payloadLength = Math.Min(AudioConstants.FastPayloadBytes, frame.Length - offset);
-            hidReport[0] = AudioConstants.HostAudioStreamReportId;
+            hidReport[0] = AudioConstants.LegacyAudioStreamReportId;
             hidReport[1] = AudioConstants.FastFrameFragmentType;
             hidReport[2] = (byte)(sequence & 0xff);
             hidReport[3] = (byte)(sequence >> 8);

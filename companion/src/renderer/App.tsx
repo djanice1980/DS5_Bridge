@@ -247,14 +247,11 @@ type LightbarPaletteCell = {
 type FeatureTipsPanelProps = {
   tab: 'audio' | 'haptics' | 'triggers' | 'lighting';
   onSettingsFocusRequest?: (target: SettingsFocusTarget) => void;
-  onFeatureFocusRequest?: (target: FeatureFocusTarget) => void;
-  hostEncodingTipActionable?: boolean;
   audioHapticsOpen?: boolean;
   triggerLabOpen?: boolean;
 };
 type SettingsFocusTarget = 'controller-power-saving' | 'sleep-shortcut' | 'volume-shortcut';
 type NotificationFocusTarget = 'controller-status' | 'low-battery' | 'all';
-type FeatureFocusTarget = 'host-encoding';
 
 const HAPTICS_STEP = 20;
 const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
@@ -268,7 +265,6 @@ const TEST_HAPTICS_LOCK_MS = 1100;
 const TEST_SPEAKER_LOCK_MS = 900;
 const TEST_MIC_LISTEN_MS = 5000;
 const TEST_SPEAKER_VOLUME_SETTLE_MS = 90;
-const HOST_AUDIO_INITIAL_START_GRACE_MS = 2500;
 const TEST_SPEAKER_ENDPOINT_ATTEMPTS = 12;
 const TEST_SPEAKER_ENDPOINT_RETRY_MS = 150;
 const TEST_SPEAKER_ENDPOINT_REFRESH_MS = 1500;
@@ -999,7 +995,7 @@ function saveTriggerLabWorkspaceState(state: TriggerLabWorkspaceState) {
 }
 
 function controllerPowerSavingActiveFromSnapshot(snapshot: BridgeSnapshot | null | undefined): boolean {
-  return Boolean(snapshot?.settings.controllerPowerSavingEnabled && snapshot.diagnostics.hostAudioStatus?.headsetPlugged);
+  return Boolean(snapshot?.settings.controllerPowerSavingEnabled && snapshot.diagnostics.audioStatus?.headsetPlugged);
 }
 
 function capControllerPowerSavingValue(value: number, snapshot: BridgeSnapshot | null | undefined): number {
@@ -1091,48 +1087,6 @@ function TriggerLabMeter({ label, value, disabled = false, onChange, onCommit }:
       </div>
     </div>
   );
-}
-
-type HostAudioCaptureStatusReason =
-  | NonNullable<BridgeSnapshot['diagnostics']['hostAudioCaptureIssue']>['reason']
-  | NonNullable<BridgeSnapshot['diagnostics']['hostAudioCaptureRetry']>['reason'];
-
-function hostAudioCaptureIssueLabel(reason: HostAudioCaptureStatusReason): string {
-  switch (reason) {
-    case 'device-in-use':
-      return 'Endpoint Busy';
-    case 'device-invalidated':
-      return 'Endpoint Changed';
-    case 'unsupported-format':
-      return 'Format Error';
-    case 'bulk-pcm-unavailable':
-      return 'PCM Pipe Missing';
-    case 'app-session-unavailable':
-      return 'App Waiting';
-    case 'start-timeout':
-      return 'Retrying';
-    case 'helper-exit':
-      return 'Helper Restarting';
-  }
-}
-
-function hostAudioCaptureIssueTooltip(reason: HostAudioCaptureStatusReason): string {
-  switch (reason) {
-    case 'device-in-use':
-      return 'Another app has exclusive control of the DualSense audio endpoint. Host Encoding will retry automatically.';
-    case 'device-invalidated':
-      return 'Windows changed the DualSense audio endpoint while Host Encoding was starting. The app will retry automatically.';
-    case 'unsupported-format':
-      return 'Windows rejected the DualSense raw PCM capture format. Re-enumerate or clean stale DualSense audio devices.';
-    case 'bulk-pcm-unavailable':
-      return 'Windows did not expose the DS5 Bridge WinUSB PCM pipe. Re-enumerate or clean stale DS5 Bridge devices.';
-    case 'app-session-unavailable':
-      return 'The selected audio app is not currently available. Audio Haptics will retry automatically.';
-    case 'start-timeout':
-      return 'The host audio encoder did not start in time. The app will retry automatically.';
-    case 'helper-exit':
-      return 'The host audio encoder stopped before capture started. The app will retry automatically.';
-  }
 }
 
 function BridgeMark() {
@@ -1295,8 +1249,6 @@ function ProfileSaveStatus() {
 function FeatureTipsPanel({
   tab,
   onSettingsFocusRequest,
-  onFeatureFocusRequest,
-  hostEncodingTipActionable = false,
   audioHapticsOpen = false,
   triggerLabOpen = false
 }: FeatureTipsPanelProps) {
@@ -1339,10 +1291,10 @@ function FeatureTipsPanel({
     });
   } else if (tab === 'audio') {
     tips.push({
-      key: 'host-encoding',
+      key: 'headphones',
       icon: <Headphones size={16} />,
       title: 'Headphones',
-      text: 'Use Host Encoding when listening through the controller headphone jack.'
+      text: 'Headphones use the same Pico-local audio path as the controller speaker.'
     });
   } else {
     tips.push({
@@ -1393,10 +1345,7 @@ function FeatureTipsPanel({
       <div className="feature-help-grid">
         {tips.map((tip) => (
           <div
-            className={[
-              'feature-help-item',
-              tip.key === 'host-encoding' && hostEncodingTipActionable ? 'feature-help-item-attention' : ''
-            ].filter(Boolean).join(' ')}
+            className="feature-help-item"
             key={tip.key}
           >
             {tip.key === 'toggle' ? (
@@ -1415,15 +1364,6 @@ function FeatureTipsPanel({
                 type="button"
                 aria-label="Open Controller Power Saving settings"
                 onClick={() => onSettingsFocusRequest?.('controller-power-saving')}
-              >
-                {tip.icon}
-              </button>
-            ) : tip.key === 'host-encoding' && hostEncodingTipActionable ? (
-              <button
-                className="feature-help-icon feature-help-icon-button"
-                type="button"
-                aria-label="Highlight Host Encoding"
-                onClick={() => onFeatureFocusRequest?.('host-encoding')}
               >
                 {tip.icon}
               </button>
@@ -1478,7 +1418,7 @@ function controllerProfileSettingsFromSnapshot(snapshot: BridgeSnapshot): Contro
     sleepKeybindEnabled: snapshot.settings.sleepKeybindEnabled,
     speakerVolumeShortcutEnabled: snapshot.settings.speakerVolumeShortcutEnabled,
     pollingRateMode: snapshot.settings.pollingRateMode,
-    hostEncodedAudioEnabled: snapshot.settings.hostEncodedAudioEnabled,
+    hostPersonaMode: snapshot.settings.hostPersonaMode,
     duplexMicEnabled: snapshot.settings.duplexMicEnabled,
     audioReactiveHapticsEnabled: snapshot.settings.audioReactiveHapticsEnabled,
     audioReactiveHapticsSource: snapshot.settings.audioReactiveHapticsSource,
@@ -1554,7 +1494,7 @@ function SystemProfileSummary({
         <dl>
           <div><dt>Speaker</dt><dd>{settings.speakerEnabled ? percentLabel(settings.speakerVolumePercent) : 'Off'}</dd></div>
           <div><dt>Mic</dt><dd>{settings.micMuted ? 'Muted' : percentLabel(settings.micVolumePercent)}</dd></div>
-          <div><dt>Host Encoding</dt><dd>{enabledLabel(settings.hostEncodedAudioEnabled)}</dd></div>
+          <div><dt>Pass-through</dt><dd>{enabledLabel(settings.duplexMicEnabled)}</dd></div>
         </dl>
       </div>
 
@@ -2547,7 +2487,7 @@ function chordControllerSettingSummary(action: ChordControllerSettingAction, ste
   if (notchTarget) {
     const actionText = `${notchTarget.direction === 'up' ? 'Increase' : 'Decrease'} ${notchTarget.target.label}`;
     return typeof stepPercent === 'number'
-      ? `${actionText} — ${stepPercent}% step`
+      ? `${actionText} â€” ${stepPercent}% step`
       : actionText;
   }
   switch (action) {
@@ -2762,8 +2702,6 @@ export function App() {
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
   const [settingsFocusTarget, setSettingsFocusTarget] = useState<SettingsFocusTarget | null>(null);
   const [notificationFocusTarget, setNotificationFocusTarget] = useState<NotificationFocusTarget | null>(null);
-  const [featureFocusTarget, setFeatureFocusTarget] = useState<FeatureFocusTarget | null>(null);
-  const [featureFocusPulse, setFeatureFocusPulse] = useState(0);
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
@@ -2785,7 +2723,6 @@ export function App() {
   const [audioReactiveHapticsCommitPending, setAudioReactiveHapticsCommitPending] = useState(false);
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
   const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
-  const [hostEncodingDisableConfirmVisible, setHostEncodingDisableConfirmVisible] = useState(false);
   const [deviceCleanupConfirmVisible, setDeviceCleanupConfirmVisible] = useState(false);
   const [startupTutorialStep, setStartupTutorialStep] = useState<StartupTutorialStep>(storedStartupTutorialStep);
   const [startupTutorialFeatureActive, setStartupTutorialFeatureActive] = useState(false);
@@ -2808,7 +2745,6 @@ export function App() {
   const overviewSleepConfirmTimerRef = useRef<number | null>(null);
   const settingsFocusTimerRef = useRef<number | null>(null);
   const notificationFocusTimerRef = useRef<number | null>(null);
-  const featureFocusTimerRef = useRef<number | null>(null);
   const chordAssignmentDragRef = useRef<ChordAssignmentDragSession | null>(null);
   const chordAssignmentListRef = useRef<HTMLDivElement>(null);
   const windowDraggingRef = useRef(false);
@@ -2818,8 +2754,6 @@ export function App() {
   const triggerLabRestoreAppliedRef = useRef(false);
   const deferredSnapshotRef = useRef<BridgeSnapshot | null>(null);
   const overviewSleepConfirmArmedRef = useRef(false);
-  const appOpenedAtRef = useRef(Date.now());
-
   useEffect(() => () => {
     const session = chordAssignmentDragRef.current;
     session?.cleanup();
@@ -3140,9 +3074,6 @@ export function App() {
       if (notificationFocusTimerRef.current !== null) {
         window.clearTimeout(notificationFocusTimerRef.current);
       }
-      if (featureFocusTimerRef.current !== null) {
-        window.clearTimeout(featureFocusTimerRef.current);
-      }
       if (windowDragReleaseTimerRef.current !== null) {
         window.clearTimeout(windowDragReleaseTimerRef.current);
       }
@@ -3460,8 +3391,8 @@ export function App() {
   const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled;
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const adaptiveTriggerOutputActive = Boolean(snapshot?.status?.adaptiveTriggerOutputRecent);
-  const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
-  const headsetOutputDetected = Boolean(hostAudioStatus?.headsetPlugged);
+  const audioStatus = snapshot?.diagnostics.audioStatus;
+  const headsetOutputDetected = Boolean(audioStatus?.headsetPlugged);
   const controllerPowerSavingActive = controllerPowerSavingActiveFromSnapshot(snapshot);
   const feedbackBoostEnabled = Boolean(snapshot?.settings.feedbackBoostEnabled);
   const hapticsSliderMax = feedbackSliderMaxFromSnapshot(snapshot);
@@ -3514,48 +3445,17 @@ export function App() {
   const outputControlLabel = headsetOutputDetected ? 'Headphones' : 'Speaker';
   const outputControlLower = headsetOutputDetected ? 'headphones' : 'speaker';
   const outputPresetLower = headsetOutputDetected ? 'headphones' : 'speaker';
-  const hostAudioEnabled = Boolean(snapshot?.settings.hostEncodedAudioEnabled);
   const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
   const audioEnabled = speakerEnabled || duplexMicEnabled;
-  const hostAudioActive = hostAudioStatus?.mode === 'host-encoded-active';
-  const hostAudioCaptureIssue = personaTransitionActive ? null : snapshot?.diagnostics.hostAudioCaptureIssue ?? null;
-  const hostAudioCaptureRetry = personaTransitionActive ? null : snapshot?.diagnostics.hostAudioCaptureRetry ?? null;
-  const hostAudioCaptureStatus = hostAudioCaptureIssue ?? hostAudioCaptureRetry;
-  const hostAudioCaptureWarning = hostAudioEnabled && Boolean(hostAudioCaptureIssue);
-  const hostAudioCaptureRetrying = hostAudioEnabled && !hostAudioCaptureWarning && Boolean(hostAudioCaptureRetry);
-  const initialHostAudioStartGrace = Date.now() - appOpenedAtRef.current < HOST_AUDIO_INITIAL_START_GRACE_MS;
-  const hostAudioStarting = hostAudioEnabled
-    && !hostAudioActive
-    && !hostAudioCaptureStatus
-    && (
-      !hostAudioStatus
-      || hostAudioStatus.fallbackReason === 'none'
-      || hostAudioStatus.fallbackReason === 'host-disabled'
-      || (initialHostAudioStartGrace && hostAudioStatus.fallbackReason === 'heartbeat-timeout')
-    );
-  const hostAudioLabel = personaTransitionActive
+  const audioPathLabel = personaTransitionActive
     ? 'Switching Mode'
     : !connected
     ? 'Unavailable'
-    : hostAudioActive
-      ? 'Host Encoding Active'
-      : hostAudioEnabled && hostAudioCaptureStatus
-        ? hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)
-      : hostAudioStarting
-        ? 'Starting Host Encoding'
-      : hostAudioEnabled
-        ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
-        : 'Pico Local';
-  const hostAudioTooltip = personaTransitionActive
+    : 'Pico Local';
+  const audioPathTooltip = personaTransitionActive
     ? 'Waiting for the controller to re-enumerate.'
-    : hostAudioCaptureStatus
-    ? hostAudioCaptureStatus.message || hostAudioCaptureIssueTooltip(hostAudioCaptureStatus.reason)
-    : hostAudioLabel;
-  const hostAudioTone = hostAudioActive
-    ? 'good'
-    : connected && hostAudioEnabled && !hostAudioCaptureRetrying && (Boolean(hostAudioCaptureIssue) || !hostAudioStarting)
-      ? 'warn'
-      : 'idle';
+    : audioPathLabel;
+  const audioPathTone = connected && !personaTransitionActive ? 'good' : 'idle';
   const audioReactiveHapticsRouteSupported = audioReactiveHapticsSupported;
   const audioReactiveHapticsBlocked = !connected
     || !audioReactiveHapticsSupported
@@ -3591,7 +3491,7 @@ export function App() {
   const audioReactiveHapticsModeTooltip = audioReactiveHapticsOverrideMode
     ? 'Audio haptics are replacing native haptic output.'
     : 'Audio haptics are mixed with native haptic output.';
-  const duplexMicLabel = hostAudioStatus?.duplexActive
+  const duplexMicLabel = audioStatus?.duplexActive
     ? 'Duplex Active'
     : duplexMicEnabled
       ? 'Mic Standby'
@@ -3751,24 +3651,16 @@ export function App() {
     : connected
       ? 'Waiting'
       : 'Offline';
-  const overviewEncoderState = !connected
+  const overviewAudioPathState = !connected
     ? '--'
-    : hostAudioEnabled
-      ? 'On'
-      : 'Off';
-  const overviewEncoderDetail = personaTransitionActive
+    : 'Pico Local';
+  const overviewAudioPathDetail = personaTransitionActive
     ? 'Switching Mode'
     : !connected
     ? '--'
-    : hostAudioActive
-      ? 'Active'
-      : hostAudioEnabled && hostAudioCaptureStatus
-        ? hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)
-      : hostAudioStarting
-        ? 'Starting'
-      : hostAudioEnabled
-          ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
-          : 'Pico Local';
+    : audioStatus?.controllerStateReady
+      ? 'Controller Ready'
+      : 'Waiting';
   const overviewAudioOutputLabel = connected ? (headsetOutputDetected ? 'Headphones' : 'Speaker') : '--';
   const overviewSpeakerVolumeValue = `${speakerVolumeValue}%`;
   const overviewFirmwareLabel = snapshot?.status?.firmwareVersion ?? '--';
@@ -3892,7 +3784,7 @@ export function App() {
 
     const debug = snapshot.status.audioDebug;
     const stats = snapshot.diagnostics.audioDebugStats;
-    const host = snapshot.diagnostics.hostAudioStatus;
+    const audio = snapshot.diagnostics.audioStatus;
     const lines = [
       `state=${snapshot.state}`,
       `firmware=${snapshot.status.firmwareVersion}`,
@@ -3910,33 +3802,26 @@ export function App() {
       `lastAudioRepairReportId=0x${hexByte(debug.lastHostOutputReportId)}`,
       `lastAudioRepairLength=${debug.lastHostOutputLength}`
     ];
-    if (host) {
+    if (audio) {
       lines.push(
-        `hostAudioMode=${host.mode}`,
-        `hostFallbackReason=${host.fallbackReason}`,
-        `hostRequested=${host.hostRequested ? 'true' : 'false'}`,
-        `hostHeartbeatHealthy=${host.heartbeatHealthy ? 'true' : 'false'}`,
-        `hostStreamHealthy=${host.streamHealthy ? 'true' : 'false'}`,
-        `hostGeneration=${host.streamGeneration}`,
-        `hostFramesReceived=${host.hostFramesReceived}`,
-        `hostFramesDropped=${host.hostFramesDropped}`,
-        `controllerStateReady=${host.controllerStateReady ? 'true' : 'false'}`,
-        `headsetPlugged=${host.headsetPlugged ? 'true' : 'false'}`,
-        `headsetAudioRoute=${host.headsetAudioRoute ? 'true' : 'false'}`,
-        `duplexRequested=${host.duplexRequested ? 'true' : 'false'}`,
-        `duplexActive=${host.duplexActive ? 'true' : 'false'}`,
-        `micPacketsReceived=${host.micPacketsReceived}`,
-        `micPacketsDropped=${host.micPacketsDropped}`,
-        `micDecodeSuccess=${host.micDecodeSuccess}`,
-        `micDecodeFail=${host.micDecodeFail}`,
-        `micUsbWriteSuccess=${host.micUsbWriteSuccess}`,
-        `micUsbWriteShort=${host.micUsbWriteShort}`,
-        `micUsbConcealCount=${host.micUsbConcealCount}`,
-        `micPlcCount=${host.micPlcCount}`,
-        `micLastDecodedSamples=${host.micLastDecodedSamples}`,
-        `micLastWrittenBytes=${host.micLastWrittenBytes}`,
-        `micPeakPermille=${host.micPeakPermille}`,
-        `micUsbStreaming=${host.micUsbStreaming ? 'true' : 'false'}`
+        'audioPath=pico-local',
+        `controllerStateReady=${audio.controllerStateReady ? 'true' : 'false'}`,
+        `headsetPlugged=${audio.headsetPlugged ? 'true' : 'false'}`,
+        `headsetAudioRoute=${audio.headsetAudioRoute ? 'true' : 'false'}`,
+        `duplexRequested=${audio.duplexRequested ? 'true' : 'false'}`,
+        `duplexActive=${audio.duplexActive ? 'true' : 'false'}`,
+        `micPacketsReceived=${audio.micPacketsReceived}`,
+        `micPacketsDropped=${audio.micPacketsDropped}`,
+        `micDecodeSuccess=${audio.micDecodeSuccess}`,
+        `micDecodeFail=${audio.micDecodeFail}`,
+        `micUsbWriteSuccess=${audio.micUsbWriteSuccess}`,
+        `micUsbWriteShort=${audio.micUsbWriteShort}`,
+        `micUsbConcealCount=${audio.micUsbConcealCount}`,
+        `micPlcCount=${audio.micPlcCount}`,
+        `micLastDecodedSamples=${audio.micLastDecodedSamples}`,
+        `micLastWrittenBytes=${audio.micLastWrittenBytes}`,
+        `micPeakPermille=${audio.micPeakPermille}`,
+        `micUsbStreaming=${audio.micUsbStreaming ? 'true' : 'false'}`
       );
     }
     if (stats) {
@@ -4412,9 +4297,7 @@ export function App() {
         if (volumeChanged) {
           await delay(TEST_SPEAKER_VOLUME_SETTLE_MS);
         }
-        const next = snapshot?.settings.hostEncodedAudioEnabled
-          ? await window.bridge.testSpeaker()
-          : await playSpeakerToneFile().then(() => window.bridge.getStatus());
+        const next = await playSpeakerToneFile().then(() => window.bridge.getStatus());
         setSnapshot(next);
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
         setSpeakerOutputAvailable(true);
@@ -5139,7 +5022,7 @@ export function App() {
             <strong>
               {detailValue}
               {func.type === 'controller-setting' && notchTarget ? (
-                <em> — {func.stepPercent}% step</em>
+                <em> â€” {func.stepPercent}% step</em>
               ) : null}
             </strong>
           </div>
@@ -5576,28 +5459,6 @@ export function App() {
     void runAction('speaker-enabled', () => window.bridge.setSpeakerEnabled(!snapshot.settings.speakerEnabled));
   }
 
-  function toggleHostEncodedAudioEnabled() {
-    if (!snapshot) return;
-    if (snapshot.settings.hostEncodedAudioEnabled) {
-      setHostEncodingDisableConfirmVisible(true);
-      return;
-    }
-    void runAction('host-audio-enabled', () => window.bridge.setHostEncodedAudioEnabled(true));
-  }
-
-  function closeHostEncodingDisableConfirm() {
-    setHostEncodingDisableConfirmVisible(false);
-  }
-
-  function confirmDisableHostEncoding() {
-    if (!snapshot) {
-      closeHostEncodingDisableConfirm();
-      return;
-    }
-    void runAction('host-audio-enabled', () => window.bridge.setHostEncodedAudioEnabled(false));
-    closeHostEncodingDisableConfirm();
-  }
-
   function openDeviceCleanupConfirm() {
     setDeviceCleanupMessage(null);
     setDeviceCleanupError(null);
@@ -5681,7 +5542,6 @@ export function App() {
     setShowNotificationsMenu(false);
     setShowBridgeSettings(true);
     setNotificationFocusTarget(null);
-    setFeatureFocusTarget(null);
     setSettingsFocusTarget(target);
     if (settingsFocusTimerRef.current !== null) {
       window.clearTimeout(settingsFocusTimerRef.current);
@@ -5696,7 +5556,6 @@ export function App() {
     setShowBridgeSettings(false);
     setShowNotificationsMenu(true);
     setSettingsFocusTarget(null);
-    setFeatureFocusTarget(null);
     setNotificationFocusTarget(target);
     if (notificationFocusTimerRef.current !== null) {
       window.clearTimeout(notificationFocusTimerRef.current);
@@ -5704,25 +5563,6 @@ export function App() {
     notificationFocusTimerRef.current = window.setTimeout(() => {
       setNotificationFocusTarget(null);
       notificationFocusTimerRef.current = null;
-    }, 2200);
-  }
-
-  function focusFeatureControl(target: FeatureFocusTarget) {
-    if (target === 'host-encoding' && hostAudioEnabled) {
-      return;
-    }
-    setShowBridgeSettings(false);
-    setShowNotificationsMenu(false);
-    setSettingsFocusTarget(null);
-    setNotificationFocusTarget(null);
-    setFeatureFocusTarget(target);
-    setFeatureFocusPulse((pulse) => pulse + 1);
-    if (featureFocusTimerRef.current !== null) {
-      window.clearTimeout(featureFocusTimerRef.current);
-    }
-    featureFocusTimerRef.current = window.setTimeout(() => {
-      setFeatureFocusTarget(null);
-      featureFocusTimerRef.current = null;
     }, 2200);
   }
 
@@ -6246,19 +6086,19 @@ export function App() {
 
               <button className="overview-card" type="button" onClick={() => selectControlTab('audio')}>
                 <div className="overview-card-title">
-                  <span className="feature-icon overview-icon"><IconBinary size={20} /></span>
-                  <h3>Encoder</h3>
+                  <span className="feature-icon overview-icon"><IconDeviceAudioTape size={20} /></span>
+                  <h3>Audio Path</h3>
                 </div>
                 <div className="overview-fields">
                   <div>
-                    <span>Host Encoding</span>
-                    <strong className={overviewEncoderState === 'On' ? 'success-value' : ''}>
-                      {overviewEncoderState}
+                    <span>Route</span>
+                    <strong className={overviewAudioPathState === 'Pico Local' ? 'success-value' : ''}>
+                      {overviewAudioPathState}
                     </strong>
                   </div>
                   <div>
                     <span>Status</span>
-                    <strong>{overviewEncoderDetail}</strong>
+                    <strong>{overviewAudioPathDetail}</strong>
                   </div>
                 </div>
               </button>
@@ -6657,7 +6497,7 @@ export function App() {
                 <div className="audio-heading-controls">
                   <div className="inline-switch audio-haptics-switch-control">
                     {audioReactiveHapticsModeBadgeLabel ? (
-                      <span className={`host-encoding-state audio-haptics-mode-state ${audioReactiveHapticsOverrideMode ? 'warn' : 'retry'}`}>
+                      <span className={`inline-state-badge audio-haptics-mode-state ${audioReactiveHapticsOverrideMode ? 'warn' : 'retry'}`}>
                         {audioReactiveHapticsModeBadgeLabel}
                       </span>
                     ) : null}
@@ -7108,41 +6948,6 @@ export function App() {
                   <p>{`Adjust controller ${outputControlLower} and microphone levels.`}</p>
                 </div>
                 <div className="audio-heading-controls">
-                  <div
-                    className={[
-                      'inline-switch',
-                      'host-encoding-switch',
-                      hostAudioCaptureWarning ? 'host-encoding-switch-warn' : '',
-                      featureFocusTarget === 'host-encoding' ? `feature-focus-highlight feature-focus-highlight-${featureFocusPulse % 2}` : ''
-                    ].filter(Boolean).join(' ')}
-                  >
-                    {hostAudioEnabled && hostAudioCaptureStatus ? (
-                      <span className={`host-encoding-state ${hostAudioCaptureWarning ? 'warn' : 'retry'}`}>
-                        {hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)}
-                      </span>
-                    ) : null}
-                    <span>Host Encoding</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={hostAudioEnabled}
-                      aria-label="Enable host encoded audio"
-                      className={[
-                        'switch',
-                        hostAudioEnabled ? 'on' : '',
-                        hostAudioCaptureWarning ? 'warn' : ''
-                      ].filter(Boolean).join(' ')}
-                      disabled={!controllerControlsAvailable || pendingAction !== null}
-                      onClick={toggleHostEncodedAudioEnabled}
-                    >
-                      <span />
-                    </button>
-                    {hostAudioEnabled && hostAudioCaptureStatus ? (
-                      <span className="settings-shortcut-tooltip shortcut-glyph-tooltip host-encoding-tooltip" role="tooltip">
-                        {hostAudioTooltip}
-                      </span>
-                    ) : null}
-                  </div>
                   <div className="inline-switch">
                     <span>Enabled</span>
                     <button
@@ -7370,18 +7175,14 @@ export function App() {
                       <span className={`dot ${activeAudioTestStatusTone}`} />
                       <strong>{activeAudioTestStatusLabel}</strong>
                     </span>
-                    <span className={`status-badge ${hostAudioTone}`} title={hostAudioTooltip}>
-                      <span className={`dot ${hostAudioTone}`} />
-                      <strong>{hostAudioLabel}</strong>
+                    <span className={`status-badge ${audioPathTone}`} title={audioPathTooltip}>
+                      <span className={`dot ${audioPathTone}`} />
+                      <strong>{audioPathLabel}</strong>
                     </span>
                   </div>
                 </section>
               </div>
-              <FeatureTipsPanel
-                tab="audio"
-                hostEncodingTipActionable={!hostAudioEnabled}
-                onFeatureFocusRequest={focusFeatureControl}
-              />
+              <FeatureTipsPanel tab="audio" />
           </div>
 
           <div
@@ -7399,7 +7200,7 @@ export function App() {
                 <div className="triggers-heading-controls">
                   <div className="inline-switch trigger-lab-switch-control">
                     {triggerLabAnyActive ? (
-                      <span className="host-encoding-state warn trigger-lab-state">
+                      <span className="inline-state-badge warn trigger-lab-state">
                         Lab Override
                       </span>
                     ) : null}
@@ -8760,56 +8561,6 @@ export function App() {
             setStartupTutorialStep('done');
           }}
         />
-      )}
-
-      {hostEncodingDisableConfirmVisible && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onMouseDown={closeHostEncodingDisableConfirm}
-        >
-          <form
-            className="settings-menu bridge-settings-modal host-encoding-confirm-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Disable host encoding"
-            onMouseDown={(event) => event.stopPropagation()}
-            onSubmit={(event) => {
-              event.preventDefault();
-              confirmDisableHostEncoding();
-            }}
-          >
-            <div className="settings-menu-heading bridge-settings-modal-heading">
-              <div className="modal-heading-copy">
-                <IconBinary size={16} />
-                <span>Disable Host Encoding?</span>
-              </div>
-              <button
-                className="modal-close-button"
-                type="button"
-                aria-label="Close host encoding dialog"
-                onClick={closeHostEncodingDisableConfirm}
-              >
-                <X size={16} />
-              </button>
-            </div>
-            <p className="remap-profile-dialog-copy">
-              Host encoding helps keep controller audio smooth. Turning it off may cause audio stuttering.
-            </p>
-            <div className="remap-profile-dialog-actions">
-              <button type="button" className="secondary-action" onClick={closeHostEncodingDisableConfirm}>
-                Cancel
-              </button>
-              <button
-                type="submit"
-                className="primary-action danger"
-                disabled={pendingAction !== null}
-              >
-                Disable
-              </button>
-            </div>
-          </form>
-        </div>
       )}
 
       {deviceCleanupConfirmVisible && (

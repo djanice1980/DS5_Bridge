@@ -686,9 +686,6 @@ function registerIpc(service: BridgeService): void {
   ) => (
     service.setAudioReactiveHapticsConfig(value)
   ));
-  ipcMain.handle('bridge:setHostEncodedAudioEnabled', (_event, value: boolean) => (
-    service.setHostEncodedAudioEnabled(value)
-  ));
   ipcMain.handle('bridge:setDuplexMicEnabled', (_event, value: boolean) => service.setDuplexMicEnabled(value));
   ipcMain.handle('bridge:setLightbarColor', (_event, color: string, brightness: number) => (
     service.setLightbarColor(color, brightness)

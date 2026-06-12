@@ -7,7 +7,7 @@ import type {
   ButtonRemapMap,
   ButtonRemapProfile,
   ControllerProfile,
-  HostAudioStatusPayload,
+  AudioStatusPayload,
   BridgePresetId,
   HostPersonaMode,
   AudioReactiveHapticsSource,
@@ -70,7 +70,6 @@ export interface CompanionSettings {
   hostPersonaMode: HostPersonaMode;
   notifyControllerConnection: boolean;
   notifyLowBattery: boolean;
-  hostEncodedAudioEnabled: boolean;
   duplexMicEnabled: boolean;
   controllerPowerSavingEnabled: boolean;
   selectedControllerProfileId: string;
@@ -124,8 +123,6 @@ export interface BridgeDiagnostics {
   lastError: string | null;
   lastPollAt: number | null;
   rawDevices: HidDeviceSummary[];
-  hostAudioCaptureIssue: HostAudioCaptureIssue | null;
-  hostAudioCaptureRetry: HostAudioCaptureRetry | null;
   audioDebugLogPath: string | null;
   audioDebugLogLines: string[];
   audioDebugDroppedCount: number;
@@ -134,19 +131,7 @@ export interface BridgeDiagnostics {
   triggerTraceDroppedCount: number;
   feedbackTraceLines: string[];
   feedbackTraceDroppedCount: number;
-  hostAudioStatus: HostAudioStatusPayload | null;
-}
-
-export interface HostAudioCaptureIssue {
-  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'app-session-unavailable' | 'start-timeout' | 'helper-exit';
-  message: string;
-  retryAt: number;
-}
-
-export interface HostAudioCaptureRetry {
-  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'app-session-unavailable' | 'start-timeout' | 'helper-exit';
-  message: string;
-  retryAt: number;
+  audioStatus: AudioStatusPayload | null;
 }
 
 export interface BridgeSnapshot {

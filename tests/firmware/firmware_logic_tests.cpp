@@ -14,7 +14,6 @@
 #include "dualsense_input_decoder.h"
 #include "dualsense_output.h"
 #include "haptics_test_signal.h"
-#include "host_audio_runtime.h"
 #include "output_scheduler.h"
 #include "persona/ds4_persona.h"
 #include "persona/host_persona.h"
@@ -573,84 +572,6 @@ void haptics_test_signal_drives_left_and_right_actuators_opposite_phase() {
     }
 }
 
-void host_audio_runtime_heartbeat_and_start_grace_are_strict_windows() {
-    HostAudioRuntimeState runtime{};
-    EXPECT_FALSE(runtime.heartbeat_healthy(1'000, 500));
-    EXPECT_FALSE(runtime.start_grace_active(1'000, 500));
-
-    runtime.last_heartbeat_us = 1'000;
-    EXPECT_TRUE(runtime.heartbeat_healthy(1'499, 500));
-    EXPECT_FALSE(runtime.heartbeat_healthy(1'500, 500));
-
-    runtime.requested = true;
-    runtime.request_started_us = 2'000;
-    EXPECT_TRUE(runtime.start_grace_active(2'499, 500));
-    EXPECT_FALSE(runtime.start_grace_active(2'500, 500));
-
-    runtime.stream_active = true;
-    runtime.stream_started_us = 3'000;
-    EXPECT_TRUE(runtime.start_grace_active(3'499, 500));
-    EXPECT_FALSE(runtime.start_grace_active(3'500, 500));
-}
-
-void host_audio_runtime_last_contact_uses_newest_timestamp_across_wraparound() {
-    HostAudioRuntimeState runtime{};
-    EXPECT_EQ(runtime.last_contact_us(), 0u);
-
-    runtime.last_heartbeat_us = 100;
-    runtime.last_frame_us = 150;
-    runtime.stream_started_us = 125;
-    EXPECT_EQ(runtime.last_contact_us(), 150u);
-
-    runtime.last_heartbeat_us = 0xfffffff0u;
-    runtime.last_frame_us = 20;
-    runtime.stream_started_us = 10;
-    EXPECT_EQ(runtime.last_contact_us(), 20u);
-}
-
-void host_audio_runtime_generation_never_wraps_to_zero() {
-    HostAudioRuntimeState runtime{};
-    runtime.stream_generation = 0xfffe;
-    runtime.bump_generation();
-    EXPECT_EQ(runtime.stream_generation, 0xffff);
-    runtime.bump_generation();
-    EXPECT_EQ(runtime.stream_generation, 1);
-}
-
-void host_audio_runtime_blocks_local_haptics_only_while_stream_owns_audio_path() {
-    constexpr uint32_t kFrameRecentUs = 250'000;
-    constexpr uint32_t kStartGraceUs = 2'000'000;
-    HostAudioRuntimeState runtime{};
-    EXPECT_FALSE(runtime.blocks_local_haptics_test(10'000, kFrameRecentUs, kStartGraceUs));
-
-    runtime.requested = true;
-    runtime.request_started_us = 10'000;
-    EXPECT_TRUE(runtime.blocks_local_haptics_test(10'500, kFrameRecentUs, kStartGraceUs));
-    EXPECT_FALSE(runtime.blocks_local_haptics_test(10'000 + kStartGraceUs, kFrameRecentUs, kStartGraceUs));
-
-    runtime.request_started_us = 0;
-    runtime.last_frame_us = 20'000;
-    EXPECT_TRUE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs - 1, kFrameRecentUs, kStartGraceUs));
-    EXPECT_FALSE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
-
-    runtime.mode = AudioRuntimeHostEncodedActive;
-    runtime.stream_active = true;
-    runtime.stream_started_us = 30'000;
-    runtime.last_frame_us = 0;
-    EXPECT_TRUE(runtime.blocks_local_haptics_test(30'500, kFrameRecentUs, kStartGraceUs));
-    EXPECT_FALSE(runtime.blocks_local_haptics_test(30'000 + kStartGraceUs, kFrameRecentUs, kStartGraceUs));
-
-    runtime.last_frame_us = 40'000;
-    runtime.stream_started_us = 0;
-    EXPECT_TRUE(runtime.blocks_local_haptics_test(40'000 + kFrameRecentUs - 1, kFrameRecentUs, kStartGraceUs));
-    EXPECT_FALSE(runtime.blocks_local_haptics_test(40'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
-
-    runtime.mode = AudioRuntimeFallbackPicoLocal;
-    runtime.requested = false;
-    runtime.stream_active = false;
-    EXPECT_FALSE(runtime.blocks_local_haptics_test(40'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
-}
-
 void dualsense_decoder_extracts_normalized_controller_state() {
     const auto report = sample_dualsense_input_report();
     BridgeControllerState state{};
@@ -883,10 +804,6 @@ std::vector<TestCase> tests{
     {"haptics test signal matches original main packet flip pattern", haptics_test_signal_matches_original_main_packet_flip_pattern},
     {"haptics test signal is constant inside each original packet", haptics_test_signal_is_constant_inside_each_original_packet},
     {"haptics test signal drives left and right actuators opposite phase", haptics_test_signal_drives_left_and_right_actuators_opposite_phase},
-    {"host audio runtime heartbeat and start grace are strict windows", host_audio_runtime_heartbeat_and_start_grace_are_strict_windows},
-    {"host audio runtime last contact uses newest timestamp across wraparound", host_audio_runtime_last_contact_uses_newest_timestamp_across_wraparound},
-    {"host audio runtime generation never wraps to zero", host_audio_runtime_generation_never_wraps_to_zero},
-    {"host audio runtime blocks local haptics only while stream owns audio path", host_audio_runtime_blocks_local_haptics_only_while_stream_owns_audio_path},
     {"dualsense decoder extracts normalized controller state", dualsense_decoder_extracts_normalized_controller_state},
     {"dualsense persona preserves native report bytes", dualsense_persona_preserves_native_report_bytes},
     {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},

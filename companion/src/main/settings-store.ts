@@ -72,7 +72,6 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerVolumeShortcutEnabled: false,
   pollingRateMode: '1000',
   hostPersonaMode: 'dualsense',
-  hostEncodedAudioEnabled: false,
   duplexMicEnabled: true,
   controllerPowerSavingEnabled: false
 };
@@ -129,7 +128,6 @@ const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>
   'speakerVolumeShortcutEnabled',
   'pollingRateMode',
   'hostPersonaMode',
-  'hostEncodedAudioEnabled',
   'duplexMicEnabled',
   'controllerPowerSavingEnabled'
 ]);
@@ -179,7 +177,6 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   hostPersonaMode: 'dualsense',
   notifyControllerConnection: false,
   notifyLowBattery: false,
-  hostEncodedAudioEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hostEncodedAudioEnabled,
   duplexMicEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.duplexMicEnabled,
   controllerPowerSavingEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.controllerPowerSavingEnabled,
   selectedControllerProfileId: DEFAULT_CONTROLLER_PROFILE_ID,
@@ -364,7 +361,6 @@ export function controllerProfileSettingsFrom(settings: CompanionSettings): Cont
     speakerVolumeShortcutEnabled: settings.speakerVolumeShortcutEnabled,
     pollingRateMode: settings.pollingRateMode,
     hostPersonaMode: settings.hostPersonaMode,
-    hostEncodedAudioEnabled: settings.hostEncodedAudioEnabled,
     duplexMicEnabled: settings.duplexMicEnabled,
     controllerPowerSavingEnabled: settings.controllerPowerSavingEnabled
   };
@@ -449,7 +445,6 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumeShortcutEnabled,
     pollingRateMode: normalizePollingRateMode(candidate.pollingRateMode),
     hostPersonaMode: normalizeHostPersonaMode(candidate.hostPersonaMode),
-    hostEncodedAudioEnabled: false,
     duplexMicEnabled: typeof candidate.duplexMicEnabled === 'boolean'
       ? candidate.duplexMicEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.duplexMicEnabled,
@@ -942,7 +937,6 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     notifyLowBattery: typeof value?.notifyLowBattery === 'boolean'
       ? value.notifyLowBattery
       : DEFAULT_SETTINGS.notifyLowBattery,
-    hostEncodedAudioEnabled: false,
     duplexMicEnabled: typeof value?.duplexMicEnabled === 'boolean'
       ? value.duplexMicEnabled
       : DEFAULT_SETTINGS.duplexMicEnabled,

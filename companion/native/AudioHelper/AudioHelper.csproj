@@ -1,14 +1,14 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationIcon>Assets\ds5-audio-bridge.ico</ApplicationIcon>
-    <AssemblyTitle>DS5 Bridge Host Audio</AssemblyTitle>
-    <Description>DS5 Bridge Host Audio</Description>
-    <Product>DS5 Bridge Host Audio</Product>
+    <AssemblyTitle>DS5 Bridge Audio Helper</AssemblyTitle>
+    <Description>DS5 Bridge Audio Helper</Description>
+    <Product>DS5 Bridge Audio Helper</Product>
     <Company>DS5 Bridge</Company>
   </PropertyGroup>
 
@@ -18,8 +18,6 @@
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="NETStandard.Library" Version="2.0.3" />
     <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
-    <PackageReference Include="System.Net.Http" Version="4.3.4" />
-    <PackageReference Include="System.Security.Cryptography.X509Certificates" Version="4.3.2" />
   </ItemGroup>
 
   <ItemGroup>

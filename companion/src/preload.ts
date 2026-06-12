@@ -73,9 +73,6 @@ const api = {
   setAudioReactiveHapticsConfig: (value: Partial<AudioReactiveHapticsConfig>): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setAudioReactiveHapticsConfig', value)
   ),
-  setHostEncodedAudioEnabled: (value: boolean): Promise<BridgeSnapshot> => (
-    ipcRenderer.invoke('bridge:setHostEncodedAudioEnabled', value)
-  ),
   setDuplexMicEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setDuplexMicEnabled', value)
   ),

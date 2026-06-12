@@ -12,6 +12,26 @@ using NAudio.CoreAudioApi.Interfaces;
 using NAudio.Wave;
 
 var options = HelperOptions.Parse(args);
+if (options.MediaDebugClock)
+{
+    await WindowsMediaSessionCli.DebugClockAsync(options.MediaDebugSeconds, options.MediaDebugIntervalMs);
+    return;
+}
+if (options.MediaSessionCommand is not null)
+{
+    await WindowsMediaSessionCli.RunAsync(
+        options.MediaSessionCommand,
+        options.MediaVolumePercent,
+        options.MediaCommandStartedUnixMs,
+        options.MediaSkipThumbnail);
+    return;
+}
+if (!string.IsNullOrWhiteSpace(options.ResolveIconDataUrlPath))
+{
+    Console.Out.WriteLine(ProcessIconDataUrlResolver.TryResolve(options.ResolveIconDataUrlPath) ?? string.Empty);
+    Console.Out.Flush();
+    return;
+}
 if (options.CompanionTransportServer)
 {
     await CompanionTransportServer.RunAsync();
@@ -19,7 +39,7 @@ if (options.CompanionTransportServer)
 }
 if (options.PlayTestTone)
 {
-    HostAudioTestTone.Play(options);
+    AudioHelperTestTone.Play(options);
     return;
 }
 if (options.MonitorAudioSessions)
@@ -44,7 +64,7 @@ if (options.SetDefaultRenderBridge)
     return;
 }
 
-using var helper = new HostAudioHelper(options);
+using var helper = new AudioHelper(options);
 await helper.RunAsync();
 
 static class AudioConstants
@@ -65,7 +85,7 @@ static class AudioConstants
     public const int MaxQueuedReports = 12;
     public const int MaxBufferedReports = 6;
     public const int DefaultFrameDumpFrameLimit = 18000;
-    public const byte HostAudioStreamReportId = 0x07;
+    public const byte LegacyAudioStreamReportId = 0x07;
     public const byte FastFrameFragmentType = 0x08;
     public const int FastPayloadBytes = 57;
     public const int HidReportBytes = 64;
@@ -90,7 +110,7 @@ static class AudioConstants
     public const int MaxQueuedPcmChunks = 32;
     public const int BulkPcmMaxGapFillPackets = 6;
     public static readonly bool DiagnosticsEnabled =
-        Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_DIAGNOSTICS") == "1";
+        Environment.GetEnvironmentVariable("DS5_BRIDGE_AUDIO_HELPER_DIAGNOSTICS") == "1";
     public const int MicKeepaliveBufferMilliseconds = 10;
     public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
@@ -99,7 +119,7 @@ static class AudioConstants
     public const int AudclntDeviceInUse = unchecked((int)0x8889000A);
 }
 
-static class HostAudioTestTone
+static class AudioHelperTestTone
 {
     public static void Play(HelperOptions options)
     {
@@ -134,7 +154,7 @@ static class HostAudioTestTone
     }
 }
 
-sealed class HostAudioHelper : IDisposable
+sealed class AudioHelper : IDisposable
 {
     private readonly HelperOptions options;
     private readonly OpusEncoder encoder;
@@ -243,7 +263,7 @@ sealed class HostAudioHelper : IDisposable
 
     private bool HapticsFrameOutput => options.HapticsOnly && options.StdoutOnly;
 
-    public HostAudioHelper(HelperOptions options)
+    public AudioHelper(HelperOptions options)
     {
         this.options = options;
         targetSpeakerGainPermille = VolumePercentToPermille(options.SpeakerVolumePercent);
@@ -360,7 +380,7 @@ sealed class HostAudioHelper : IDisposable
         string deviceName = options.DeviceName ?? options.SourceArgument;
         try
         {
-            if (options.Source == HostAudioSource.UsbBulkPcm)
+            if (options.Source == AudioHelperSource.UsbBulkPcm)
             {
                 StartBulkPcmCapture();
                 Console.Error.WriteLine("status: recording-started");
@@ -382,11 +402,11 @@ sealed class HostAudioHelper : IDisposable
                 return;
             }
 
-            var device = options.Source == HostAudioSource.RawPcmCapture
+            var device = options.Source == AudioHelperSource.RawPcmCapture
                 ? EndpointManager.SelectRawPcmCaptureEndpoint(enumerator, options.DeviceName)
                 : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
             deviceName = device.FriendlyName;
-            if (options.Source == HostAudioSource.RawPcmCapture)
+            if (options.Source == AudioHelperSource.RawPcmCapture)
             {
                 StartDirectRawPcmCapture(device);
                 Console.Error.WriteLine("status: recording-started");
@@ -403,7 +423,7 @@ sealed class HostAudioHelper : IDisposable
             };
 
             Console.Error.WriteLine(
-                $"status: host-capture-format source={options.SourceArgument} device='{deviceName}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding}");
+                $"status: audio-capture-format source={options.SourceArgument} device='{deviceName}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding}");
             StartRawCaptureDump(capture.WaveFormat);
             capture.StartRecording();
         }
@@ -561,7 +581,7 @@ sealed class HostAudioHelper : IDisposable
         };
 
         Console.Error.WriteLine(
-            $"status: host-capture-format source=system-haptics-mirror device='{EscapeStatusValue(sourceName)}' target='{EscapeStatusValue(targetName)}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding} targetRate={targetFormat.SampleRate} targetChannels={targetFormat.Channels} targetBits={targetFormat.BitsPerSample} targetEncoding={targetFormat.Encoding}");
+            $"status: audio-capture-format source=system-haptics-mirror device='{EscapeStatusValue(sourceName)}' target='{EscapeStatusValue(targetName)}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding} targetRate={targetFormat.SampleRate} targetChannels={targetFormat.Channels} targetBits={targetFormat.BitsPerSample} targetEncoding={targetFormat.Encoding}");
         StartRawCaptureDump(capture.WaveFormat);
         capture.StartRecording();
         Console.Error.WriteLine("status: recording-started");
@@ -610,7 +630,7 @@ sealed class HostAudioHelper : IDisposable
             directCaptureClient = directCaptureAudioClient.AudioCaptureClient;
 
             Console.Error.WriteLine(
-                $"status: host-capture-format source=app-session device='{EscapeStatusValue(selectedSession.DisplayName)}' processId={selectedSession.ProcessId} processPath='{EscapeStatusValue(selectedSession.ProcessPath ?? "")}' target='{EscapeStatusValue(targetName)}' sampleRate={captureFormat.SampleRate} channels={captureFormat.Channels} bits={captureFormat.BitsPerSample} encoding={captureFormat.Encoding} targetRate={targetFormat.SampleRate} targetChannels={targetFormat.Channels} targetBits={targetFormat.BitsPerSample} targetEncoding={targetFormat.Encoding} bufferMs={AudioConstants.ProcessLoopbackBufferMilliseconds} engineBufferFrames={directCaptureAudioClient.BufferSize}");
+                $"status: audio-capture-format source=app-session device='{EscapeStatusValue(selectedSession.DisplayName)}' processId={selectedSession.ProcessId} processPath='{EscapeStatusValue(selectedSession.ProcessPath ?? "")}' target='{EscapeStatusValue(targetName)}' sampleRate={captureFormat.SampleRate} channels={captureFormat.Channels} bits={captureFormat.BitsPerSample} encoding={captureFormat.Encoding} targetRate={targetFormat.SampleRate} targetChannels={targetFormat.Channels} targetBits={targetFormat.BitsPerSample} targetEncoding={targetFormat.Encoding} bufferMs={AudioConstants.ProcessLoopbackBufferMilliseconds} engineBufferFrames={directCaptureAudioClient.BufferSize}");
             StartRawCaptureDump(captureFormat);
 
             pcmEncoderTask = Task.Run(ProcessQueuedPcm);
@@ -767,7 +787,7 @@ sealed class HostAudioHelper : IDisposable
         directCaptureClient = directCaptureAudioClient.AudioCaptureClient;
 
         Console.Error.WriteLine(
-            $"status: host-capture-format source={options.SourceArgument} device='{device.FriendlyName}' sampleRate={format.SampleRate} channels={format.Channels} bits={format.BitsPerSample} encoding={format.Encoding} bufferMs={AudioConstants.RawPcmCaptureBufferMilliseconds} engineBufferFrames={directCaptureAudioClient.BufferSize}");
+            $"status: audio-capture-format source={options.SourceArgument} device='{device.FriendlyName}' sampleRate={format.SampleRate} channels={format.Channels} bits={format.BitsPerSample} encoding={format.Encoding} bufferMs={AudioConstants.RawPcmCaptureBufferMilliseconds} engineBufferFrames={directCaptureAudioClient.BufferSize}");
         StartRawCaptureDump(format);
 
         pcmEncoderTask = Task.Run(ProcessQueuedPcm);
@@ -783,7 +803,7 @@ sealed class HostAudioHelper : IDisposable
             WinUsbPcmTransport.Channels);
         bulkPcmTransport = WinUsbPcmTransport.Open();
         Console.Error.WriteLine(
-            $"status: host-capture-format source={options.SourceArgument} device='{WinUsbPcmTransport.FriendlyName}' sampleRate={format.SampleRate} channels={format.Channels} bits={format.BitsPerSample} encoding={format.Encoding} transport={bulkPcmTransport.TransportName} {bulkPcmTransport.TransportDetails}");
+            $"status: audio-capture-format source={options.SourceArgument} device='{WinUsbPcmTransport.FriendlyName}' sampleRate={format.SampleRate} channels={format.Channels} bits={format.BitsPerSample} encoding={format.Encoding} transport={bulkPcmTransport.TransportName} {bulkPcmTransport.TransportDetails}");
         StartRawCaptureDump(format);
 
         pcmEncoderTask = Task.Run(ProcessQueuedPcm);
@@ -1890,7 +1910,7 @@ sealed class HostAudioHelper : IDisposable
                 }
                 else
                 {
-                    HostPacketizer.WriteStdoutFrame(stdout, writePrefix, frame);
+                    LegacyFramePacketizer.WriteStdoutFrame(stdout, writePrefix, frame);
                     frameWritten = true;
                 }
                 if (!frameWritten)
@@ -1936,7 +1956,7 @@ sealed class HostAudioHelper : IDisposable
     private bool TryWriteFrameToHid(byte[] frame)
     {
         var sequence = frameSequence++;
-        var ok = HostPacketizer.WriteFastHidFragments(frame, sequence, hidReport, TryWriteHidReport, out var fragmentCount);
+        var ok = LegacyFramePacketizer.WriteFastHidFragments(frame, sequence, hidReport, TryWriteHidReport, out var fragmentCount);
         if (ok && AudioConstants.DiagnosticsEnabled)
         {
             writtenFragments += fragmentCount;
@@ -2395,7 +2415,7 @@ sealed class FrameDumpWriter : IDisposable
     }
 }
 
-enum HostAudioSource
+enum AudioHelperSource
 {
     RenderLoopback,
     RawPcmCapture,
@@ -2405,9 +2425,10 @@ enum HostAudioSource
 sealed record HelperOptions(
     string? DeviceName,
     string? HidPath,
-    HostAudioSource Source,
+    AudioHelperSource Source,
     bool ListDevices,
     bool MonitorAudioSessions,
+    string? ResolveIconDataUrlPath,
     bool CompanionTransportServer,
     bool MicKeepaliveOnly,
     string? MicDeviceName,
@@ -2427,6 +2448,13 @@ sealed record HelperOptions(
     int HapticsResponse,
     int HapticsAttack,
     int HapticsRelease,
+    bool MediaDebugClock,
+    int MediaDebugSeconds,
+    int MediaDebugIntervalMs,
+    string? MediaSessionCommand,
+    int? MediaVolumePercent,
+    long? MediaCommandStartedUnixMs,
+    bool MediaSkipThumbnail,
     string? FrameDumpPath,
     int FrameDumpFrameLimit,
     string? RawCaptureDumpPath,
@@ -2435,8 +2463,8 @@ sealed record HelperOptions(
 {
     public string SourceArgument => Source switch
     {
-        HostAudioSource.RawPcmCapture => "raw-pcm-capture",
-        HostAudioSource.UsbBulkPcm => "usb-pcm",
+        AudioHelperSource.RawPcmCapture => "raw-pcm-capture",
+        AudioHelperSource.UsbBulkPcm => "usb-pcm",
         _ => "render-loopback"
     };
 
@@ -2445,20 +2473,21 @@ sealed record HelperOptions(
         string? deviceName = null;
         string? hidPath = null;
         string? micDeviceName = null;
-        var source = HostAudioSource.RenderLoopback;
+        var source = AudioHelperSource.RenderLoopback;
         var speakerVolumePercent = 100;
         string? testAudioPath = null;
-        string? frameDumpPath = Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP");
+        string? frameDumpPath = Environment.GetEnvironmentVariable("DS5_BRIDGE_AUDIO_HELPER_FRAME_DUMP");
         var frameDumpFrameLimit = ParseFrameDumpLimit(
-            Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT")
+            Environment.GetEnvironmentVariable("DS5_BRIDGE_AUDIO_HELPER_FRAME_DUMP_LIMIT")
         );
-        string? rawCaptureDumpPath = Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP");
+        string? rawCaptureDumpPath = Environment.GetEnvironmentVariable("DS5_BRIDGE_AUDIO_HELPER_RAW_CAPTURE_DUMP");
         var rawCaptureDumpSeconds = ParsePositiveInt(
-            Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP_SECONDS"),
+            Environment.GetEnvironmentVariable("DS5_BRIDGE_AUDIO_HELPER_RAW_CAPTURE_DUMP_SECONDS"),
             20
         );
         var listDevices = false;
         var monitorAudioSessions = false;
+        string? resolveIconDataUrlPath = null;
         var companionTransportServer = false;
         var micKeepaliveOnly = false;
         int? appProcessId = null;
@@ -2476,6 +2505,13 @@ sealed record HelperOptions(
         var hapticsResponse = 1;
         var hapticsAttack = 1;
         var hapticsRelease = 1;
+        var mediaDebugClock = false;
+        var mediaDebugSeconds = 20;
+        var mediaDebugIntervalMs = 250;
+        string? mediaSessionCommand = null;
+        int? mediaVolumePercent = null;
+        long? mediaCommandStartedUnixMs = null;
+        var mediaSkipThumbnail = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -2529,6 +2565,39 @@ sealed record HelperOptions(
                 case "--haptics-release" when index + 1 < args.Length:
                     hapticsRelease = ParseHapticsRelease(args[++index]);
                     break;
+                case "--media-debug-clock":
+                    mediaDebugClock = true;
+                    break;
+                case "--media-debug-seconds" when index + 1 < args.Length:
+                    if (int.TryParse(args[++index], out var parsedMediaDebugSeconds))
+                    {
+                        mediaDebugSeconds = Math.Clamp(parsedMediaDebugSeconds, 1, 300);
+                    }
+                    break;
+                case "--media-debug-interval-ms" when index + 1 < args.Length:
+                    if (int.TryParse(args[++index], out var parsedMediaDebugIntervalMs))
+                    {
+                        mediaDebugIntervalMs = Math.Clamp(parsedMediaDebugIntervalMs, 50, 5000);
+                    }
+                    break;
+                case "--media-session" when index + 1 < args.Length:
+                    mediaSessionCommand = args[++index];
+                    break;
+                case "--media-volume" when index + 1 < args.Length:
+                    if (int.TryParse(args[++index], out var parsedMediaVolumePercent))
+                    {
+                        mediaVolumePercent = Math.Clamp(parsedMediaVolumePercent, 0, 100);
+                    }
+                    break;
+                case "--media-command-started-at" when index + 1 < args.Length:
+                    if (long.TryParse(args[++index], out var parsedMediaCommandStartedUnixMs))
+                    {
+                        mediaCommandStartedUnixMs = Math.Max(0, parsedMediaCommandStartedUnixMs);
+                    }
+                    break;
+                case "--media-skip-thumbnail":
+                    mediaSkipThumbnail = true;
+                    break;
                 case "--test-audio-path" when index + 1 < args.Length:
                     testAudioPath = args[++index];
                     break;
@@ -2549,6 +2618,9 @@ sealed record HelperOptions(
                     break;
                 case "--monitor-audio-sessions":
                     monitorAudioSessions = true;
+                    break;
+                case "--resolve-icon-data-url" when index + 1 < args.Length:
+                    resolveIconDataUrlPath = args[++index];
                     break;
                 case "--companion-transport":
                     companionTransportServer = true;
@@ -2586,6 +2658,7 @@ sealed record HelperOptions(
             source,
             listDevices,
             monitorAudioSessions,
+            resolveIconDataUrlPath,
             companionTransportServer,
             micKeepaliveOnly,
             micDeviceName,
@@ -2605,6 +2678,13 @@ sealed record HelperOptions(
             hapticsResponse,
             hapticsAttack,
             hapticsRelease,
+            mediaDebugClock,
+            mediaDebugSeconds,
+            mediaDebugIntervalMs,
+            mediaSessionCommand,
+            mediaVolumePercent,
+            mediaCommandStartedUnixMs,
+            mediaSkipThumbnail,
             frameDumpPath,
             frameDumpFrameLimit,
             rawCaptureDumpPath,
@@ -2612,20 +2692,20 @@ sealed record HelperOptions(
             captureDumpOnly);
     }
 
-    private static HostAudioSource ParseSource(string value)
+    private static AudioHelperSource ParseSource(string value)
     {
         if (value.Equals("raw-pcm-capture", StringComparison.OrdinalIgnoreCase))
         {
-            return HostAudioSource.RawPcmCapture;
+            return AudioHelperSource.RawPcmCapture;
         }
         if (
             value.Equals("usb-pcm", StringComparison.OrdinalIgnoreCase)
             || value.Equals("usb-bulk-pcm", StringComparison.OrdinalIgnoreCase)
         )
         {
-            return HostAudioSource.UsbBulkPcm;
+            return AudioHelperSource.UsbBulkPcm;
         }
-        return HostAudioSource.RenderLoopback;
+        return AudioHelperSource.RenderLoopback;
     }
 
     public static int ParseHapticsBassFocus(string value)

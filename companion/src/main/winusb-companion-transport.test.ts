@@ -49,8 +49,8 @@ vi.mock('node:child_process', () => ({
   spawn: childProcessMock.spawn
 }));
 
-vi.mock('./host-audio-engine', () => ({
-  resolveHostAudioHelperPath: () => 'HostAudioHelper.exe'
+vi.mock('./audio-helper', () => ({
+  resolveAudioHelperPath: () => 'AudioHelper.exe'
 }));
 
 import { WinUsbCompanionTransport } from './winusb-companion-transport';
@@ -93,7 +93,7 @@ describe('WinUsbCompanionTransport', () => {
     const transport = await openTransport();
 
     expect(childProcessMock.spawn).toHaveBeenCalledWith(
-      'HostAudioHelper.exe',
+      'AudioHelper.exe',
       ['--companion-transport'],
       expect.objectContaining({
         stdio: ['pipe', 'pipe', 'pipe'],

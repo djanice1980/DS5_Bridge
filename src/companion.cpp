@@ -119,10 +119,6 @@ enum CommandId : uint8_t {
     CommandSetPollingRateMode = 0x12,
     CommandSetClassicRumbleGain = 0x13,
     CommandTestClassicRumble = 0x14,
-    CommandSetHostAudioEnabled = 0x15,
-    CommandHostAudioHeartbeat = 0x16,
-    CommandStartHostAudio = 0x17,
-    CommandStopHostAudio = 0x18,
     CommandSetDuplexEnabled = 0x19,
     CommandSetMicVolume = 0x1A,
     CommandSetMicMute = 0x1B,
@@ -730,8 +726,7 @@ void restore_defaults() {
     mute_keyboard_pressed = false;
     mute_led_flash_pending = false;
     audio_set_quiet_mode(false);
-    audio_host_set_duplex_requested(false);
-    audio_host_set_requested(false);
+    audio_set_duplex_requested(false);
     audio_set_reactive_haptics_config(
         false,
         AudioReactiveHapticsMix,
@@ -1609,7 +1604,7 @@ uint16_t build_audio_stats(uint8_t *buffer, uint16_t reqlen) {
 }
 #endif
 
-uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
+uint16_t build_audio_status(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
         return 0;
     }
@@ -1617,25 +1612,16 @@ uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
     memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
     write_magic_and_version(buffer);
 
-    audio_host_status status{};
-    audio_get_host_status(&status);
-    buffer[6] = status.mode;
-    buffer[7] = status.fallback_reason;
-    buffer[8] = (status.host_requested ? 0x01 : 0x00)
-        | (status.heartbeat_healthy ? 0x02 : 0x00)
-        | (status.stream_active ? 0x04 : 0x00)
-        | (status.stream_healthy ? 0x08 : 0x00)
-        | (status.duplex_requested ? 0x10 : 0x00)
+    audio_status status{};
+    audio_get_status(&status);
+    buffer[8] = (status.duplex_requested ? 0x10 : 0x00)
         | (status.duplex_active ? 0x20 : 0x00)
         | (status.controller_state_ready ? 0x40 : 0x00)
         | (status.mic_usb_streaming ? 0x80 : 0x00);
     buffer[9] = (status.headset_plugged ? 0x01 : 0x00)
         | (status.headset_audio_route ? 0x02 : 0x00);
-    write_u16(buffer + 10, status.stream_generation);
-    write_u16(buffer + 12, status_age_to_u16(status.heartbeat_age_ms));
-    write_u16(buffer + 14, status_age_to_u16(status.frame_age_ms));
-    write_u32(buffer + 16, status.host_frames_received);
-    write_u32(buffer + 20, status.host_frames_dropped);
+    write_u16(buffer + 12, status_age_to_u16(0xffffffffu));
+    write_u16(buffer + 14, status_age_to_u16(0xffffffffu));
     write_u32(buffer + 24, status.mic_packets_received);
     write_u32(buffer + 28, status.mic_packets_dropped);
     write_u32(buffer + 32, status.mic_decode_success);
@@ -2219,51 +2205,13 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
-        case CommandSetHostAudioEnabled:
-            if (value > 1) {
-                set_ack(command_id, sequence, AckInvalidValue);
-                return;
-            }
-            audio_host_set_requested(value == 1);
-            refresh_mute_led_policy();
-            settings_revision++;
-            set_ack(command_id, sequence, AckOk);
-            return;
-
-        case CommandHostAudioHeartbeat:
-            if (value != 0) {
-                set_ack(command_id, sequence, AckInvalidValue);
-                return;
-            }
-            audio_host_note_heartbeat();
-            set_ack(command_id, sequence, AckOk);
-            return;
-
-        case CommandStartHostAudio:
-            if (value != 0) {
-                set_ack(command_id, sequence, AckInvalidValue);
-                return;
-            }
-            audio_host_start_stream();
-            set_ack(command_id, sequence, AckOk);
-            return;
-
-        case CommandStopHostAudio:
-            if (value != 0) {
-                set_ack(command_id, sequence, AckInvalidValue);
-                return;
-            }
-            audio_host_stop_stream();
-            set_ack(command_id, sequence, AckOk);
-            return;
-
         case CommandSetDuplexEnabled:
             if (value > 1) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
             companion_mic_enabled = value == 1;
-            audio_host_set_duplex_requested(companion_mic_enabled);
+            audio_set_duplex_requested(companion_mic_enabled);
             if (!companion_mic_enabled) {
                 set_companion_mic_muted(true);
             } else {
@@ -2927,8 +2875,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
         case COMPANION_REPORT_AUDIO_STATS:
             return build_audio_stats(buffer, reqlen);
 #endif
-        case COMPANION_REPORT_HOST_AUDIO_STATUS:
-            return build_host_audio_status(buffer, reqlen);
+        case COMPANION_REPORT_AUDIO_STATUS:
+            return build_audio_status(buffer, reqlen);
 #if DS5_TRIGGER_TRACE_ENABLED
         case COMPANION_REPORT_TRIGGER_TRACE:
             return build_trigger_trace(buffer, reqlen);
@@ -2944,18 +2892,6 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
 
 void companion_set_report(uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
     if (report_type == HID_REPORT_TYPE_OUTPUT) {
-        if (report_id == COMPANION_REPORT_HOST_AUDIO_STREAM) {
-            audio_host_receive_packet(buffer, bufsize);
-            return;
-        }
-        if (bufsize > 0 && buffer[0] == COMPANION_REPORT_HOST_AUDIO_STREAM) {
-            audio_host_receive_packet(buffer + 1, bufsize - 1);
-            return;
-        }
-        if (report_id == 0 && bufsize >= sizeof(kMagic) && has_magic(buffer)) {
-            audio_host_receive_packet(buffer, bufsize);
-            return;
-        }
         return;
     }
 

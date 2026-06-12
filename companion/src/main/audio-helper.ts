@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { CompanionDebugConfig, DEBUG_ENV } from './debug-config';
@@ -14,7 +13,7 @@ import type {
 } from '../shared/protocol';
 import type { AudioHapticsSession } from '../shared/types';
 
-export type HostAudioFramePayload = {
+export type AudioHapticsFramePayload = {
   frame: number[];
   sequence: number;
   encodedBytes: number;
@@ -35,7 +34,7 @@ export type DefaultRenderEndpointStatus = {
   isBridgeEndpoint: boolean;
 };
 
-export type HostAudioStartFailureReason =
+type AudioHelperStartFailureReason =
   | 'device-in-use'
   | 'device-invalidated'
   | 'unsupported-format'
@@ -45,18 +44,18 @@ export type HostAudioStartFailureReason =
   | 'start-cancelled'
   | 'helper-exit';
 
-export class HostAudioStartError extends Error {
+class AudioHelperStartError extends Error {
   constructor(
     message: string,
-    readonly reason: HostAudioStartFailureReason
+    readonly reason: AudioHelperStartFailureReason
   ) {
     super(message);
-    this.name = 'HostAudioStartError';
+    this.name = 'AudioHelperStartError';
   }
 }
 
 const FRAME_RECORD_PREFIX_BYTES = 2;
-const HOST_AUDIO_FRAME_BYTES = 264;
+const HELPER_FRAME_BYTES = 264;
 const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
 const HELPER_START_TIMEOUT_MS = 8000;
@@ -65,248 +64,24 @@ const HELPER_COMMAND_TIMEOUT_MS = 2500;
 const HELPER_SESSION_MONITOR_START_TIMEOUT_MS = 3000;
 const HELPER_SESSION_MONITOR_STOP_TIMEOUT_MS = 500;
 const HELPER_STDERR_MAX_CHARS = 8192;
-const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
+const HELPER_RELATIVE_PATH = path.join('native', 'AudioHelper', 'AudioHelper.exe');
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
-type HostAudioSource = 'usb-pcm' | 'usb-bulk-pcm' | 'raw-pcm-capture' | 'render-loopback';
 
-const HOST_AUDIO_SOURCE = normalizeHostAudioSource(CompanionDebugConfig.hostAudioSource);
 const BRIDGE_AUDIO_DEVICE_NAME = 'DS5 Bridge';
-const BRIDGE_RAW_PCM_DEVICE_NAME = 'DS5 Bridge Raw PCM';
-const HOST_AUDIO_AUTO_CAPTURE_ENABLED = CompanionDebugConfig.hostAudioAutoCaptureEnabled;
-const HOST_AUDIO_DIAGNOSTIC_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
-const HOST_AUDIO_DIAGNOSTIC_DIR = path.join(homedir(), 'Desktop');
 const DEV_HELPER_RELATIVE_PATH = path.join(
   'native',
-  'HostAudioHelper',
+  'AudioHelper',
   'bin',
   'publish',
   'win-x64',
-  'HostAudioHelper.exe'
+  'AudioHelper.exe'
 );
 
-export class HostAudioEngine extends EventEmitter {
-  private process: ChildProcessWithoutNullStreams | null = null;
-  private starting: Promise<void> | null = null;
-  private readonly stoppingHelpers = new WeakSet<ChildProcessWithoutNullStreams>();
-  private stdoutBuffer = Buffer.alloc(0);
-  private sequence = 0;
-  private activeHidPath: string | null = null;
-  private activeSpeakerVolumePercent = 100;
-
-  async start(hidPath: string | null, speakerVolumePercent = 100): Promise<void> {
-    const nextSpeakerVolumePercent = normalizeSpeakerVolumePercent(speakerVolumePercent);
-    if (this.process) {
-      if (this.activeHidPath !== hidPath) {
-        await this.stop();
-      } else {
-        this.setSpeakerVolumePercent(nextSpeakerVolumePercent);
-        return;
-      }
-    }
-    if (this.process) {
-      return;
-    }
-    if (this.starting) {
-      await this.starting;
-      if (this.process && this.activeHidPath === hidPath) {
-        this.setSpeakerVolumePercent(nextSpeakerVolumePercent);
-        return;
-      }
-      return this.start(hidPath, nextSpeakerVolumePercent);
-    }
-
-    this.starting = this.startInternal(hidPath, nextSpeakerVolumePercent).finally(() => {
-      this.starting = null;
-    });
-    return this.starting;
-  }
-
-  setSpeakerVolumePercent(percent: number): void {
-    const nextSpeakerVolumePercent = normalizeSpeakerVolumePercent(percent);
-    this.activeSpeakerVolumePercent = nextSpeakerVolumePercent;
-    this.writeControlLine(`speaker-volume ${nextSpeakerVolumePercent}`);
-  }
-
-  private writeControlLine(line: string): void {
-    const helper = this.process;
-    if (!helper || helper.stdin.destroyed || !helper.stdin.writable) {
-      return;
-    }
-    try {
-      helper.stdin.write(`${line}\n`, (error) => {
-        if (error && !isExpectedHelperPipeError(error)) {
-          this.emit('error', error);
-        }
-      });
-    } catch (error) {
-      if (!isExpectedHelperPipeError(error)) {
-        this.emit('error', error);
-      }
-    }
-  }
-
-  async stop(): Promise<void> {
-    const helper = this.process;
-    this.process = null;
-    this.activeHidPath = null;
-    this.activeSpeakerVolumePercent = 100;
-    this.stdoutBuffer = Buffer.alloc(0);
-    this.sequence = 0;
-    if (!helper) {
-      return;
-    }
-
-    this.stoppingHelpers.add(helper);
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (!helper.killed) {
-          helper.kill('SIGKILL');
-        }
-        resolve();
-      }, 500);
-
-      helper.once('exit', () => {
-        clearTimeout(timeout);
-        this.stoppingHelpers.delete(helper);
-        resolve();
-      });
-
-      helper.stdin?.end();
-      helper.kill();
-    });
-  }
-
-  isActive(): boolean {
-    return this.process !== null;
-  }
-
-  private async startInternal(hidPath: string | null, speakerVolumePercent: number): Promise<void> {
-    const helperPath = resolveHelperPath();
-    const deviceName = HOST_AUDIO_SOURCE === 'raw-pcm-capture' ? BRIDGE_RAW_PCM_DEVICE_NAME : BRIDGE_AUDIO_DEVICE_NAME;
-    const args = [
-      '--device-name',
-      deviceName,
-      '--source',
-      HOST_AUDIO_SOURCE,
-      '--speaker-volume',
-      `${speakerVolumePercent}`
-    ];
-    if (hidPath) {
-      args.push('--hid-path', hidPath);
-    }
-    const helper = spawn(helperPath, args, {
-      env: buildHostAudioHelperEnv(),
-      windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-
-    this.process = helper;
-    this.activeHidPath = hidPath;
-    this.activeSpeakerVolumePercent = speakerVolumePercent;
-    helper.stdin.on('error', (error) => {
-      if (!isExpectedHelperPipeError(error)) {
-        this.emit('error', error);
-      }
-    });
-    helper.stdout.on('data', (chunk: Buffer) => this.processStdout(chunk));
-    helper.on('error', (error) => this.emit('error', error));
-    helper.on('exit', (code, signal) => {
-      if (this.process === helper) {
-        this.process = null;
-        this.activeHidPath = null;
-        this.activeSpeakerVolumePercent = 100;
-        this.stdoutBuffer = Buffer.alloc(0);
-        this.emit('status', `host audio helper exited (${signal ?? code ?? 'unknown'})`);
-      }
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      let settled = false;
-      let stderr = '';
-      const finish = (error?: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(timeout);
-        if (error) {
-          if (!helper.killed) {
-            helper.kill();
-          }
-          reject(error);
-        } else {
-          resolve();
-        }
-      };
-      const timeout = setTimeout(() => {
-        finish(new HostAudioStartError(
-          `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`,
-          'start-timeout'
-        ));
-      }, HELPER_START_TIMEOUT_MS);
-
-      helper.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString('utf8');
-        const lines = stderr.split(/\r?\n/);
-        stderr = lines.pop() ?? '';
-        for (const line of lines) {
-          const text = line.trim();
-          if (!text) {
-            continue;
-          }
-          this.emit('status', text);
-          if (text.includes(HELPER_RECORDING_STARTED_MESSAGE)) {
-            finish();
-            continue;
-          }
-          const reason = parseCaptureUnavailableReason(text);
-          if (reason) {
-            finish(new HostAudioStartError(
-              hostAudioStartFailureMessage(reason),
-              reason
-            ));
-          }
-        }
-      });
-      helper.once('exit', (code, signal) => {
-        const wasStoppedByCompanion = this.stoppingHelpers.has(helper);
-        this.stoppingHelpers.delete(helper);
-        finish(new HostAudioStartError(
-          wasStoppedByCompanion
-            ? 'Host audio helper startup was cancelled.'
-            : `Host audio helper exited before recording started: helper exited (${signal ?? code ?? 'unknown'}).`,
-          wasStoppedByCompanion ? 'start-cancelled' : 'helper-exit'
-        ));
-      });
-    });
-  }
-
-  private processStdout(chunk: Buffer): void {
-    this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk]);
-    while (this.stdoutBuffer.length >= FRAME_RECORD_PREFIX_BYTES) {
-      const frameLength = this.stdoutBuffer.readUInt16LE(0);
-      if (frameLength !== HOST_AUDIO_FRAME_BYTES) {
-        this.stdoutBuffer = Buffer.alloc(0);
-        this.emit('error', new Error(`Unexpected host audio frame length ${frameLength}`));
-        return;
-      }
-      const recordLength = FRAME_RECORD_PREFIX_BYTES + frameLength;
-      if (this.stdoutBuffer.length < recordLength) {
-        return;
-      }
-
-      const frame = this.stdoutBuffer.subarray(FRAME_RECORD_PREFIX_BYTES, recordLength);
-      this.stdoutBuffer = this.stdoutBuffer.subarray(recordLength);
-
-      this.emit('frame', {
-        frame: [...frame],
-        sequence: this.sequence,
-        encodedBytes: Math.max(0, frame.length - 64)
-      } satisfies HostAudioFramePayload);
-      this.sequence = (this.sequence + 1) & 0xffff;
-    }
-  }
-}
+export type AudioHelperCommand = {
+  command: string;
+  args: string[];
+  label: string;
+};
 
 export class SystemAudioHapticsEngine extends EventEmitter {
   private process: ChildProcessWithoutNullStreams | null = null;
@@ -475,7 +250,7 @@ export class SystemAudioHapticsEngine extends EventEmitter {
     this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk]);
     while (this.stdoutBuffer.length >= FRAME_RECORD_PREFIX_BYTES) {
       const frameLength = this.stdoutBuffer.readUInt16LE(0);
-      if (frameLength !== HOST_AUDIO_FRAME_BYTES) {
+      if (frameLength !== HELPER_FRAME_BYTES) {
         this.stdoutBuffer = Buffer.alloc(0);
         this.emit('error', new Error(`Unexpected system audio haptics frame length ${frameLength}`));
         return;
@@ -492,7 +267,7 @@ export class SystemAudioHapticsEngine extends EventEmitter {
         frame: [...frame],
         sequence: this.sequence,
         encodedBytes: Math.max(0, frame.length - 64)
-      } satisfies HostAudioFramePayload);
+      } satisfies AudioHapticsFramePayload);
       this.sequence = (this.sequence + 1) & 0xffff;
     }
   }
@@ -816,7 +591,7 @@ function isExpectedHelperPipeError(error: unknown): boolean {
     || error.message.includes('write EPIPE');
 }
 
-function parseCaptureUnavailableReason(line: string): HostAudioStartFailureReason | null {
+function parseCaptureUnavailableReason(line: string): AudioHelperStartFailureReason | null {
   if (!line.startsWith(HELPER_CAPTURE_UNAVAILABLE_PREFIX)) {
     return null;
   }
@@ -842,57 +617,48 @@ function parseCaptureUnavailableReason(line: string): HostAudioStartFailureReaso
   return 'helper-exit';
 }
 
-function hostAudioStartFailureMessage(reason: HostAudioStartFailureReason): string {
+function audioHelperStartFailureMessage(reason: AudioHelperStartFailureReason): string {
   switch (reason) {
     case 'device-in-use':
       return 'DualSense audio endpoint is in exclusive use by another application.';
     case 'device-invalidated':
-      return 'DualSense audio endpoint changed while host audio was starting.';
+      return 'DualSense audio endpoint changed while audio helper capture was starting.';
     case 'unsupported-format':
       return 'DualSense raw PCM capture endpoint format is not usable by Windows. Re-enumerate or clean stale DualSense audio devices.';
     case 'bulk-pcm-unavailable':
-      return 'DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices, then Host Encoding will retry.';
+      return 'DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices.';
     case 'app-session-unavailable':
       return 'Selected audio app is not available for haptics yet.';
     case 'start-timeout':
-      return `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`;
+      return `Audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`;
     case 'start-cancelled':
-      return 'Host audio helper startup was cancelled.';
+      return 'Audio helper startup was cancelled.';
     case 'helper-exit':
-      return 'Host audio helper exited before recording started.';
+      return 'Audio helper exited before recording started.';
   }
-}
-
-function buildHostAudioHelperEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  if (!isWinUsbPcmSource(HOST_AUDIO_SOURCE) || !HOST_AUDIO_AUTO_CAPTURE_ENABLED) {
-    return env;
-  }
-
-  env[DEBUG_ENV.hostAudioHelperDiagnostics] ??= CompanionDebugConfig.hostAudioHelperDiagnosticsEnabled ? '1' : '0';
-  if (CompanionDebugConfig.hostAudioDumpEnabled) {
-    env[DEBUG_ENV.hostAudioRawCaptureDump] ??= path.join(
-      HOST_AUDIO_DIAGNOSTIC_DIR,
-      `ds5-bridge-winusb-pcm-${HOST_AUDIO_DIAGNOSTIC_STAMP}.wav`
-    );
-    env[DEBUG_ENV.hostAudioRawCaptureDumpSeconds] ??= '20';
-    env[DEBUG_ENV.hostAudioFrameDump] ??= path.join(
-      HOST_AUDIO_DIAGNOSTIC_DIR,
-      `ds5-bridge-host-frames-${HOST_AUDIO_DIAGNOSTIC_STAMP}.bin`
-    );
-    env[DEBUG_ENV.hostAudioFrameDumpLimit] ??= '2500';
-  }
-  return env;
 }
 
 function buildSystemAudioHapticsHelperEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  env[DEBUG_ENV.hostAudioHelperDiagnostics] ??= CompanionDebugConfig.hostAudioHelperDiagnosticsEnabled ? '1' : '0';
+  env[DEBUG_ENV.audioHelperDiagnostics] ??= CompanionDebugConfig.audioHelperDiagnosticsEnabled ? '1' : '0';
   return env;
 }
 
-async function runHostAudioHelperCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const helper = spawn(resolveHelperPath(), args, {
+async function runAudioHelperCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const commands = resolveAudioHelperCommands(args);
+  let lastError: Error | null = null;
+  for (const command of commands) {
+    try {
+      return await runAudioHelperCommandOnce(command.command, command.args);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  throw lastError ?? new Error('Audio helper command failed.');
+}
+
+function runAudioHelperCommandOnce(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const helper = spawn(command, args, {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -917,7 +683,7 @@ async function runHostAudioHelperCommand(args: string[]): Promise<{ stdout: stri
       }
     };
     const timeout = setTimeout(() => {
-      finish(new Error(`Host audio helper command timed out after ${HELPER_COMMAND_TIMEOUT_MS}ms.`));
+      finish(new Error(`Audio helper command timed out after ${HELPER_COMMAND_TIMEOUT_MS}ms.`));
     }, HELPER_COMMAND_TIMEOUT_MS);
 
     helper.stdout.on('data', (chunk: Buffer) => {
@@ -941,16 +707,16 @@ async function runHostAudioHelperCommand(args: string[]): Promise<{ stdout: stri
 function parseDefaultRenderEndpointStatus(stdout: string): DefaultRenderEndpointStatus {
   const text = stdout.trim();
   if (!text) {
-    throw new Error('Host audio helper did not report the default render endpoint.');
+    throw new Error('Audio helper did not report the default render endpoint.');
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error('Host audio helper reported invalid default render endpoint status.');
+    throw new Error('Audio helper reported invalid default render endpoint status.');
   }
   if (!parsed || typeof parsed !== 'object') {
-    throw new Error('Host audio helper reported invalid default render endpoint status.');
+    throw new Error('Audio helper reported invalid default render endpoint status.');
   }
   const value = parsed as Partial<DefaultRenderEndpointStatus>;
   return {
@@ -982,8 +748,8 @@ async function waitForHelperRecordingStarted(
       }
     };
     const timeout = setTimeout(() => {
-      finish(new HostAudioStartError(
-        `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`,
+      finish(new AudioHelperStartError(
+        `Audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`,
         'start-timeout'
       ));
     }, HELPER_START_TIMEOUT_MS);
@@ -1004,23 +770,23 @@ async function waitForHelperRecordingStarted(
         }
         const reason = parseCaptureUnavailableReason(text);
         if (reason) {
-          finish(new HostAudioStartError(
-            hostAudioStartFailureMessage(reason),
+          finish(new AudioHelperStartError(
+            audioHelperStartFailureMessage(reason),
             reason
           ));
         }
       }
     });
     helper.once('exit', (code, signal) => {
-      finish(new HostAudioStartError(
-        `Host audio helper exited before recording started: helper exited (${signal ?? code ?? 'unknown'}).`,
+      finish(new AudioHelperStartError(
+        `Audio helper exited before recording started: helper exited (${signal ?? code ?? 'unknown'}).`,
         'helper-exit'
       ));
     });
   });
 }
 
-export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise<void> {
+export async function playBridgeSpeakerTestTone(speakerVolumePercent = 100): Promise<void> {
   const helperPath = resolveHelperPath();
   const testAudioPath = resolveHelperTestAudioPath(helperPath);
   const helper = spawn(helperPath, [
@@ -1077,12 +843,12 @@ export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise
 }
 
 export async function getDefaultRenderEndpointStatus(): Promise<DefaultRenderEndpointStatus> {
-  const result = await runHostAudioHelperCommand(['--default-render-status']);
+  const result = await runAudioHelperCommand(['--default-render-status']);
   return parseDefaultRenderEndpointStatus(result.stdout);
 }
 
 export async function setDefaultRenderBridgeEndpoint(mode: HostPersonaMode): Promise<void> {
-  await runHostAudioHelperCommand([
+  await runAudioHelperCommand([
     '--set-default-render-bridge',
     '--bridge-persona',
     mode
@@ -1157,25 +923,7 @@ export class MicKeepaliveEngine extends EventEmitter {
   }
 }
 
-function normalizeHostAudioSource(value: string | undefined): HostAudioSource {
-  if (value === 'render-loopback' || value === 'raw-pcm-capture') {
-    return value;
-  }
-  if (value === 'usb-bulk-pcm' || value === 'usb-pcm') {
-    return 'usb-pcm';
-  }
-  return 'usb-pcm';
-}
-
-function isWinUsbPcmSource(value: HostAudioSource): boolean {
-  return value === 'usb-pcm' || value === 'usb-bulk-pcm';
-}
-
-export function hostAudioUsesRawPcmCapture(): boolean {
-  return HOST_AUDIO_SOURCE === 'raw-pcm-capture';
-}
-
-export function resolveHostAudioHelperPath(): string {
+export function resolveAudioHelperPath(): string {
   const packagedCandidate = process.resourcesPath ? path.join(process.resourcesPath, HELPER_RELATIVE_PATH) : null;
   const devCandidates = [
     path.resolve(process.cwd(), DEV_HELPER_RELATIVE_PATH),
@@ -1188,13 +936,72 @@ export function resolveHostAudioHelperPath(): string {
 
   const helperPath = candidates.find((candidate) => existsSync(candidate));
   if (!helperPath) {
-    throw new Error(`Host audio helper is missing. Run npm run build:host-audio from companion/.`);
+    throw new Error('Audio helper is missing. Run npm run build:audio-helper from companion/.');
   }
   return helperPath;
 }
 
+export function resolveAudioHelperCommands(args: string[]): AudioHelperCommand[] {
+  const helperPath = resolveAudioHelperPath();
+  const commands: AudioHelperCommand[] = [{
+    command: helperPath,
+    args,
+    label: helperPath
+  }];
+  for (const dllPath of audioHelperDllFallbackCandidates(helperPath)) {
+    commands.push({
+      command: 'dotnet',
+      args: [dllPath, ...args],
+      label: `dotnet ${dllPath}`
+    });
+  }
+  return commands;
+}
+
 function resolveHelperPath(): string {
-  return resolveHostAudioHelperPath();
+  return resolveAudioHelperPath();
+}
+
+function audioHelperDllFallbackCandidates(helperPath: string): string[] {
+  const seen = new Set<string>();
+  const candidates = [
+    path.join(path.dirname(helperPath), 'AudioHelper.dll'),
+    ...audioHelperBuildDllFallbackCandidates(helperPath)
+  ];
+  return candidates.filter((candidate) => {
+    const normalized = path.normalize(candidate).toLowerCase();
+    if (seen.has(normalized) || !existsSync(candidate)) {
+      return false;
+    }
+    seen.add(normalized);
+    return true;
+  });
+}
+
+function audioHelperBuildDllFallbackCandidates(helperPath: string): string[] {
+  const binDirectory = path.resolve(path.dirname(helperPath), '..', '..');
+  const candidates: string[] = [];
+  for (const configuration of ['Release', 'Debug']) {
+    const configurationDirectory = path.join(binDirectory, configuration);
+    for (const targetFramework of safeReadDirectory(configurationDirectory)) {
+      if (!targetFramework.startsWith('net')) {
+        continue;
+      }
+      candidates.push(
+        path.join(configurationDirectory, targetFramework, 'win-x64', 'AudioHelper.dll'),
+        path.join(configurationDirectory, targetFramework, 'AudioHelper.dll')
+      );
+    }
+  }
+  return candidates;
+}
+
+function safeReadDirectory(directoryPath: string): string[] {
+  try {
+    return readdirSync(directoryPath);
+  } catch {
+    return [];
+  }
 }
 
 function resolveHelperTestAudioPath(helperPath: string): string {

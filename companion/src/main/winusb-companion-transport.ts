@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { resolveHostAudioHelperPath } from './host-audio-engine';
+import { resolveAudioHelperPath } from './audio-helper';
 
 type TransportReady = {
   id: 0;
@@ -82,7 +82,7 @@ export class WinUsbCompanionTransport extends EventEmitter {
   }
 
   private static async openOnce(): Promise<WinUsbCompanionTransport> {
-    const helper = spawn(resolveHostAudioHelperPath(), ['--companion-transport'], {
+    const helper = spawn(resolveAudioHelperPath(), ['--companion-transport'], {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });

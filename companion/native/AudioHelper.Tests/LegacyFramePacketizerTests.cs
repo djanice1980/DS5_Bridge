@@ -1,7 +1,7 @@
 using System.Buffers.Binary;
 using Xunit;
 
-public sealed class HostPacketizerTests
+public sealed class LegacyFramePacketizerTests
 {
     [Fact]
     public void WriteStdoutFramePrefixesFrameWithLittleEndianLength()
@@ -12,7 +12,7 @@ public sealed class HostPacketizerTests
             .Select(index => (byte)(index & 0xff))
             .ToArray();
 
-        HostPacketizer.WriteStdoutFrame(stdout, prefix, frame);
+        LegacyFramePacketizer.WriteStdoutFrame(stdout, prefix, frame);
 
         var written = stdout.ToArray();
         Assert.Equal(AudioConstants.CompactFrameBytes + 2, written.Length);
@@ -31,7 +31,7 @@ public sealed class HostPacketizerTests
         var hidReport = Enumerable.Repeat((byte)0xaa, AudioConstants.HidReportBytes).ToArray();
         var reports = new List<byte[]>();
 
-        var ok = HostPacketizer.WriteFastHidFragments(
+        var ok = LegacyFramePacketizer.WriteFastHidFragments(
             frame,
             0xbeef,
             hidReport,
@@ -53,7 +53,7 @@ public sealed class HostPacketizerTests
             var payloadLength = Math.Min(
                 AudioConstants.FastPayloadBytes,
                 AudioConstants.CompactFrameBytes - fragmentIndex * AudioConstants.FastPayloadBytes);
-            Assert.Equal(AudioConstants.HostAudioStreamReportId, report[0]);
+            Assert.Equal(AudioConstants.LegacyAudioStreamReportId, report[0]);
             Assert.Equal(AudioConstants.FastFrameFragmentType, report[1]);
             Assert.Equal(0xef, report[2]);
             Assert.Equal(0xbe, report[3]);
@@ -80,7 +80,7 @@ public sealed class HostPacketizerTests
         var hidReport = new byte[AudioConstants.HidReportBytes];
         var writeAttempts = 0;
 
-        var ok = HostPacketizer.WriteFastHidFragments(
+        var ok = LegacyFramePacketizer.WriteFastHidFragments(
             frame,
             1,
             hidReport,

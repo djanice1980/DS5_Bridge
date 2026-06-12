@@ -107,12 +107,6 @@ if(TARGET bs2_default)
             PICO_FLASH_SPI_CLKDIV=${PICO_FLASH_SPI_CLKDIV}
     )
 endif()
-option(ENABLE_HOST_ENCODER_PATH "Enable the legacy host-side audio encoder transport" OFF)
-if(ENABLE_HOST_ENCODER_PATH)
-    set(KITSUNE_HOST_ENCODER_PATH_VALUE 1)
-else()
-    set(KITSUNE_HOST_ENCODER_PATH_VALUE 0)
-endif()
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         PICO_EMBED_XIP_SETUP=1
@@ -120,7 +114,6 @@ target_compile_definitions(ds5-bridge PRIVATE
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
-        KITSUNE_ENABLE_HOST_ENCODER_PATH=${KITSUNE_HOST_ENCODER_PATH_VALUE}
 )
 option(ENABLE_DSE "Enable DSE" OFF)
 if(ENABLE_DSE)
@@ -136,11 +129,6 @@ if(ENABLE_COMPANION)
             src/host_bridge.cpp
             src/usb_app_drivers.cpp
     )
-    if(ENABLE_HOST_ENCODER_PATH)
-        target_sources(ds5-bridge PRIVATE
-                src/host_pcm_iso.cpp
-        )
-    endif()
     target_compile_definitions(ds5-bridge PRIVATE
             ENABLE_COMPANION
     )

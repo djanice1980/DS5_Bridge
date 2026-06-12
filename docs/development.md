@@ -67,7 +67,7 @@ setup:
 ```powershell
 npm ci --ignore-scripts
 npm rebuild electron esbuild node-hid electron-winstaller --ignore-scripts=false
-npm run build:host-audio
+npm run build:audio-helper
 npm run typecheck
 npm test
 ```
@@ -78,16 +78,16 @@ Build the companion app:
 npm run build
 ```
 
-`npm run build` also publishes the host audio helper from:
+`npm run build` also publishes the audio helper from:
 
 ```text
-companion/native/HostAudioHelper
+companion/native/AudioHelper
 ```
 
 The helper output is written to:
 
 ```text
-companion/native/HostAudioHelper/bin/publish/win-x64
+companion/native/AudioHelper/bin/publish/win-x64
 ```
 
 For local development:
@@ -110,7 +110,7 @@ Build the Windows installer:
 npm run installer:win
 ```
 
-The installer build includes the published host audio helper as an Electron
+The installer build includes the published audio helper as an Electron
 extra resource.
 
 ## Release Candidate Bundle
@@ -131,35 +131,22 @@ Useful options:
 .\tools\create-release-candidate.ps1 -NoZip
 ```
 
-## Host Helper Runtime
+## Audio Helper Runtime
 
-The host audio helper is published as a self-contained Windows x64 build so end
+The audio helper is published as a self-contained Windows x64 build so end
 users do not need to install a separate .NET runtime. Developer machines still
-need the .NET SDK to build or publish the helper locally.
+need the .NET SDK to build or publish the helper locally. The helper is used for
+audio session discovery, audio-reactive haptics mirroring, default endpoint
+setup, speaker test playback, mic keepalive, media metadata, game discovery, and
+icon extraction.
 
-### Host Audio Frame Capture
-
-For game haptics regressions, capture the helper's compact host-audio frames by
-setting `DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP` before launching the companion app:
+Enable helper diagnostics while developing companion-side audio integrations:
 
 ```powershell
-$env:DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP="$env:TEMP\ds5bridge-host-audio.bin"
-$env:DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT="18000"
+$env:DS5_BRIDGE_AUDIO_HELPER_DIAGNOSTICS="1"
 cd companion
 npm run dev
 ```
-
-The capture is a length-prefixed stream of the exact 264-byte compact frames the
-helper emits before stdout or HID transport. The first 64 bytes in each frame
-are the stereo haptic buckets; the remaining 200 bytes are Opus speaker data.
-Analyze a capture with:
-
-```powershell
-cd companion
-npm run analyze:host-audio -- "$env:TEMP\ds5bridge-host-audio.bin"
-```
-
-Use `DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT=0` for an unlimited capture.
 
 ## Project Layout
 
@@ -172,5 +159,5 @@ Use `DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT=0` for an unlimited capture.
 | `src/usb.cpp` | TinyUSB audio control callbacks and runtime settings fallback. |
 | `src/usb_descriptors.c` | USB device, configuration, HID report, audio, and string descriptors. |
 | `companion/` | Electron companion app source, protocol parser, HID service, assets, and UI. |
-| `companion/native/HostAudioHelper/` | Native host audio helper source. |
+| `companion/native/AudioHelper/` | Native audio helper source. |
 | `.github/workflows` | CI and release builds. |

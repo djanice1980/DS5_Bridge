@@ -337,7 +337,7 @@ describe('companion layout CSS', () => {
     expect(cssBlock('.shell.controller-unavailable .inline-switch', 'color: var(--text-disabled);')).toContain(
       'color: var(--text-disabled);'
     );
-    expect(cssBlock('.shell.controller-unavailable .inline-switch .host-encoding-state', 'opacity: var(--disabled-opacity);')).toContain(
+    expect(cssBlock('.shell.controller-unavailable .inline-switch .inline-state-badge', 'opacity: var(--disabled-opacity);')).toContain(
       'opacity: var(--disabled-opacity);'
     );
     expect(cssBlock('.shell.controller-unavailable .inline-switch .switch.on', 'background: var(--surface-disabled-strong);')).toContain(

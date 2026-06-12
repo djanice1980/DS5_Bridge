@@ -4,13 +4,6 @@ import {
   AUDIO_DEBUG_EVENT,
   COMMAND_ID,
   DEFAULT_BUTTON_REMAP_PROFILE,
-  HOST_AUDIO_COMPACT_FRAME_LENGTH,
-  HOST_AUDIO_FAST_FRAME_CHUNK_COUNT,
-  HOST_AUDIO_FAST_PAYLOAD_LENGTH,
-  HOST_AUDIO_FRAME_CHUNK_COUNT,
-  HOST_AUDIO_PACKET_TYPE,
-  HOST_AUDIO_PAYLOAD_LENGTH,
-  HOST_AUDIO_REPORT_FRAME_LENGTH,
   MAGIC,
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
@@ -19,16 +12,14 @@ import {
   buildButtonRemapPayload,
   buildChordBindingsPayload,
   buildCommandReport,
-  buildHostAudioFastFrameReports,
-  buildHostAudioFrameChunkReports,
   hostPersonaModeValue,
   isChordBindingAllowed,
   normalizeBridgePresetId,
   parseAudioDebugReport,
+  parseAudioStatusReport,
   parseAudioStatsReport,
   parseAckReport,
   parseFeedbackTraceReport,
-  parseHostAudioStatusReport,
   parseTriggerTraceReport,
   parseStatusReport
 } from './protocol';
@@ -504,17 +495,12 @@ describe('companion protocol', () => {
     expect(debug.events.map((event) => event.sequence)).toEqual([7, 8, 9]);
   });
 
-  it('parses host audio mic concealment counters', () => {
-    const report = baseReport(REPORT_ID.HOST_AUDIO_STATUS);
+  it('parses Pico-local audio mic concealment counters', () => {
+    const report = baseReport(REPORT_ID.AUDIO_STATUS);
     report[7] = 1;
     report[8] = 0;
-    report[9] = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80;
+    report[9] = 0x10 | 0x20 | 0x40 | 0x80;
     report[10] = 0x01 | 0x02;
-    writeU16(report, 11, 42);
-    writeU16(report, 13, 1234);
-    writeU16(report, 15, 56);
-    writeU32(report, 17, 100);
-    writeU32(report, 21, 2);
     writeU32(report, 25, 22540);
     writeU32(report, 29, 0);
     writeU32(report, 33, 22540);
@@ -527,46 +513,31 @@ describe('companion protocol', () => {
     writeU16(report, 59, 96);
     writeU16(report, 61, 47);
 
-    expect(parseHostAudioStatusReport(report)).toMatchObject({
-      mode: 'host-encoded-active',
-      fallbackReason: 'none',
-      hostRequested: true,
-      heartbeatHealthy: true,
-      streamActive: true,
-      streamHealthy: true,
+    expect(parseAudioStatusReport(report)).toMatchObject({
       duplexRequested: true,
       duplexActive: true,
       controllerStateReady: true,
       headsetPlugged: true,
       headsetAudioRoute: true,
       micUsbStreaming: true,
-      streamGeneration: 42,
-      heartbeatAgeMs: 1234,
-      frameAgeMs: 56,
       micPacketsReceived: 22540,
       micUsbWriteSuccess: 225802,
       micUsbConcealCount: 402,
       micPlcCount: 7,
       micLastDecodedSamples: 480,
       micLastWrittenBytes: 96,
-      micPeakPermille: 47
+      micPeakPermille: 47,
+      protocolVersion: `${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}`
     });
   });
 
-  it('parses legacy host audio status reports with nullable ages', () => {
-    const report = baseReport(REPORT_ID.HOST_AUDIO_STATUS);
+  it('parses older Pico-local audio status protocol versions', () => {
+    const report = baseReport(REPORT_ID.AUDIO_STATUS);
     report[6] = 2;
     report[7] = 1;
-    report[8] = 3;
-    report[9] = 1;
+    report[8] = 0;
+    report[9] = 0x10 | 0x20 | 0x40 | 0x80;
     report[10] = 1;
-    report[11] = 0;
-    report[12] = 1;
-    report[13] = 1;
-    report[14] = 0x01 | 0x02 | 0x04 | 0x08;
-    writeU16(report, 15, 77);
-    writeU32(report, 17, 0xffffffff);
-    writeU32(report, 21, 345);
     writeU32(report, 25, 10);
     writeU32(report, 29, 2);
     writeU32(report, 33, 100);
@@ -580,108 +551,18 @@ describe('companion protocol', () => {
     writeU16(report, 61, 33);
     report[63] = 1;
 
-    expect(parseHostAudioStatusReport(report)).toMatchObject({
-      mode: 'host-encoded-active',
-      fallbackReason: 'stream-timeout',
-      hostRequested: true,
-      heartbeatHealthy: true,
-      streamActive: false,
-      streamHealthy: true,
+    expect(parseAudioStatusReport(report)).toMatchObject({
       duplexRequested: true,
       duplexActive: true,
       headsetPlugged: true,
-      headsetAudioRoute: true,
       controllerStateReady: true,
-      streamGeneration: 77,
-      heartbeatAgeMs: null,
-      frameAgeMs: 345,
-      hostFramesReceived: 10,
-      micUsbConcealCount: 0,
-      micPlcCount: 0,
+      micPacketsReceived: 10,
+      micUsbWriteSuccess: 88,
+      micUsbConcealCount: 82,
+      micPlcCount: 6,
       micUsbStreaming: true,
       protocolVersion: '1.2'
     });
-  });
-
-  it('chunks a synthetic host audio frame for the companion OUT stream', () => {
-    const frame = new Array<number>(HOST_AUDIO_REPORT_FRAME_LENGTH).fill(0);
-    frame[0] = 0x36;
-    frame[76] = 0x92;
-    const reports = buildHostAudioFrameChunkReports({
-      streamGeneration: 7,
-      frameSequence: 33,
-      frame
-    });
-
-    expect(frame).toHaveLength(HOST_AUDIO_REPORT_FRAME_LENGTH);
-    expect(frame[0]).toBe(0x36);
-    expect(frame[76]).toBe(0x92);
-    expect(reports).toHaveLength(HOST_AUDIO_FRAME_CHUNK_COUNT);
-    expect(reports[0][0]).toBe(REPORT_ID.HOST_AUDIO_STREAM);
-    expect(reports[0][7]).toBe(HOST_AUDIO_PACKET_TYPE.FRAME_CHUNK);
-    expect(reports[0][9]).toBe(7);
-    expect(reports[0][11]).toBe(33);
-    expect(reports[0][13]).toBe(0);
-    expect(reports[0][14]).toBe(HOST_AUDIO_FRAME_CHUNK_COUNT);
-    expect(reports[0][15]).toBe(HOST_AUDIO_PAYLOAD_LENGTH);
-    expect(reports.at(-1)?.[15]).toBe(HOST_AUDIO_REPORT_FRAME_LENGTH % HOST_AUDIO_PAYLOAD_LENGTH);
-  });
-
-  it('round-trips host audio frame chunks without dropping or reordering payload bytes', () => {
-    const frame = Array.from(
-      { length: HOST_AUDIO_REPORT_FRAME_LENGTH },
-      (_, index) => (index * 17 + 3) & 0xff
-    );
-    const reports = buildHostAudioFrameChunkReports({
-      streamGeneration: 0x1234,
-      frameSequence: 0x5678,
-      frame
-    });
-
-    const reconstructed: number[] = [];
-    reports.forEach((report, chunkIndex) => {
-      expect(report[13]).toBe(chunkIndex);
-      expect(report[14]).toBe(reports.length);
-      expect(report[15]).toBeLessThanOrEqual(HOST_AUDIO_PAYLOAD_LENGTH);
-      reconstructed.push(...report.slice(17, 17 + report[15]));
-    });
-
-    expect(reconstructed).toEqual(frame);
-  });
-
-  it('chunks compact host audio frames with the fast stream format', () => {
-    const frame = new Array<number>(HOST_AUDIO_COMPACT_FRAME_LENGTH).fill(0).map((_, index) => index & 0xff);
-    const reports = buildHostAudioFastFrameReports({ frame, frameSequence: 42 });
-
-    expect(reports).toHaveLength(HOST_AUDIO_FAST_FRAME_CHUNK_COUNT);
-    expect(reports[0][0]).toBe(REPORT_ID.HOST_AUDIO_STREAM);
-    expect(reports[0][1]).toBe(HOST_AUDIO_PACKET_TYPE.FAST_FRAME_FRAGMENT);
-    expect(reports[0][2]).toBe(42);
-    expect(reports[0][4]).toBe(0);
-    expect(reports[0][5]).toBe(HOST_AUDIO_FAST_FRAME_CHUNK_COUNT);
-    expect(reports[0][6]).toBe(HOST_AUDIO_FAST_PAYLOAD_LENGTH);
-    expect(reports[0][7]).toBe(0);
-    expect(reports.at(-1)?.[6]).toBe(HOST_AUDIO_COMPACT_FRAME_LENGTH % HOST_AUDIO_FAST_PAYLOAD_LENGTH);
-  });
-
-  it('round-trips compact fast host audio fragments without byte loss', () => {
-    const frame = Array.from(
-      { length: HOST_AUDIO_COMPACT_FRAME_LENGTH },
-      (_, index) => (255 - index * 11) & 0xff
-    );
-    const reports = buildHostAudioFastFrameReports({ frame, frameSequence: 0xbeef });
-
-    const reconstructed: number[] = [];
-    reports.forEach((report, fragmentIndex) => {
-      expect(report[2]).toBe(0xef);
-      expect(report[3]).toBe(0xbe);
-      expect(report[4]).toBe(fragmentIndex);
-      expect(report[5]).toBe(reports.length);
-      expect(report[6]).toBeLessThanOrEqual(HOST_AUDIO_FAST_PAYLOAD_LENGTH);
-      reconstructed.push(...report.slice(7, 7 + report[6]));
-    });
-
-    expect(reconstructed).toEqual(frame);
   });
 
   it('masks command header bytes and truncates oversized extra payloads', () => {

@@ -149,14 +149,12 @@ enum BtAudioDebugKind : uint8_t {
     BtAudioDebugLateAudio = 1,
     BtAudioDebugNonAudioAheadOfQueuedAudio = 2,
     BtAudioDebugControlSend = 3,
-    BtAudioDebugControlSuppressed = 4,
 };
 
 enum OutputTraceFlag : uint8_t {
     OutputTraceStatePending = 0x01,
     OutputTraceAudioProtected = 0x02,
     OutputTraceAudioRecent = 0x04,
-    OutputTraceHostAudioActive = 0x08,
     OutputTraceUsbSpeakerActive = 0x10,
     OutputTraceClassicRumbleActive = 0x20,
     OutputTraceSelectedAudio = 0x40,
@@ -392,9 +390,6 @@ static uint8_t output_trace_route_flags_locked() {
     }
     if (audio_recent()) {
         flags |= OutputTraceAudioRecent;
-    }
-    if (audio_host_encoded_active()) {
-        flags |= OutputTraceHostAudioActive;
     }
     if (usb_speaker_streaming_active()) {
         flags |= OutputTraceUsbSpeakerActive;
@@ -2104,8 +2099,7 @@ static uint8_t classify_output_report(uint8_t const *data, uint16_t len) {
 }
 
 static bool audio_output_route_protected() {
-    return audio_host_encoded_active()
-        || audio_recent()
+    return audio_recent()
         || usb_speaker_streaming_active();
 }
 
@@ -2645,17 +2639,6 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
         || reportId == 0x64;
     const bool should_request = !cached || requires_fresh_state;
     if (!should_request || hid_control_cid == 0) {
-        return ret;
-    }
-
-    if (audio_host_encoded_active() && !feature_prefetch_active && !requires_fresh_state) {
-        audio_debug_note_bt_event(
-            BtAudioDebugControlSuppressed,
-            0x43,
-            reportId,
-            cached ? 1 : 0,
-            0
-        );
         return ret;
     }
 

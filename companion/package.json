@@ -10,15 +10,14 @@
   "scripts": {
     "dev": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "build:host-audio": "dotnet publish native/HostAudioHelper/HostAudioHelper.csproj -c Release -r win-x64 --self-contained true -o native/HostAudioHelper/bin/publish/win-x64",
-    "build": "npm run build:host-audio && tsc -p tsconfig.main.json && vite build",
+    "build:audio-helper": "dotnet publish native/AudioHelper/AudioHelper.csproj -c Release -r win-x64 --self-contained true -o native/AudioHelper/bin/publish/win-x64",
+    "build": "npm run build:audio-helper && tsc -p tsconfig.main.json && vite build",
     "package:win": "npm run build && node scripts/package-win.mjs",
     "installer:win": "npm run build && electron-builder --win nsis --x64",
     "test": "npm run test:companion && npm run test:native && npm run test:firmware",
     "test:companion": "vitest run src",
-    "test:native": "dotnet test native/HostAudioHelper.Tests/HostAudioHelper.Tests.csproj --nologo",
+    "test:native": "dotnet test native/AudioHelper.Tests/AudioHelper.Tests.csproj --nologo",
     "test:firmware": "cmake -S ../tests/firmware -B ../build-firmware-tests -G Ninja && cmake --build ../build-firmware-tests && ctest --test-dir ../build-firmware-tests --output-on-failure",
-    "analyze:host-audio": "node scripts/analyze-host-audio-capture.mjs",
     "visual:smoke": "npm run build && node scripts/visual-smoke.mjs",
     "layout:check": "npm run build && node scripts/layout-check.mjs"
   },
@@ -51,8 +50,8 @@
         ]
       },
       {
-        "from": "native/HostAudioHelper/bin/publish/win-x64",
-        "to": "native/HostAudioHelper",
+        "from": "native/AudioHelper/bin/publish/win-x64",
+        "to": "native/AudioHelper",
         "filter": [
           "**/*"
         ]

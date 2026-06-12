@@ -1456,10 +1456,6 @@ button {
   width: min(420px, calc(100vw - 48px));
 }
 
-.host-encoding-confirm-modal {
-  width: min(440px, calc(100vw - 48px));
-}
-
 .device-cleanup-modal {
   width: min(520px, calc(100vw - 48px));
 }
@@ -1902,28 +1898,6 @@ button {
 .settings-menu-copy-tooltip:focus-within .settings-shortcut-tooltip {
   opacity: 1;
   transform: translate(-50%, 0);
-}
-
-.host-encoding-switch {
-  position: relative;
-}
-
-.host-encoding-switch:hover .host-encoding-tooltip,
-.host-encoding-switch:focus-within .host-encoding-tooltip {
-  opacity: 1;
-  transform: translate(0, 0);
-}
-
-.shortcut-glyph-tooltip.host-encoding-tooltip {
-  left: auto;
-  right: 0;
-  display: block;
-  width: min(520px, calc(100vw - 64px));
-  max-width: min(520px, calc(100vw - 64px));
-  text-align: left;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  transform: translate(0, -4px);
 }
 
 .shortcut-glyph-tooltip {
@@ -3072,12 +3046,7 @@ button.overview-shortcut-chip {
   padding: 0;
 }
 
-.audio-heading-controls .host-encoding-switch-warn {
-  border-radius: var(--control-radius);
-  color: var(--warning);
-}
-
-.host-encoding-state {
+.inline-state-badge {
   min-height: 22px;
   max-width: 102px;
   padding: 0 8px;
@@ -3092,13 +3061,13 @@ button.overview-shortcut-chip {
   white-space: nowrap;
 }
 
-.host-encoding-state.warn {
+.inline-state-badge.warn {
   border-color: var(--warning-border);
   color: var(--warning);
   background: var(--warning-bg);
 }
 
-.host-encoding-state.retry {
+.inline-state-badge.retry {
   border-color: var(--info-border);
   color: var(--info);
   background: var(--info-bg);
@@ -6821,7 +6790,7 @@ button.trigger-lab-chip {
   color: var(--text-disabled);
 }
 
-.shell.controller-unavailable .inline-switch .host-encoding-state {
+.shell.controller-unavailable .inline-switch .inline-state-badge {
   opacity: var(--disabled-opacity);
 }
 

@@ -50,7 +50,6 @@ DualSense-compatible USB controller.
 - Save controller setups as profiles.
 - Remap controller buttons visually.
 - See Bluetooth signal quality at a glance.
-- Use Host Encoding for smoother controller speaker and headphone-jack audio.
 
 ## Companion App Tour
 
@@ -77,8 +76,7 @@ opening a game.
 
 ### Audio
 
-Control the controller speaker, headphone-jack audio, microphone level, and Host
-Encoding.
+Control the controller speaker, headphone-jack audio, and microphone level.
 
 <p align="center">
   <img src="assets/readme/app-audio.png" width="680" alt="Audio controls in the DS5 Bridge companion app">
@@ -125,10 +123,6 @@ sleep disconnect, and the Pico LED.
 
 ## Troubleshooting
 
-- Keep Host Encoding enabled if you use the controller speaker or plug
-  headphones into the controller. Turning it off can cause stuttering or static.
-- Headphones through the controller headphone jack work best when DS5 Bridge is
-  open and Host Encoding is enabled.
 - If controller audio sounds doubled, distorted, or too loud, restart your PC,
   reopen DS5 Bridge, and run the speaker test again.
 - Battery level may be inaccurate while the controller is charging.
@@ -143,7 +137,7 @@ sleep disconnect, and the Pico LED.
 ## For Developers
 
 See [docs/development.md](docs/development.md) for local build requirements,
-firmware build commands, companion app setup, host helper notes, and packaging
+firmware build commands, companion app setup, audio helper notes, and packaging
 steps.
 
 ## Project Layout
@@ -157,7 +151,7 @@ steps.
 | `src/usb.cpp` | TinyUSB audio control callbacks and runtime settings fallback. |
 | `src/usb_descriptors.c` | USB device, configuration, HID report, audio, and string descriptors. |
 | `companion/` | Electron companion app source, protocol parser, HID service, assets, and UI. |
-| `companion/native/HostAudioHelper/` | Windows host audio helper used by the companion app for host encoded audio. |
+| `companion/native/AudioHelper/` | Windows audio helper used by the companion app for audio sessions, haptics mirroring, endpoint setup, and media integrations. |
 | `.github/workflows` | CI and release builds. |
 
 ## Development Notes

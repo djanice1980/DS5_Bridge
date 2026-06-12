@@ -240,7 +240,7 @@ Important negative space:
 - No fade-in or fade-out.
 - No Opus-valid flag.
 - No generation check.
-- No host encoded audio mode.
+- No PC-side replacement encoder mode.
 - No fallback state machine.
 - No separate speaker route primer outside the `0x36` packet itself.
 
