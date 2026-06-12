@@ -91,7 +91,7 @@
 #define HOST_MIC_INPUT_CHANNELS 1
 #define HOST_MIC_USB_CHANNELS CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX
 #define HOST_RAW_PCM_AUDIO_FUNC_ID 1
-#define HOST_MIC_QUEUE_DEPTH 2
+#define HOST_MIC_QUEUE_DEPTH 4
 #define HOST_MIC_USB_PACKET_BYTES (48 * HOST_MIC_USB_CHANNELS * sizeof(int16_t))
 #define HOST_MIC_USB_PREFILL_BYTES (64 * HOST_MIC_USB_PACKET_BYTES)
 #define HOST_MIC_USB_FILL_MAX_CHUNKS 6
@@ -2688,6 +2688,53 @@ static void refresh_mic_usb_buffered_bytes(tu_fifo_t *ep_in_fifo) {
     mic_usb_buffered_bytes = fifo_bytes + pending_bytes;
 }
 
+static bool write_mic_usb_pending_frame() {
+    if (mic_usb_pending_len <= mic_usb_pending_offset) {
+        mic_usb_pending_offset = 0;
+        mic_usb_pending_len = 0;
+        return false;
+    }
+
+    tu_fifo_t *ep_in_fifo = tud_audio_n_get_ep_in_ff(0);
+    const uint16_t remaining = static_cast<uint16_t>(mic_usb_pending_len - mic_usb_pending_offset);
+    uint16_t target_len = std::min<uint16_t>(remaining, HOST_MIC_USB_PACKET_BYTES);
+    if (ep_in_fifo != nullptr) {
+        target_len = std::min<uint16_t>(target_len, tu_fifo_remaining(ep_in_fifo));
+        target_len = static_cast<uint16_t>(target_len & ~1u);
+    }
+    if (target_len == 0) {
+        refresh_mic_usb_buffered_bytes(ep_in_fifo);
+        return true;
+    }
+
+    const uint8_t *data = reinterpret_cast<uint8_t const *>(mic_usb_pending.data) + mic_usb_pending_offset;
+    const uint16_t written = tud_audio_n_write(0, data, target_len);
+    mic_last_written_bytes = written;
+    if (written > 0) {
+        mic_usb_playout_started = true;
+        mic_usb_pending_offset = static_cast<uint16_t>(mic_usb_pending_offset + written);
+    }
+    if (mic_usb_pending_offset >= mic_usb_pending_len) {
+        mic_usb_pending_offset = 0;
+        mic_usb_pending_len = 0;
+        mic_usb_write_success++;
+    }
+    refresh_mic_usb_buffered_bytes(ep_in_fifo);
+
+    if (written != target_len) {
+        mic_usb_write_short++;
+        audio_debug_log(
+            AudioDebugMicPacket,
+            1,
+            clamp_debug_u8(written),
+            clamp_debug_u8(target_len),
+            clamp_debug_u8(mic_usb_write_short),
+            0
+        );
+    }
+    return true;
+}
+
 static void process_mic_usb_output() {
     if (!host_mic_stream_active()) {
         if (mic_usb_playout_started || mic_usb_pending_len != 0 || queue_get_level(&mic_decode_fifo) != 0) {
@@ -2700,6 +2747,14 @@ static void process_mic_usb_output() {
         drain_queue(&mic_decode_fifo);
         return;
     }
+    if (!usb_mic_streaming_active()) {
+        mic_usb_buffered_bytes = 0;
+        return;
+    }
+
+    if (write_mic_usb_pending_frame()) {
+        return;
+    }
 
     static mic_decode_element mic_pb{};
     if (!queue_try_remove(&mic_decode_fifo, &mic_pb)) {
@@ -2707,29 +2762,10 @@ static void process_mic_usb_output() {
         return;
     }
 
-    const uint16_t written = tud_audio_n_write(
-        0,
-        reinterpret_cast<uint8_t const *>(mic_pb.data),
-        mic_pb.len
-    );
-    mic_last_written_bytes = written;
-    mic_usb_playout_started = true;
+    memcpy(&mic_usb_pending, &mic_pb, sizeof(mic_usb_pending));
     mic_usb_pending_offset = 0;
-    mic_usb_pending_len = 0;
-    mic_usb_buffered_bytes = 0;
-    if (written == mic_pb.len) {
-        mic_usb_write_success++;
-        return;
-    }
-    mic_usb_write_short++;
-    audio_debug_log(
-        AudioDebugMicPacket,
-        1,
-        clamp_debug_u8(written),
-        clamp_debug_u8(mic_pb.len),
-        clamp_debug_u8(mic_usb_write_short),
-        0
-    );
+    mic_usb_pending_len = mic_pb.len;
+    (void)write_mic_usb_pending_frame();
 }
 
 void audio_mic_add_packet(uint8_t const *data, uint16_t len) {

@@ -4068,6 +4068,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private async applyMicSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, settings.duplexMicEnabled ? 1 : 0, {
+      expectSettingsRevisionChange
+    });
     await this.sendCommand(COMMAND_ID.SET_MIC_VOLUME, settings.micVolumePercent, {
       expectSettingsRevisionChange
     });
