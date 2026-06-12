@@ -27,7 +27,6 @@
 #include "tusb.h"
 #include "debug_config.h"
 #include "host_bridge.h"
-#include "host_pcm_iso.h"
 #include "persona/host_persona.h"
 
 extern uint8_t usb_hid_polling_interval_ms_value;
@@ -39,12 +38,9 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #define CONFIG_TOTAL_LEN_STANDARD 0x0148
 #define RAW_PCM_RETURN_DESC_LEN 0x0065
 #define KEYBOARD_HID_DESC_LEN 0x0019
-#define VENDOR_PCM_DESC_LEN 0x0010
 #define VENDOR_BRIDGE_DESC_LEN 0x0010
-#define CONFIG_TOTAL_LEN_COMPANION (CONFIG_TOTAL_LEN_STANDARD - RAW_PCM_RETURN_DESC_LEN + KEYBOARD_HID_DESC_LEN + VENDOR_PCM_DESC_LEN + VENDOR_BRIDGE_DESC_LEN)
-#define VENDOR_PCM_INTERFACE_NUMBER HOST_PCM_ISO_INTERFACE_NUMBER
+#define CONFIG_TOTAL_LEN_COMPANION (CONFIG_TOTAL_LEN_STANDARD - RAW_PCM_RETURN_DESC_LEN + KEYBOARD_HID_DESC_LEN + VENDOR_BRIDGE_DESC_LEN)
 #define VENDOR_BRIDGE_INTERFACE_NUMBER HOST_BRIDGE_INTERFACE_NUMBER
-#define VENDOR_PCM_EP_IN HOST_PCM_ISO_EP_IN
 #define VENDOR_BRIDGE_EP_OUT HOST_BRIDGE_EP_OUT
 #define VENDOR_MS_OS_VENDOR_REQUEST 0x20
 #define VENDOR_BRIDGE_CONTROL_GET_REPORT 0x31
@@ -52,7 +48,7 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #define MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN 0x0084
 #define MS_OS_20_BRIDGE_FUNCTION_DESC_LEN 0x00A0
 #define MS_OS_20_XUSB_FUNCTION_DESC_LEN 0x001C
-#define VENDOR_MS_OS_20_DESC_LEN (0x00B2 + MS_OS_20_BRIDGE_FUNCTION_DESC_LEN)
+#define VENDOR_MS_OS_20_DESC_LEN 0x00B2
 #define VENDOR_MS_OS_20_DESC_LEN_XUSB (VENDOR_MS_OS_20_DESC_LEN + MS_OS_20_XUSB_FUNCTION_DESC_LEN)
 #define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
 #define KEYBOARD_HID_REPORT_DESC_LEN 0x002D
@@ -134,9 +130,9 @@ static tusb_desc_device_t const desc_device =
 #else
     .idProduct = 0x0CE6,
 #endif
-    // v1.5 changed the interface layout enough that Windows upgrade installs
-    // can keep stale v1.0.x bindings unless the USB device revision changes.
-    .bcdDevice = 0x0151,
+    // v1.6.1 removes the defunct host-encoder PCM mirror interface. Bump the
+    // USB revision so Windows re-enumerates the companion bridge cleanly.
+    .bcdDevice = 0x0153,
 
     .iManufacturer = 0x01,
     .iProduct = 0x02,
@@ -173,7 +169,7 @@ uint8_t descriptor_configuration[] = {
     0x02, // bDescriptorType (CONFIGURATION)
 #ifdef ENABLE_COMPANION
     CONFIG_TOTAL_LEN_COMPANION & 0xFF, (CONFIG_TOTAL_LEN_COMPANION >> 8) & 0xFF,
-    0x07, // bNumInterfaces: 7
+    0x06, // bNumInterfaces: 6
 #else
     CONFIG_TOTAL_LEN_STANDARD & 0xFF, (CONFIG_TOTAL_LEN_STANDARD >> 8) & 0xFF, // wTotalLength: 328
     0x06, // bNumInterfaces: 6
@@ -594,23 +590,6 @@ uint8_t descriptor_configuration[] = {
     0x40, 0x00, // wMaxPacketSize: 64
     0x00, // bInterval: ignored for bulk
 
-    // --- INTERFACE DESCRIPTOR (6.0): Vendor Isochronous IN (PCM mirror) ---
-    0x09, // bLength
-    0x04, // bDescriptorType (INTERFACE)
-    VENDOR_PCM_INTERFACE_NUMBER,
-    0x00, // bAlternateSetting
-    0x01, // bNumEndpoints: Iso IN
-    0xFF, // bInterfaceClass: Vendor Specific
-    0x00, // bInterfaceSubClass
-    0x00, // bInterfaceProtocol
-    0x05, // iInterface: DS5 Bridge PCM Iso
-
-    0x07, // bLength
-    0x05, // bDescriptorType (ENDPOINT)
-    VENDOR_PCM_EP_IN,
-    0x05, // bmAttributes: Isochronous, asynchronous
-    HOST_PCM_ISO_PACKET_BYTES & 0xFF, (HOST_PCM_ISO_PACKET_BYTES >> 8) & 0xFF,
-    0x01, // bInterval: 1ms
 #endif
 };
 
@@ -802,35 +781,6 @@ uint8_t const desc_ms_os_20[] = {
     // Configuration subset header.
     U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION),
     0, 0, U16_TO_U8S_LE(VENDOR_MS_OS_20_DESC_LEN - 0x0A),
-
-    // Function subset header for the vendor PCM interface.
-    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),
-    VENDOR_PCM_INTERFACE_NUMBER, 0,
-    U16_TO_U8S_LE(MS_OS_20_BRIDGE_FUNCTION_DESC_LEN),
-
-    // Compatible ID: bind this interface to WinUSB.
-    U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
-    'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-
-    // Registry property: DeviceInterfaceGUIDs = {D5B7C5F4-8A68-4A86-9E31-1E5FA7B1D5B0}.
-    U16_TO_U8S_LE(MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN),
-    U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
-    U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A),
-    'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00,
-    'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
-    'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00,
-    'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00,
-    0x00, 0x00,
-    U16_TO_U8S_LE(0x0050),
-    '{', 0x00, 'D', 0x00, '5', 0x00, 'B', 0x00, '7', 0x00,
-    'C', 0x00, '5', 0x00, 'F', 0x00, '4', 0x00, '-', 0x00,
-    '8', 0x00, 'A', 0x00, '6', 0x00, '8', 0x00, '-', 0x00,
-    '4', 0x00, 'A', 0x00, '8', 0x00, '6', 0x00, '-', 0x00,
-    '9', 0x00, 'E', 0x00, '3', 0x00, '1', 0x00, '-', 0x00,
-    '1', 0x00, 'E', 0x00, '5', 0x00, 'F', 0x00, 'A', 0x00,
-    '7', 0x00, 'B', 0x00, '1', 0x00, 'D', 0x00, '5', 0x00,
-    'B', 0x00, '0', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00,
 
     // Function subset header for the companion/control bridge interface.
     U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),
@@ -1478,8 +1428,12 @@ static char const *string_desc_arr[] =
     "DualSense Wireless Controller", // 2: Product
 #endif
     NULL, // 3: Serials will use unique ID if possible
+#ifdef ENABLE_COMPANION
+    "DS5 Bridge Reserved", // 4: Reserved in companion builds
+#else
     "DS5 Bridge Raw PCM", // 4: Raw PCM Line endpoint
-    "DS5 Bridge PCM Iso", // 5: WinUSB PCM interface
+#endif
+    "DS5 Bridge Reserved", // 5: Reserved
     "DS5 Bridge Keyboard", // 6: Keyboard HID interface
     "DS5 Bridge Control", // 7: WinUSB companion/control interface
     XUSB360_STRING_PRODUCT, // 8: XUSB game-facing interface

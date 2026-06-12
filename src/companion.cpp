@@ -1604,7 +1604,7 @@ uint16_t build_audio_stats(uint8_t *buffer, uint16_t reqlen) {
     write_u32(fields + 40, bt_stats.bt_audio_queue_depth_max);
     write_u32(fields + 44, bt_stats.audio_0x36_enqueued_count);
     write_u32(fields + 48, bt_stats.audio_0x36_sent_count);
-    write_u32(fields + 52, bt_stats.critical_starving_audio_count);
+    write_u32(fields + 52, 0);
     return COMPANION_PAYLOAD_SIZE;
 }
 #endif
@@ -2223,10 +2223,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             if (value > 1) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
-            }
-            if (value == 0) {
-                companion_mic_enabled = false;
-                set_companion_mic_muted(true);
             }
             audio_host_set_requested(value == 1);
             refresh_mute_led_policy();

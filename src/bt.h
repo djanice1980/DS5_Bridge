@@ -45,7 +45,6 @@ struct bt_output_debug_stats {
     uint32_t bt_audio_queue_depth_max;
     uint32_t audio_0x36_enqueued_count;
     uint32_t audio_0x36_sent_count;
-    uint32_t critical_starving_audio_count;
 };
 void bt_get_output_debug_stats(bt_output_debug_stats *stats);
 void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);

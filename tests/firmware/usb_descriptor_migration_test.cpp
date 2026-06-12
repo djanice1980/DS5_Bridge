@@ -10,8 +10,8 @@
 
 namespace {
 
-constexpr uint16_t kExpectedUsbDeviceRevision = 0x0151;
-constexpr uint64_t kExpectedCompanionDescriptorHash = 0x33997ef9784d7e4eull;
+constexpr uint16_t kExpectedUsbDeviceRevision = 0x0153;
+constexpr uint64_t kExpectedCompanionDescriptorHash = 0x4f0540e7fbbbddcbull;
 
 std::string read_text(std::filesystem::path const &path) {
     std::ifstream input(path, std::ios::binary);

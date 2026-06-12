@@ -24,6 +24,8 @@ if (EXISTS ${picoVscode})
 endif ()
 # ====================================================================================
 set(PICO_BOARD pico2_w CACHE STRING "Board type")
+set(SYS_CLOCK_KHZ_VALUE 150000 CACHE STRING "RP2350 system clock in kHz")
+set(CYW43_PIO_CLOCK_DIV_VALUE 2 CACHE STRING "CYW43 PIO clock divider")
 
 # Pull in Raspberry Pi Pico SDK (must be before project)
 include(pico_sdk_import.cmake)
@@ -65,16 +67,60 @@ target_include_directories(wdl_resampler PUBLIC
 # Opus
 add_subdirectory(lib/opus)
 
-target_compile_options(wdl_resampler PRIVATE -fsigned-char)
+# Relocate libopus into Pico SDK .time_critical sections so the host fallback
+# encoder runs from SRAM instead of XIP flash.
+add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
+        COMMAND ${CMAKE_OBJCOPY}
+                --rename-section .text=.time_critical.opus_text
+                --rename-section .rodata=.time_critical.opus_rodata
+                --rename-section .rodata.str1.4=.time_critical.opus_strings
+                $<TARGET_FILE:opus>
+        COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
+        DEPENDS $<TARGET_FILE:opus>
+        COMMENT "Relocating libopus to .time_critical.* sections"
+        VERBATIM
+)
+add_custom_target(opus_ram_relocate ALL DEPENDS ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp)
+add_dependencies(ds5-bridge opus_ram_relocate)
+
+target_compile_options(wdl_resampler PRIVATE -fsigned-char -ffunction-sections)
+add_custom_command(TARGET wdl_resampler POST_BUILD
+        COMMAND ${CMAKE_OBJCOPY}
+                --rename-section .text._ZN13WDL_Resampler11ResampleOutEPfiii=.time_critical.WDL_ResampleOut
+                --rename-section .text._ZN13WDL_Resampler15ResamplePrepareEiiPPf=.time_critical.WDL_ResamplePrepare
+                $<TARGET_FILE:wdl_resampler>
+        COMMENT "Relocating WDL_Resampler hot path to .time_critical.*"
+        VERBATIM
+)
 target_compile_options(ds5-bridge PRIVATE -fsigned-char)
 target_compile_definitions(wdl_resampler PRIVATE
         WDL_RESAMPLE_TYPE=float
 )
+if(SYS_CLOCK_KHZ_VALUE GREATER 266000)
+    set(PICO_FLASH_SPI_CLKDIV 4)
+else()
+    set(PICO_FLASH_SPI_CLKDIV 2)
+endif()
+if(TARGET bs2_default)
+    target_compile_definitions(bs2_default PRIVATE
+            PICO_FLASH_SPI_CLKDIV=${PICO_FLASH_SPI_CLKDIV}
+    )
+endif()
+option(ENABLE_HOST_ENCODER_PATH "Enable the legacy host-side audio encoder transport" OFF)
+if(ENABLE_HOST_ENCODER_PATH)
+    set(KITSUNE_HOST_ENCODER_PATH_VALUE 1)
+else()
+    set(KITSUNE_HOST_ENCODER_PATH_VALUE 0)
+endif()
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
+        PICO_EMBED_XIP_SETUP=1
         PICO_FLASH_ASSUME_CORE1_SAFE=1
         WDL_RESAMPLE_TYPE=float
-        CYW43_PIO_CLOCK_DIV_INT=4
+        CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
+        SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
+        KITSUNE_ENABLE_HOST_ENCODER_PATH=${KITSUNE_HOST_ENCODER_PATH_VALUE}
 )
 option(ENABLE_DSE "Enable DSE" OFF)
 if(ENABLE_DSE)
@@ -88,9 +134,13 @@ if(ENABLE_COMPANION)
     target_sources(ds5-bridge PRIVATE
             src/companion.cpp
             src/host_bridge.cpp
-            src/host_pcm_iso.cpp
             src/usb_app_drivers.cpp
     )
+    if(ENABLE_HOST_ENCODER_PATH)
+        target_sources(ds5-bridge PRIVATE
+                src/host_pcm_iso.cpp
+        )
+    endif()
     target_compile_definitions(ds5-bridge PRIVATE
             ENABLE_COMPANION
     )

@@ -71,7 +71,8 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   sleepKeybindEnabled: false,
   speakerVolumeShortcutEnabled: false,
   pollingRateMode: '1000',
-  hostEncodedAudioEnabled: true,
+  hostPersonaMode: 'dualsense',
+  hostEncodedAudioEnabled: false,
   duplexMicEnabled: true,
   controllerPowerSavingEnabled: false
 };
@@ -127,6 +128,7 @@ const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>
   'sleepKeybindEnabled',
   'speakerVolumeShortcutEnabled',
   'pollingRateMode',
+  'hostPersonaMode',
   'hostEncodedAudioEnabled',
   'duplexMicEnabled',
   'controllerPowerSavingEnabled'
@@ -361,6 +363,7 @@ export function controllerProfileSettingsFrom(settings: CompanionSettings): Cont
     sleepKeybindEnabled: settings.sleepKeybindEnabled,
     speakerVolumeShortcutEnabled: settings.speakerVolumeShortcutEnabled,
     pollingRateMode: settings.pollingRateMode,
+    hostPersonaMode: settings.hostPersonaMode,
     hostEncodedAudioEnabled: settings.hostEncodedAudioEnabled,
     duplexMicEnabled: settings.duplexMicEnabled,
     controllerPowerSavingEnabled: settings.controllerPowerSavingEnabled
@@ -445,9 +448,8 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
       ? candidate.speakerVolumeShortcutEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumeShortcutEnabled,
     pollingRateMode: normalizePollingRateMode(candidate.pollingRateMode),
-    hostEncodedAudioEnabled: typeof candidate.hostEncodedAudioEnabled === 'boolean'
-      ? candidate.hostEncodedAudioEnabled
-      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.hostEncodedAudioEnabled,
+    hostPersonaMode: normalizeHostPersonaMode(candidate.hostPersonaMode),
+    hostEncodedAudioEnabled: false,
     duplexMicEnabled: typeof candidate.duplexMicEnabled === 'boolean'
       ? candidate.duplexMicEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.duplexMicEnabled,
@@ -816,29 +818,6 @@ function migratePersistedSettings(value: PersistedSettings): PersistedSettings {
     ...value,
     settingsSchemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION
   };
-  if (version < 2) {
-    next.duplexMicEnabled = false;
-    next.micMuted = true;
-    next.controllerProfiles = Array.isArray(value.controllerProfiles)
-      ? value.controllerProfiles.map((profile) => ({
-        ...profile,
-        settings: profile?.settings
-          ? {
-            ...profile.settings,
-            duplexMicEnabled: false,
-            micMuted: true
-          }
-          : profile?.settings
-      }))
-      : value.controllerProfiles;
-    next.customProfile = value.customProfile
-      ? {
-        ...value.customProfile,
-        duplexMicEnabled: false,
-        micMuted: true
-      }
-      : value.customProfile;
-  }
   return next;
 }
 
@@ -963,9 +942,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     notifyLowBattery: typeof value?.notifyLowBattery === 'boolean'
       ? value.notifyLowBattery
       : DEFAULT_SETTINGS.notifyLowBattery,
-    hostEncodedAudioEnabled: typeof value?.hostEncodedAudioEnabled === 'boolean'
-      ? value.hostEncodedAudioEnabled
-      : DEFAULT_SETTINGS.hostEncodedAudioEnabled,
+    hostEncodedAudioEnabled: false,
     duplexMicEnabled: typeof value?.duplexMicEnabled === 'boolean'
       ? value.duplexMicEnabled
       : DEFAULT_SETTINGS.duplexMicEnabled,

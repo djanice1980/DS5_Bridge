@@ -183,8 +183,6 @@ OutputSchedulerInputs scheduler_inputs() {
     return OutputSchedulerInputs{
         false,
         false,
-        false,
-        0,
         0,
         0,
         0,
@@ -194,7 +192,6 @@ OutputSchedulerInputs scheduler_inputs() {
 OutputSchedulerConfig scheduler_config() {
     return OutputSchedulerConfig{
         1'000,
-        3,
         2,
     };
 }
@@ -204,22 +201,14 @@ void scheduler_prioritizes_audio_when_non_audio_would_delay_streaming() {
     auto config = scheduler_config();
     inputs.audio_available = true;
     inputs.audio_depth = 1;
-    inputs.urgent_available = true;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
-
-    inputs.urgent_available = false;
     inputs.coalesced_state_available = true;
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
 }
 
-void scheduler_sends_urgent_before_coalesced_state_when_audio_is_absent() {
+void scheduler_sends_coalesced_state_when_audio_is_absent() {
     auto inputs = scheduler_inputs();
     auto config = scheduler_config();
-    inputs.urgent_available = true;
     inputs.coalesced_state_available = true;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::UrgentTransition);
-
-    inputs.urgent_available = false;
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::CoalescedState);
 }
 
@@ -229,10 +218,6 @@ void scheduler_audio_due_on_age_backlog_or_fairness_limit() {
     inputs.audio_available = true;
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
 
-    inputs.urgent_available = true;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
-
-    inputs.urgent_available = false;
     inputs.audio_age_us = config.audio_max_age_us;
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
 
@@ -243,27 +228,6 @@ void scheduler_audio_due_on_age_backlog_or_fairness_limit() {
     inputs.audio_depth = 1;
     inputs.consecutive_non_audio_sends = config.max_consecutive_non_audio_sends;
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
-}
-
-void scheduler_starvation_requires_audio_urgent_depth_and_age_thresholds() {
-    auto inputs = scheduler_inputs();
-    auto config = scheduler_config();
-    inputs.audio_available = true;
-    inputs.urgent_available = true;
-    inputs.urgent_depth = config.urgent_starving_audio_depth;
-    inputs.audio_age_us = config.audio_max_age_us;
-    EXPECT_TRUE(output_scheduler_urgent_is_starving_audio(inputs, config));
-
-    inputs.audio_age_us = config.audio_max_age_us - 1;
-    EXPECT_FALSE(output_scheduler_urgent_is_starving_audio(inputs, config));
-
-    inputs.audio_age_us = config.audio_max_age_us;
-    inputs.urgent_depth = config.urgent_starving_audio_depth - 1;
-    EXPECT_FALSE(output_scheduler_urgent_is_starving_audio(inputs, config));
-
-    inputs.urgent_depth = config.urgent_starving_audio_depth;
-    inputs.audio_available = false;
-    EXPECT_FALSE(output_scheduler_urgent_is_starving_audio(inputs, config));
 }
 
 void packet_compositor_initializes_bluetooth_report_and_wraps_sequence() {
@@ -900,9 +864,8 @@ struct TestCase {
 
 std::vector<TestCase> tests{
     {"scheduler prioritizes audio when non-audio would delay streaming", scheduler_prioritizes_audio_when_non_audio_would_delay_streaming},
-    {"scheduler sends urgent before coalesced state when audio is absent", scheduler_sends_urgent_before_coalesced_state_when_audio_is_absent},
+    {"scheduler sends coalesced state when audio is absent", scheduler_sends_coalesced_state_when_audio_is_absent},
     {"scheduler audio due on age backlog or fairness limit", scheduler_audio_due_on_age_backlog_or_fairness_limit},
-    {"scheduler starvation requires audio urgent depth and age thresholds", scheduler_starvation_requires_audio_urgent_depth_and_age_thresholds},
     {"packet compositor initializes bluetooth report and wraps sequence", packet_compositor_initializes_bluetooth_report_and_wraps_sequence},
     {"classic rumble gain clamps rounds and only touches flagged payloads", classic_rumble_gain_clamps_rounds_and_only_touches_flagged_payloads},
     {"audio haptics replace suppresses classic rumble without changing saved gain", audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain},

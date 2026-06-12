@@ -3593,10 +3593,8 @@ export function App() {
     : 'Audio haptics are mixed with native haptic output.';
   const duplexMicLabel = hostAudioStatus?.duplexActive
     ? 'Duplex Active'
-    : duplexMicEnabled && hostAudioActive
-      ? 'Mic Standby'
     : duplexMicEnabled
-      ? 'Disabled in Fallback'
+      ? 'Mic Standby'
       : 'Off';
   const speakerOutputMissing = false;
   const testHapticsUnavailable = !connected
@@ -3656,8 +3654,6 @@ export function App() {
     || gameStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy);
   const testMicUnavailable = !connected
-    || !hostAudioEnabled
-    || !hostAudioActive
     || !duplexMicEnabled
     || pendingAction !== null
     || micVolumeCommitPending
@@ -3672,8 +3668,6 @@ export function App() {
     && !gameStreamActive
     && !snapshot?.status?.testHapticsBusy;
   const micStatusReady = connected
-    && hostAudioEnabled
-    && hostAudioActive
     && duplexMicEnabled
     && !micTestLocked
     && !gameStreamActive;
@@ -3701,18 +3695,12 @@ export function App() {
       ? micTestError
       : micStatusReady
         ? 'Ready'
-        : connected && !hostAudioEnabled
-          ? 'Host Encoding Off'
-          : connected && !hostAudioActive
-            ? 'Host Encoding Starting'
-            : 'Unavailable';
+        : 'Unavailable';
   const micTestStatusTone = micTestLocked || micStatusReady
     ? 'good'
     : connected && micTestError
       ? 'bad'
-      : connected && hostAudioEnabled
-        ? 'warn'
-        : 'idle';
+      : 'idle';
   const activeAudioTestUnavailable = showMicrophoneControl ? testMicUnavailable : testSpeakerUnavailable;
   const activeAudioTestLocked = showMicrophoneControl ? micTestLocked : speakerTestLocked;
   const activeAudioTestStatusLabel = showMicrophoneControl ? micTestStatusLabel : speakerStatusLabel;
@@ -4264,7 +4252,6 @@ export function App() {
     if (
       !snapshot
       || snapshot.state !== 'connected'
-      || !hostAudioEnabled
       || value === snapshot.settings.micVolumePercent
       || micVolumeCommitPending
     ) {
@@ -4425,7 +4412,9 @@ export function App() {
         if (volumeChanged) {
           await delay(TEST_SPEAKER_VOLUME_SETTLE_MS);
         }
-        const next = await window.bridge.testSpeaker();
+        const next = snapshot?.settings.hostEncodedAudioEnabled
+          ? await window.bridge.testSpeaker()
+          : await playSpeakerToneFile().then(() => window.bridge.getStatus());
         setSnapshot(next);
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
         setSpeakerOutputAvailable(true);
@@ -6476,7 +6465,7 @@ export function App() {
                     </div>
                     <strong>{speakerVolumeValue}%</strong>
                   </label>
-                  <label className={`overview-slider-row ${(!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending) ? 'disabled' : ''}`}>
+                  <label className={`overview-slider-row ${(!connected || !duplexMicEnabled || micVolumeCommitPending) ? 'disabled' : ''}`}>
                     <span>Mic</span>
                     <div className="overview-range-control">
                       <input
@@ -6485,7 +6474,7 @@ export function App() {
                         max="100"
                         step={MIC_VOLUME_STEP}
                         value={micVolumeValue}
-                        disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
+                        disabled={!connected || !duplexMicEnabled || micVolumeCommitPending}
                         style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
                         onPointerDown={() => {
                           micVolumeEditingRef.current = true;
@@ -7189,7 +7178,7 @@ export function App() {
                       title={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
                       disabled={
                         showMicrophoneControl
-                          ? !controllerControlsAvailable || !hostAudioEnabled || pendingAction !== null
+                          ? !controllerControlsAvailable || pendingAction !== null
                           : !controllerControlsAvailable || !speakerVolumeSupported || pendingAction !== null
                       }
                       onClick={showMicrophoneControl ? toggleDuplexMicEnabled : toggleSpeakerEnabled}
@@ -7236,7 +7225,7 @@ export function App() {
                             max="100"
                             step={MIC_VOLUME_STEP}
                             value={micVolumeValue}
-                            disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
+                            disabled={!connected || !duplexMicEnabled || micVolumeCommitPending}
                             style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
                             aria-label="Microphone level"
                             onPointerDown={() => {
@@ -7300,7 +7289,7 @@ export function App() {
                             key={label}
                             type="button"
                             className={micVolumeValue === value ? 'active' : ''}
-                            disabled={!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending}
+                            disabled={!connected || !duplexMicEnabled || micVolumeCommitPending}
                             onClick={() => setMicPreset(Number(value))}
                           >
                             {label}
