@@ -23,6 +23,7 @@
 #include "opus.h"
 #include "utils.h"
 #include "pico/critical_section.h"
+#include "pico/flash.h"
 #include "pico/multicore.h"
 #include "pico/platform.h"
 #include "pico/time.h"
@@ -2217,6 +2218,8 @@ static bool __not_in_flash_func(core1_process_speaker)() {
 }
 
 static void __not_in_flash_func(core1_entry)() {
+    flash_safe_execute_core_init();
+
     int error = 0;
     encoder = opus_encoder_create(48000,2,OPUS_APPLICATION_AUDIO,&error);
     if (error != OPUS_OK) {

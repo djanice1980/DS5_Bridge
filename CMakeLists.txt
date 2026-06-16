@@ -40,6 +40,7 @@ pico_sdk_init()
 add_executable(ds5-bridge
         src/usb_descriptors.c
         src/main.cpp
+        src/button_functions.cpp
         src/dualsense_input_decoder.cpp
         src/persona/host_persona.cpp
         src/persona/dualsense_persona.cpp
@@ -110,7 +111,9 @@ endif()
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         PICO_EMBED_XIP_SETUP=1
-        PICO_FLASH_ASSUME_CORE1_SAFE=1
+        # BOOTSEL polling floats QSPI CSn briefly; flash_safe_execute() must
+        # park core 1 while that happens.
+        PICO_FLASH_ASSUME_CORE1_SAFE=0
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdio>
 #include "bsp/board_api.h"
+#include "button_functions.h"
 #include "bt.h"
 #include "controller_packet_compositor.h"
 #include "controller_output_policy.h"
@@ -573,6 +574,7 @@ int main() {
         interrupt_loop();
         usb_pm_poll();
         audio_loop();
+        button_check();
         bt_lightbar_loop();
         bt_signal_strength_loop();
         bt_inquiry_loop();
