@@ -2423,6 +2423,15 @@ export class BridgeService extends EventEmitter {
       case 'sleep-controller':
         await this.sleepController();
         return;
+      case 'persona-dualsense':
+        await this.setHostPersonaMode('dualsense');
+        return;
+      case 'persona-ds4':
+        await this.setHostPersonaMode('ds4');
+        return;
+      case 'persona-xbox':
+        await this.setHostPersonaMode('xbox');
+        return;
       case 'speaker-down':
         await this.stepSpeakerVolume(-step);
         return;

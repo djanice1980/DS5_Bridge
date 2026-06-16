@@ -9,17 +9,17 @@ const companionDir = path.resolve(scriptDir, '..');
 const repoDir = path.resolve(companionDir, '..');
 const electronDist = path.join(companionDir, 'node_modules', 'electron', 'dist');
 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-const outDir = path.join(companionDir, 'artifacts', `Kitsune Input-win32-x64-${stamp}`);
+const outDir = path.join(companionDir, 'artifacts', `DS5 Bridge-win32-x64-${stamp}`);
 const appDir = path.join(outDir, 'resources', 'app');
 const assetDir = path.join('assets', 'controllers');
-const appIcon = path.join(repoDir, assetDir, 'kitsune-input_app-icon-tile.ico');
+const appIcon = path.join(repoDir, assetDir, 'ds5-bridge_app-icon-tile.ico');
 const audioHelperDir = path.join(companionDir, 'native', 'AudioHelper', 'bin', 'publish', 'win-x64');
-const windowsCleanupScript = path.join(repoDir, 'tools', 'windows', 'clean-kitsune-input-devices.ps1');
+const windowsCleanupScript = path.join(repoDir, 'tools', 'windows', 'clean-ds5bridge-devices.ps1');
 const appPackage = JSON.parse(fs.readFileSync(path.join(companionDir, 'package.json'), 'utf8'));
 const appAssets = [
-  'kitsune-input_app-icon-tile.ico',
-  'kitsune-input_app-icon-tile.png',
-  'kitsune-input_mark.png'
+  'ds5-bridge_app-icon-tile.ico',
+  'ds5-bridge_app-icon-tile.png',
+  'ds5-bridge_mark.png'
 ];
 
 const runtimePackages = [
@@ -42,14 +42,15 @@ function sourceNotice() {
   const commit = gitValue('rev-parse HEAD');
   const dirty = gitValue('status --porcelain', '') ? 'yes' : 'no';
   return [
-    'Kitsune Input source code:',
-    'https://github.com/SundayMoments/Kitsune-Input',
+    'DS5 Bridge source code:',
+    'https://github.com/SundayMoments/DS5_Bridge',
     '',
     `This binary release corresponds to commit: ${commit}`,
     `Working tree dirty at build time: ${dirty}`,
     '',
-    'Commercial product. No open-source project license is granted.',
-    'See NOTICE for third-party attributions.'
+    'License:',
+    'GNU Affero General Public License v3.0 only',
+    'See LICENSE and NOTICE.'
   ].join('\n') + '\n';
 }
 
@@ -103,7 +104,7 @@ copyRecursive(path.join(repoDir, 'NOTICE'), path.join(outDir, 'NOTICE'));
 fs.writeFileSync(path.join(outDir, 'SOURCE.txt'), sourceNotice(), 'utf8');
 
 const electronExe = path.join(outDir, 'electron.exe');
-const bridgeExe = path.join(outDir, 'Kitsune Input.exe');
+const bridgeExe = path.join(outDir, 'DS5 Bridge.exe');
 if (fs.existsSync(electronExe)) {
   fs.renameSync(electronExe, bridgeExe);
 }
@@ -113,10 +114,10 @@ if (fs.existsSync(bridgeExe)) {
     'file-version': appPackage.version,
     'product-version': appPackage.version,
     'version-string': {
-      FileDescription: 'Kitsune Input Companion',
-      InternalName: 'Kitsune Input',
-      OriginalFilename: 'Kitsune Input.exe',
-      ProductName: 'Kitsune Input'
+      FileDescription: 'DS5 Bridge Companion',
+      InternalName: 'DS5 Bridge',
+      OriginalFilename: 'DS5 Bridge.exe',
+      ProductName: 'DS5 Bridge'
     }
   });
 }
@@ -127,7 +128,7 @@ for (const asset of appAssets) {
   copyRecursive(path.join(repoDir, assetDir, asset), path.join(appDir, assetDir, asset));
 }
 copyRecursive(audioHelperDir, path.join(outDir, 'resources', 'native', 'AudioHelper'));
-copyRecursive(windowsCleanupScript, path.join(outDir, 'resources', 'tools', 'windows', 'clean-kitsune-input-devices.ps1'));
+copyRecursive(windowsCleanupScript, path.join(outDir, 'resources', 'tools', 'windows', 'clean-ds5bridge-devices.ps1'));
 for (const packageName of runtimePackages) {
   copyPackage(packageName);
 }

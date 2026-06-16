@@ -135,4 +135,19 @@ describe('renderer behavior guards', () => {
     expect(startupSubscriptionSource).toContain('if (!cancelled && !receivedLiveSnapshot)');
     expect(startupSubscriptionSource).toContain('receivedLiveSnapshot = true;');
   });
+
+  it('does not snap snapshot values back to coarse slider notches', () => {
+    const start = appSource.indexOf('function displayHapticsValue');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('function sliderTickClass', start);
+    expect(end).toBeGreaterThan(start);
+    const displaySource = appSource.slice(start, end);
+
+    expect(displaySource).not.toContain('snapHapticsValue');
+    expect(displaySource).not.toContain('snapLightbarBrightness');
+    expect(displaySource).not.toContain('snapTriggerEffectIntensity');
+    expect(displaySource).toContain('snapshot.settings.hapticsGainPercent');
+    expect(displaySource).toContain('snapshot.settings.lightbarBrightnessPercent');
+    expect(displaySource).toContain('snapshot.settings.triggerEffectIntensityPercent');
+  });
 });

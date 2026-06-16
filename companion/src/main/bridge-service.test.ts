@@ -426,6 +426,10 @@ async function pollShortcut(service: BridgeService): Promise<void> {
   await (service as unknown as { pollShortcutEvent(): Promise<void> }).pollShortcutEvent();
 }
 
+async function flushShortcutActions(service: BridgeService): Promise<void> {
+  await (service as unknown as { shortcutActionQueue: Promise<void> }).shortcutActionQueue;
+}
+
 async function flushReapply(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -1311,6 +1315,75 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().settings.speakerVolumePercent).toBe(55);
     const volumeCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_SPEAKER_VOLUME).at(-1);
     expect(volumeCommand?.[9]).toBe(55);
+  });
+
+  it('applies arbitrary whole-number chord steps without coarse slider notches', async () => {
+    const service = serviceFixture({ hapticsGainPercent: 30 });
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      settingsRevision: 4
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.setChordConfiguration([{
+      id: 'haptics-up',
+      name: 'Haptics Up',
+      type: 'controller-setting',
+      action: 'haptics-up',
+      stepPercent: 3
+    }], [{
+      id: 'ps-triangle',
+      kind: 'chord',
+      starter: 'ps',
+      button: 'triangle',
+      functionId: 'haptics-up'
+    }]);
+
+    device.queueShortcutEvent(CHORD_FUNCTION_EVENT_BASE);
+    await pollShortcut(service);
+    await flushShortcutActions(service);
+
+    expect(service.getSnapshot().settings.hapticsGainPercent).toBe(33);
+    const hapticsCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_HAPTICS_GAIN).at(-1);
+    expect(hapticsCommand?.[9]).toBe(33);
+  });
+
+  it('applies host persona chord functions through the normal persona command path', async () => {
+    const service = serviceFixture({ hostPersonaMode: 'dualsense' });
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.setChordConfiguration([{
+      id: 'persona-xbox',
+      name: 'Xbox Persona',
+      type: 'controller-setting',
+      action: 'persona-xbox',
+      stepPercent: 10
+    }], [{
+      id: 'ps-options',
+      kind: 'chord',
+      starter: 'ps',
+      button: 'options',
+      functionId: 'persona-xbox'
+    }]);
+
+    device.queueShortcutEvent(CHORD_FUNCTION_EVENT_BASE);
+    await pollShortcut(service);
+    await flushShortcutActions(service);
+
+    expect(service.getSnapshot().settings.hostPersonaMode).toBe('xbox');
+    const personaCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_HOST_PERSONA).at(-1);
+    expect(personaCommand?.[9]).toBe(1);
   });
 
   it('applies controller mic mute events without waiting for a status poll', async () => {

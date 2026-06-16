@@ -527,6 +527,9 @@ const CHORD_CONTROLLER_SETTING_ACTION_OPTIONS: Array<[string, ChordControllerSet
   ['Lightbar Override', 'toggle-lightbar-override'],
   ['Mic Mute', 'toggle-mic-mute'],
   ['Sleep Controller', 'sleep-controller'],
+  ['DualSense', 'persona-dualsense'],
+  ['DualShock 4', 'persona-ds4'],
+  ['Xbox', 'persona-xbox'],
   ...CHORD_NOTCH_TARGETS.map((target): [string, ChordNotchTargetId] => [target.label, target.id])
 ];
 const CHORD_KEYBOARD_KEY_OPTIONS: Array<[string, string]> = [
@@ -1019,25 +1022,19 @@ function feedbackSliderTicks(max: number): number[] {
 }
 
 function displayHapticsValue(snapshot: BridgeSnapshot): number {
-  return snapHapticsValue(
-    capControllerPowerSavingValue(snapshot.settings.hapticsGainPercent, snapshot),
-    feedbackSliderMaxFromSnapshot(snapshot)
-  );
+  return capControllerPowerSavingValue(snapshot.settings.hapticsGainPercent, snapshot);
 }
 
 function displayClassicRumbleValue(snapshot: BridgeSnapshot): number {
-  return snapHapticsValue(
-    capControllerPowerSavingValue(snapshot.settings.classicRumbleGainPercent, snapshot),
-    feedbackSliderMaxFromSnapshot(snapshot)
-  );
+  return capControllerPowerSavingValue(snapshot.settings.classicRumbleGainPercent, snapshot);
 }
 
 function displayLightbarBrightnessValue(snapshot: BridgeSnapshot): number {
-  return snapLightbarBrightness(capControllerPowerSavingValue(snapshot.settings.lightbarBrightnessPercent, snapshot));
+  return capControllerPowerSavingValue(snapshot.settings.lightbarBrightnessPercent, snapshot);
 }
 
 function displayTriggerEffectIntensityValue(snapshot: BridgeSnapshot): number {
-  return snapTriggerEffectIntensity(capControllerPowerSavingValue(snapshot.settings.triggerEffectIntensityPercent, snapshot));
+  return capControllerPowerSavingValue(snapshot.settings.triggerEffectIntensityPercent, snapshot);
 }
 
 function sliderTickClass(value: number, max: number): string | undefined {
@@ -2487,7 +2484,7 @@ function chordControllerSettingSummary(action: ChordControllerSettingAction, ste
   if (notchTarget) {
     const actionText = `${notchTarget.direction === 'up' ? 'Increase' : 'Decrease'} ${notchTarget.target.label}`;
     return typeof stepPercent === 'number'
-      ? `${actionText} â€” ${stepPercent}% step`
+      ? `${actionText} — ${stepPercent}% step`
       : actionText;
   }
   switch (action) {
@@ -2499,6 +2496,12 @@ function chordControllerSettingSummary(action: ChordControllerSettingAction, ste
       return 'Toggle Mic Mute';
     case 'sleep-controller':
       return 'Sleep Controller';
+    case 'persona-dualsense':
+      return 'Set Persona: DualSense';
+    case 'persona-ds4':
+      return 'Set Persona: DualShock 4';
+    case 'persona-xbox':
+      return 'Set Persona: Xbox';
   }
   return 'Controller Setting';
 }
@@ -5022,7 +5025,7 @@ export function App() {
             <strong>
               {detailValue}
               {func.type === 'controller-setting' && notchTarget ? (
-                <em> â€” {func.stepPercent}% step</em>
+                <em> — {func.stepPercent}% step</em>
               ) : null}
             </strong>
           </div>
@@ -6086,7 +6089,7 @@ export function App() {
 
               <button className="overview-card" type="button" onClick={() => selectControlTab('audio')}>
                 <div className="overview-card-title">
-                  <span className="feature-icon overview-icon"><IconDeviceAudioTape size={20} /></span>
+                  <span className="feature-icon overview-icon"><IconBinary size={26} /></span>
                   <h3>Audio Path</h3>
                 </div>
                 <div className="overview-fields">
