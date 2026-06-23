@@ -141,12 +141,6 @@ enum OutputClassificationReason : uint8_t {
     OutputReasonStateNoop = 6,
 };
 
-enum ControllerType : uint8_t {
-    ControllerTypeUnknown = 0,
-    ControllerTypeDualSense = 1,
-    ControllerTypeDualSenseEdge = 2,
-};
-
 enum BtAudioDebugKind : uint8_t {
     BtAudioDebugLateAudio = 1,
     BtAudioDebugNonAudioAheadOfQueuedAudio = 2,

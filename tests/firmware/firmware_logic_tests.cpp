@@ -21,6 +21,17 @@
 
 using namespace ds5::output;
 
+extern "C" bool host_persona_descriptors_verified(HostPersonaMode mode) {
+    switch (mode) {
+        case HostPersonaModeDualSense:
+        case HostPersonaModeXusb360:
+        case HostPersonaModeDs4:
+            return true;
+        default:
+            return false;
+    }
+}
+
 namespace {
 
 struct TestFailure : std::exception {

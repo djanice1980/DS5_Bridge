@@ -63,9 +63,15 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #else
 #define DUALSENSE_HID_REPORT_DESC_LEN 0x0121
 #endif
+#define DUALSENSE_HID_REPORT_DESC_FNV1A32 0x98EE8A4Au
 #define XUSB_MS_OS_VENDOR_REQUEST 0x21
 #define XUSB360_CONFIG_EXTRA_LEN 0x0007
 #define XUSB360_INTERFACE_DESC_LEN 0x0028
+#ifdef ENABLE_COMPANION
+#define XUSB360_INTERFACE_DESC_FNV1A32 0x824C084Au
+#else
+#define XUSB360_INTERFACE_DESC_FNV1A32 0xAAC10AD0u
+#endif
 #define XUSB360_EP_IN 0x84
 #define XUSB360_EP_OUT 0x03
 #define XUSB360_EP_SIZE 0x20
@@ -78,8 +84,9 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #define XUSB360_STRING_PRODUCT "Xbox 360 Controller for Windows"
 #define DS4_VENDOR_ID 0x054C
 #define DS4_PRODUCT_ID 0x09CC
-#define DS4_USB_BCD_DEVICE 0x0100
-#define DS4_HID_REPORT_DESC_LEN 0x01FD
+#define DS4_USB_BCD_DEVICE 0x0102
+#define DS4_HID_REPORT_DESC_LEN 0x01FB
+#define DS4_HID_REPORT_DESC_FNV1A32 0x9316A41Du
 #define DS4_HID_EP_INTERVAL 0x04
 #define DS4_STRING_MANUFACTURER "Sony Interactive Entertainment"
 #define DS4_STRING_PRODUCT "Wireless Controller"
@@ -608,6 +615,42 @@ TU_VERIFY_STATIC(sizeof(descriptor_configuration) == CONFIG_TOTAL_LEN_STANDARD, 
 static CFG_TUD_MEM_ALIGN uint8_t descriptor_configuration_xusb[sizeof(descriptor_configuration) + XUSB360_CONFIG_EXTRA_LEN];
 static uint16_t descriptor_configuration_xusb_len = 0;
 
+static uint8_t const desc_xusb360_gamepad_interface[] = {
+    // --- INTERFACE DESCRIPTOR: XUSB 360-compatible gamepad ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    GAMEPAD_INTERFACE_NUMBER,
+    0x00, // bAlternateSetting
+    0x02, // bNumEndpoints: IN + OUT
+    0xFF, // bInterfaceClass: Vendor Specific
+    0x5D, // bInterfaceSubClass: XUSB
+    0x01, // bInterfaceProtocol
+    STRID_XUSB_GAMEPAD, // iInterface: Xbox 360 Controller for Windows
+
+    // XUSB class-specific interface descriptor.
+    0x11, 0x21, 0x00, 0x01,
+    0x01, 0x25, XUSB360_EP_IN, 0x14,
+    0x00, 0x00, 0x00, 0x00,
+    0x13, XUSB360_EP_OUT, 0x08, 0x00, 0x00,
+
+    // Interrupt IN.
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    XUSB360_EP_IN,
+    0x03, // Interrupt
+    XUSB360_EP_SIZE, 0x00,
+    XUSB360_EP_IN_INTERVAL,
+
+    // Interrupt OUT.
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    XUSB360_EP_OUT,
+    0x03, // Interrupt
+    XUSB360_EP_SIZE, 0x00,
+    XUSB360_EP_OUT_INTERVAL,
+};
+TU_VERIFY_STATIC(sizeof(desc_xusb360_gamepad_interface) == XUSB360_INTERFACE_DESC_LEN, "Incorrect XUSB descriptor size");
+
 static uint16_t active_gamepad_hid_report_descriptor_len(void) {
     return host_persona_active() == HostPersonaModeDs4
         ? DS4_HID_REPORT_DESC_LEN
@@ -691,47 +734,11 @@ static uint16_t build_xusb_configuration_descriptor(void) {
         return 0;
     }
 
-    uint8_t const xusb_gamepad_descriptor[] = {
-        // --- INTERFACE DESCRIPTOR: XUSB 360-compatible gamepad ---
-        0x09, // bLength
-        0x04, // bDescriptorType (INTERFACE)
-        GAMEPAD_INTERFACE_NUMBER,
-        0x00, // bAlternateSetting
-        0x02, // bNumEndpoints: IN + OUT
-        0xFF, // bInterfaceClass: Vendor Specific
-        0x5D, // bInterfaceSubClass: XUSB
-        0x01, // bInterfaceProtocol
-        STRID_XUSB_GAMEPAD, // iInterface: Xbox 360 Controller for Windows
-
-        // XUSB class-specific interface descriptor.
-        0x11, 0x21, 0x00, 0x01,
-        0x01, 0x25, XUSB360_EP_IN, 0x14,
-        0x00, 0x00, 0x00, 0x00,
-        0x13, XUSB360_EP_OUT, 0x08, 0x00, 0x00,
-
-        // Interrupt IN.
-        0x07, // bLength
-        0x05, // bDescriptorType (ENDPOINT)
-        XUSB360_EP_IN,
-        0x03, // Interrupt
-        XUSB360_EP_SIZE, 0x00,
-        XUSB360_EP_IN_INTERVAL,
-
-        // Interrupt OUT.
-        0x07, // bLength
-        0x05, // bDescriptorType (ENDPOINT)
-        XUSB360_EP_OUT,
-        0x03, // Interrupt
-        XUSB360_EP_SIZE, 0x00,
-        XUSB360_EP_OUT_INTERVAL,
-    };
-    TU_VERIFY_STATIC(sizeof(xusb_gamepad_descriptor) == XUSB360_INTERFACE_DESC_LEN, "Incorrect XUSB descriptor size");
-
     uint16_t dest = 0;
     memcpy(descriptor_configuration_xusb, descriptor_configuration, gamepad_start);
     dest = gamepad_start;
-    memcpy(descriptor_configuration_xusb + dest, xusb_gamepad_descriptor, sizeof(xusb_gamepad_descriptor));
-    dest = (uint16_t)(dest + sizeof(xusb_gamepad_descriptor));
+    memcpy(descriptor_configuration_xusb + dest, desc_xusb360_gamepad_interface, sizeof(desc_xusb360_gamepad_interface));
+    dest = (uint16_t)(dest + sizeof(desc_xusb360_gamepad_interface));
     const uint16_t suffix_len = (uint16_t)(sizeof(descriptor_configuration) - gamepad_end);
     memcpy(descriptor_configuration_xusb + dest, descriptor_configuration + gamepad_end, suffix_len);
     dest = (uint16_t)(dest + suffix_len);
@@ -1352,8 +1359,8 @@ uint8_t const desc_hid_report_dse[] = {
 #endif
 
 uint8_t const desc_hid_report_ds4[] = {
-    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01, 0x05, 0x01, 0x09, 0x30,
-    0x09, 0x31, 0x09, 0x32, 0x09, 0x35, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75,
+    0x05, 0x01, 0x09, 0x05, 0xa1, 0x01, 0x85, 0x01, 0x09, 0x30, 0x09, 0x31,
+    0x09, 0x32, 0x09, 0x35, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75,
     0x08, 0x95, 0x04, 0x81, 0x02, 0x09, 0x39, 0x15, 0x00, 0x25, 0x07, 0x35,
     0x00, 0x46, 0x3b, 0x01, 0x65, 0x14, 0x75, 0x04, 0x95, 0x01, 0x81, 0x42,
     0x65, 0x00, 0x05, 0x09, 0x19, 0x01, 0x29, 0x0e, 0x15, 0x00, 0x25, 0x01,
@@ -1397,6 +1404,53 @@ uint8_t const desc_hid_report_ds4[] = {
     0x95, 0x3f, 0xb1, 0x02, 0xc0
 };
 TU_VERIFY_STATIC(sizeof(desc_hid_report_ds4) == DS4_HID_REPORT_DESC_LEN, "Incorrect DS4 HID report descriptor size");
+
+static uint32_t descriptor_fnv1a32(uint8_t const *descriptor, uint16_t len) {
+    uint32_t hash = 0x811C9DC5u;
+    for (uint16_t i = 0; i < len; ++i) {
+        hash ^= descriptor[i];
+        hash *= 0x01000193u;
+    }
+    return hash;
+}
+
+static bool descriptor_matches_manifest(
+    uint8_t const *descriptor,
+    uint16_t actual_len,
+    uint16_t expected_len,
+    uint32_t expected_hash
+) {
+    return actual_len == expected_len
+        && descriptor_fnv1a32(descriptor, actual_len) == expected_hash;
+}
+
+bool host_persona_descriptors_verified(HostPersonaMode mode) {
+    switch (mode) {
+        case HostPersonaModeDualSense:
+            return descriptor_matches_manifest(
+                desc_hid_report_ds,
+                sizeof(desc_hid_report_ds),
+                DUALSENSE_HID_REPORT_DESC_LEN,
+                DUALSENSE_HID_REPORT_DESC_FNV1A32
+            );
+        case HostPersonaModeXusb360:
+            return descriptor_matches_manifest(
+                desc_xusb360_gamepad_interface,
+                sizeof(desc_xusb360_gamepad_interface),
+                XUSB360_INTERFACE_DESC_LEN,
+                XUSB360_INTERFACE_DESC_FNV1A32
+            );
+        case HostPersonaModeDs4:
+            return descriptor_matches_manifest(
+                desc_hid_report_ds4,
+                sizeof(desc_hid_report_ds4),
+                DS4_HID_REPORT_DESC_LEN,
+                DS4_HID_REPORT_DESC_FNV1A32
+            );
+        default:
+            return false;
+    }
+}
 
 // Invoked when received GET HID REPORT DESCRIPTOR
 // Application return pointer to descriptor

@@ -27,7 +27,7 @@ extern "C" bool host_persona_is_supported(HostPersonaMode mode) {
         case HostPersonaModeDualSense:
         case HostPersonaModeXusb360:
         case HostPersonaModeDs4:
-            return true;
+            return host_persona_descriptors_verified(mode);
         default:
             return false;
     }
@@ -50,6 +50,10 @@ bool host_persona_encode_input(
     BridgeControllerState const &state,
     HostPersonaInputReport &report
 ) {
+    if (!host_persona_is_supported(mode)) {
+        return false;
+    }
+
     switch (mode) {
         case HostPersonaModeDualSense:
             return dualsense_persona_encode_input(state, report);
@@ -70,6 +74,11 @@ bool host_persona_decode_output_to_ds5_payload(
     uint16_t payload_capacity,
     uint16_t &payload_len
 ) {
+    if (!host_persona_is_supported(mode)) {
+        payload_len = 0;
+        return false;
+    }
+
     switch (mode) {
         case HostPersonaModeXusb360:
             return xusb360_persona_decode_output_to_ds5_payload(

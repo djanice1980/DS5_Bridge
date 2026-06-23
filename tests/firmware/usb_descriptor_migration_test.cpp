@@ -121,8 +121,8 @@ uint64_t companion_descriptor_hash(std::string const &source) {
 void assert_xusb_descriptor_uses_endpoint_constants(std::string const &source) {
     const std::string block = extract_between(
         source,
-        "uint8_t const xusb_gamepad_descriptor[] = {",
-        "\n    };\n    TU_VERIFY_STATIC(sizeof(xusb_gamepad_descriptor)"
+        "static uint8_t const desc_xusb360_gamepad_interface[] = {",
+        "\n};\nTU_VERIFY_STATIC(sizeof(desc_xusb360_gamepad_interface)"
     );
 
     if (block.find("0x11, 0x21, 0x00, 0x01") == std::string::npos) {
@@ -135,6 +135,86 @@ void assert_xusb_descriptor_uses_endpoint_constants(std::string const &source) {
 
     if (block.find("0x13, XUSB360_EP_OUT, 0x08, 0x00, 0x00") == std::string::npos) {
         throw std::runtime_error("XUSB class descriptor must advertise XUSB360_EP_OUT");
+    }
+}
+
+void assert_persona_support_requires_verified_descriptors(
+    std::string const &usb_descriptors,
+    std::filesystem::path const &source_root
+) {
+    const auto host_persona_h = read_text(source_root / "src" / "persona" / "host_persona.h");
+    const auto host_persona_cpp = read_text(source_root / "src" / "persona" / "host_persona.cpp");
+
+    if (host_persona_h.find("bool host_persona_descriptors_verified(HostPersonaMode mode);") == std::string::npos) {
+        throw std::runtime_error("Host persona support must expose the descriptor verification gate");
+    }
+
+    const std::string support_block = extract_between(
+        host_persona_cpp,
+        "extern \"C\" bool host_persona_is_supported(HostPersonaMode mode) {",
+        "\n}\n\nextern \"C\" bool host_persona_is_native_hid"
+    );
+    if (support_block.find("return host_persona_descriptors_verified(mode);") == std::string::npos) {
+        throw std::runtime_error("Host personas must not be supported unless their descriptors match the manifest");
+    }
+
+    const std::string encode_block = extract_between(
+        host_persona_cpp,
+        "bool host_persona_encode_input(",
+        "\n}\n\nbool host_persona_decode_output_to_ds5_payload"
+    );
+    if (encode_block.find("if (!host_persona_is_supported(mode))") == std::string::npos) {
+        throw std::runtime_error("Host persona input reports must be blocked for unverified descriptors");
+    }
+
+    const std::string decode_block = extract_between(
+        host_persona_cpp,
+        "bool host_persona_decode_output_to_ds5_payload(",
+        "\n}\n"
+    );
+    if (decode_block.find("if (!host_persona_is_supported(mode))") == std::string::npos) {
+        throw std::runtime_error("Host persona output decoding must be blocked for unverified descriptors");
+    }
+
+    if (
+        usb_descriptors.find("#define DUALSENSE_HID_REPORT_DESC_FNV1A32 0x98EE8A4Au") == std::string::npos
+        || usb_descriptors.find("#define DS4_HID_REPORT_DESC_FNV1A32 0x9316A41Du") == std::string::npos
+        || usb_descriptors.find("#define XUSB360_INTERFACE_DESC_FNV1A32 0x824C084Au") == std::string::npos
+        || usb_descriptors.find("#define XUSB360_INTERFACE_DESC_FNV1A32 0xAAC10AD0u") == std::string::npos
+        || usb_descriptors.find("bool host_persona_descriptors_verified(HostPersonaMode mode)") == std::string::npos
+        || usb_descriptors.find("descriptor_matches_manifest(") == std::string::npos
+    ) {
+        throw std::runtime_error("USB persona descriptors must be pinned by length and fingerprint manifest");
+    }
+
+    if (
+        usb_descriptors.find("case HostPersonaModeXusb360:") == std::string::npos
+        || usb_descriptors.find("desc_xusb360_gamepad_interface") == std::string::npos
+        || usb_descriptors.find("XUSB360_INTERFACE_DESC_FNV1A32") == std::string::npos
+    ) {
+        throw std::runtime_error("XUSB persona must be gated on its intended descriptor fingerprint");
+    }
+}
+
+void assert_dse_identity_reports_do_not_use_edge_passthrough(std::filesystem::path const &source_root) {
+    const auto bt_h = read_text(source_root / "src" / "bt.h");
+    const auto main_cpp = read_text(source_root / "src" / "main.cpp");
+    const std::string get_report_callback = extract_between(
+        main_cpp,
+        "uint16_t tud_hid_get_report_cb",
+        "\n}\n\n// Invoked when received SET_REPORT"
+    );
+
+    if (
+        bt_h.find("ControllerTypeDualSenseEdge = 2") == std::string::npos
+        || main_cpp.find("dualsense_feature_report_may_use_bt_passthrough") == std::string::npos
+        || main_cpp.find("report_id != 0x20 && report_id != 0x22") == std::string::npos
+        || main_cpp.find("bt_controller_type() != ControllerTypeDualSenseEdge") == std::string::npos
+        || get_report_callback.find("report_type != HID_REPORT_TYPE_FEATURE") == std::string::npos
+        || get_report_callback.find("dualsense_feature_report_may_use_bt_passthrough(report_id)") == std::string::npos
+        || get_report_callback.find("get_feature_data(report_id, reqlen)") == std::string::npos
+    ) {
+        throw std::runtime_error("DualSense identity feature reports must not leak DualSense Edge identity through BT passthrough");
     }
 }
 
@@ -199,6 +279,14 @@ void assert_ds4_persona_identity_is_ds4_facing(std::string const &source) {
         throw std::runtime_error("DS4 persona must expose the DS4 v2 USB product ID");
     }
 
+    if (source.find("#define DS4_USB_BCD_DEVICE 0x0102") == std::string::npos) {
+        throw std::runtime_error("DS4 persona must expose the DS4 v2 USB device revision");
+    }
+
+    if (source.find("#define DS4_HID_REPORT_DESC_LEN 0x01FB") == std::string::npos) {
+        throw std::runtime_error("DS4 v2 HID report descriptor length must match the public 507-byte descriptor");
+    }
+
     if (source.find("#define DS4_STRING_PRODUCT \"Wireless Controller\"") == std::string::npos) {
         throw std::runtime_error("DS4 persona must expose the DS4-facing Wireless Controller product string");
     }
@@ -209,6 +297,15 @@ void assert_ds4_persona_identity_is_ds4_facing(std::string const &source) {
 
     if (source.find("TU_VERIFY_STATIC(sizeof(desc_hid_report_ds4) == DS4_HID_REPORT_DESC_LEN") == std::string::npos) {
         throw std::runtime_error("DS4 HID report descriptor length must be guarded");
+    }
+
+    const std::string ds4_report_descriptor = extract_between(
+        source,
+        "uint8_t const desc_hid_report_ds4[] = {",
+        "\n};\nTU_VERIFY_STATIC(sizeof(desc_hid_report_ds4)"
+    );
+    if (ds4_report_descriptor.find("0x85, 0x01, 0x05, 0x01") != std::string::npos) {
+        throw std::runtime_error("DS4 v2 HID report descriptor must not include non-stock Usage Page after Report ID 1");
     }
 
     const std::string device_callback = extract_between(
@@ -506,6 +603,8 @@ int main() {
         const uint16_t bcd_device = parse_bcd_device(source);
         const uint64_t descriptor_hash = companion_descriptor_hash(source);
         assert_xusb_descriptor_uses_endpoint_constants(source);
+        assert_persona_support_requires_verified_descriptors(source, source_root);
+        assert_dse_identity_reports_do_not_use_edge_passthrough(source_root);
         assert_xusb_persona_strings_are_xbox_facing(source);
         assert_ds4_persona_identity_is_ds4_facing(source);
         assert_persona_switch_quiets_input_only(source_root);

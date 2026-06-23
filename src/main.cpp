@@ -257,6 +257,16 @@ static uint16_t ds4_copy_input_report_payload(uint8_t report_id, uint8_t *buffer
     return copy_len;
 }
 
+static bool dualsense_feature_report_may_use_bt_passthrough(uint8_t report_id) {
+    if (report_id != 0x20 && report_id != 0x22) {
+        return true;
+    }
+
+    // We never enumerate as DualSense Edge. Do not leak DSE firmware or
+    // hardware identity through stock DualSense identity feature reports.
+    return bt_controller_type() != ControllerTypeDualSenseEdge;
+}
+
 void host_input_prepare_persona_switch() {
     const HostPersonaMode current_persona = host_persona_active();
     const BridgeControllerState neutral_state = neutral_controller_state();
@@ -416,7 +426,14 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
         reqlen,
         0
     );
-    std::vector<uint8_t> feature_data = get_feature_data(report_id, reqlen);
+    if (report_type != HID_REPORT_TYPE_FEATURE) {
+        return 0;
+    }
+
+    std::vector<uint8_t> feature_data;
+    if (dualsense_feature_report_may_use_bt_passthrough(report_id)) {
+        feature_data = get_feature_data(report_id, reqlen);
+    }
     if (feature_data.empty() || buffer == nullptr) {
         return 0;
     }

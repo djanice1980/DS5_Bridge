@@ -19,6 +19,7 @@ typedef enum HostPersonaMode {
 HostPersonaMode host_persona_active(void);
 bool host_persona_set_active(HostPersonaMode mode);
 bool host_persona_is_supported(HostPersonaMode mode);
+bool host_persona_descriptors_verified(HostPersonaMode mode);
 bool host_persona_is_native_hid(void);
 uint8_t host_persona_keyboard_hid_instance(void);
 

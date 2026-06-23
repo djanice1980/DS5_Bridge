@@ -14,6 +14,12 @@ enum CHANNEL_TYPE {
     CONTROL
 };
 
+enum ControllerType : uint8_t {
+    ControllerTypeUnknown = 0,
+    ControllerTypeDualSense = 1,
+    ControllerTypeDualSenseEdge = 2,
+};
+
 typedef void (*bt_data_callback_t)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len);
 
 int bt_init();
