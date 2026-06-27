@@ -601,6 +601,27 @@ void assert_mute_keyboard_chord_starter_is_deferred(std::filesystem::path const 
     }
 }
 
+void assert_mic_pass_through_defaults_to_enabled(std::filesystem::path const &root) {
+    const auto audio_cpp = read_text(root / "src" / "audio.cpp");
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+
+    if (audio_cpp.find("static volatile bool duplex_requested = true;") == std::string::npos) {
+        throw std::runtime_error("Pico mic pass-through must default on without requiring the companion app");
+    }
+
+    const std::string restore_defaults_block = extract_between(
+        companion_cpp,
+        "void restore_defaults() {",
+        "\n}\n\nuint8_t controller_type()"
+    );
+    if (
+        restore_defaults_block.find("audio_set_duplex_requested(true);") == std::string::npos
+        || restore_defaults_block.find("companion_mic_enabled = true;") == std::string::npos
+    ) {
+        throw std::runtime_error("Restore Defaults must keep Pico mic pass-through enabled");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -617,6 +638,7 @@ int main() {
         assert_persona_switch_quiets_input_only(source_root);
         assert_usb_suspend_poweroff_is_debounced(source_root);
         assert_mute_keyboard_chord_starter_is_deferred(source_root);
+        assert_mic_pass_through_defaults_to_enabled(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

@@ -735,7 +735,7 @@ void restore_defaults() {
     mute_keyboard_chord_pending = false;
     mute_led_flash_pending = false;
     audio_set_quiet_mode(false);
-    audio_set_duplex_requested(false);
+    audio_set_duplex_requested(true);
     audio_set_reactive_haptics_config(
         false,
         AudioReactiveHapticsMix,
@@ -748,7 +748,7 @@ void restore_defaults() {
     );
     companion_mic_volume_percent = 100;
     companion_mic_muted = false;
-    companion_mic_enabled = false;
+    companion_mic_enabled = true;
     audio_set_mic_mute_led_passthrough(false);
     audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
     reset_button_remap();
