@@ -199,6 +199,8 @@ void assert_persona_support_requires_verified_descriptors(
 void assert_dse_identity_reports_do_not_use_edge_passthrough(std::filesystem::path const &source_root) {
     const auto bt_h = read_text(source_root / "src" / "bt.h");
     const auto main_cpp = read_text(source_root / "src" / "main.cpp");
+    const auto dualsense_persona_cpp = read_text(source_root / "src" / "persona" / "dualsense_persona.cpp");
+    const auto dualsense_persona_h = read_text(source_root / "src" / "persona" / "dualsense_persona.h");
     const std::string get_report_callback = extract_between(
         main_cpp,
         "uint16_t tud_hid_get_report_cb",
@@ -213,6 +215,11 @@ void assert_dse_identity_reports_do_not_use_edge_passthrough(std::filesystem::pa
         || get_report_callback.find("report_type != HID_REPORT_TYPE_FEATURE") == std::string::npos
         || get_report_callback.find("dualsense_feature_report_may_use_bt_passthrough(report_id)") == std::string::npos
         || get_report_callback.find("get_feature_data(report_id, reqlen)") == std::string::npos
+        || get_report_callback.find("dualsense_persona_get_feature_report(report_id, buffer, reqlen)") == std::string::npos
+        || dualsense_persona_h.find("dualsense_persona_get_feature_report") == std::string::npos
+        || dualsense_persona_cpp.find("kDualSenseFeatureFirmwareInfo = 0x20") == std::string::npos
+        || dualsense_persona_cpp.find("write_firmware_feature_report") == std::string::npos
+        || dualsense_persona_cpp.find("kFirmwareVersion = 0x0110002a") == std::string::npos
     ) {
         throw std::runtime_error("DualSense identity feature reports must not leak DualSense Edge identity through BT passthrough");
     }

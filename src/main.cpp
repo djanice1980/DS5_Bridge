@@ -20,6 +20,7 @@
 #include "dualsense_input_decoder.h"
 #include "dualsense_output.h"
 #include "persona/ds4_persona.h"
+#include "persona/dualsense_persona.h"
 #include "persona/host_persona.h"
 #include "persona/xusb360_usb.h"
 #include "hardware/clocks.h"
@@ -434,17 +435,17 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     if (dualsense_feature_report_may_use_bt_passthrough(report_id)) {
         feature_data = get_feature_data(report_id, reqlen);
     }
-    if (feature_data.empty() || buffer == nullptr) {
-        return 0;
+    if (!feature_data.empty() && buffer != nullptr) {
+        const uint16_t available = static_cast<uint16_t>(feature_data.size() - 1);
+        const uint16_t copy_len = available < reqlen ? available : reqlen;
+        if (copy_len > 0) {
+            memcpy(buffer, feature_data.data() + 1, copy_len);
+        }
+
+        return copy_len;
     }
 
-    const uint16_t available = static_cast<uint16_t>(feature_data.size() - 1);
-    const uint16_t copy_len = available < reqlen ? available : reqlen;
-    if (copy_len > 0) {
-        memcpy(buffer, feature_data.data() + 1, copy_len);
-    }
-
-    return copy_len;
+    return dualsense_persona_get_feature_report(report_id, buffer, reqlen);
 }
 
 // Invoked when received SET_REPORT control request or
