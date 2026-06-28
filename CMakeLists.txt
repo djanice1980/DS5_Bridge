@@ -208,7 +208,7 @@ if(DS5_ENABLE_FEEDBACK_TRACE_REPORTS)
 endif()
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "1.6.0")
+pico_set_program_version(ds5-bridge "1.6.1")
 
 if(DS5_ENABLE_FIRMWARE_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)
