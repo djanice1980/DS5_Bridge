@@ -548,14 +548,13 @@ void assert_mute_keyboard_chord_starter_is_deferred(std::filesystem::path const 
 
     const std::string dynamic_block = extract_between(
         companion_cpp,
-        "bool process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {",
+        "DynamicChordProcessingResult process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {",
         "\n}\n\nvoid apply_button_remap"
     );
     if (
-        dynamic_block.find("bool mute_chord_pressed = false;") == std::string::npos
-        || dynamic_block.find("mute_chord_pressed = mute_chord_pressed || binding.starter == kChordStarterMute;")
-            == std::string::npos
-        || dynamic_block.find("return mute_chord_pressed;") == std::string::npos
+        dynamic_block.find("DynamicChordProcessingResult result{};") == std::string::npos
+        || dynamic_block.find("result.mute_chord_pressed = true;") == std::string::npos
+        || dynamic_block.find("return result;") == std::string::npos
     ) {
         throw std::runtime_error("Dynamic chord processing must report when Mute consumed the pending keyboard action");
     }
@@ -566,7 +565,8 @@ void assert_mute_keyboard_chord_starter_is_deferred(std::filesystem::path const 
         "\n}\n\nvoid companion_update_controller_report"
     );
     const auto begin_pos = process_block.find("begin_mute_keyboard_chord_window(now);");
-    const auto dynamic_pos = process_block.find("const bool mute_chord_pressed = process_dynamic_chord_bindings(report, len);");
+    const auto dynamic_pos = process_block.find("const DynamicChordProcessingResult dynamic_chord_result = process_dynamic_chord_bindings(report, len);");
+    const auto mute_consumed_pos = process_block.find("dynamic_chord_result.mute_chord_pressed");
     const auto cancel_pos = process_block.find("cancel_mute_keyboard_chord_window();");
     const auto immediate_guard_pos = process_block.find("if (!mute_keyboard_chord_starter_enabled())");
     const auto immediate_queue_pos = process_block.find("queue_mute_keyboard_press(mute_keyboard_hold_enabled());", immediate_guard_pos);
@@ -574,12 +574,14 @@ void assert_mute_keyboard_chord_starter_is_deferred(std::filesystem::path const 
     if (
         begin_pos == std::string::npos
         || dynamic_pos == std::string::npos
+        || mute_consumed_pos == std::string::npos
         || cancel_pos == std::string::npos
         || immediate_guard_pos == std::string::npos
         || immediate_queue_pos == std::string::npos
         || release_commit_pos == std::string::npos
         || begin_pos > dynamic_pos
-        || dynamic_pos > cancel_pos
+        || dynamic_pos > mute_consumed_pos
+        || mute_consumed_pos > cancel_pos
         || immediate_guard_pos > immediate_queue_pos
     ) {
         throw std::runtime_error("Mute keyboard mode must defer only while waiting for an enabled chord starter");
@@ -598,6 +600,82 @@ void assert_mute_keyboard_chord_starter_is_deferred(std::filesystem::path const 
         || keyboard_loop < window_loop
     ) {
         throw std::runtime_error("Mute chord window must be committed before keyboard reports are flushed");
+    }
+}
+
+void assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(std::filesystem::path const &root) {
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+
+    if (companion_cpp.find("constexpr uint32_t kHomeChordSuppressUs = 250000;") == std::string::npos) {
+        throw std::runtime_error("PS/Home chord starter must be swallowed for the full 250ms chord window");
+    }
+    if (companion_cpp.find("constexpr uint32_t kHomeChordFallbackReplayUs = 80000;") == std::string::npos) {
+        throw std::runtime_error("Unconsumed PS/Home taps must replay as a host-visible 80ms press");
+    }
+
+    const std::string gate_enabled_block = extract_between(
+        companion_cpp,
+        "bool home_chord_gate_enabled() {",
+        "\n}\n\nvoid clear_home_chord_gate"
+    );
+    if (
+        gate_enabled_block.find("sleep_keybind_enabled || speaker_volume_shortcut_enabled") == std::string::npos
+        || gate_enabled_block.find("dynamic_chord_bindings[i].starter == kChordStarterHome") == std::string::npos
+    ) {
+        throw std::runtime_error("PS/Home chord gate must activate when PS/Home can start a shortcut or chord");
+    }
+
+    const std::string gate_block = extract_between(
+        companion_cpp,
+        "void apply_home_chord_gate(uint8_t *report, uint16_t len, bool physical_home_pressed, bool home_chord_consumed) {",
+        "\n}\n\nbool dpad_direction_has"
+    );
+    if (
+        gate_block.find("if (home_chord_consumed)") == std::string::npos
+        || gate_block.find("report[9] &= static_cast<uint8_t>(~kHomeButtonBit);") == std::string::npos
+        || gate_block.find("home_chord_gate_until_us = now + kHomeChordSuppressUs;") == std::string::npos
+        || gate_block.find("if (!time_us_reached(now, home_chord_gate_until_us))") == std::string::npos
+        || gate_block.find("home_chord_replay_until_us = now + kHomeChordFallbackReplayUs;") == std::string::npos
+        || gate_block.find("if (home_chord_replay_until_us != 0 && !time_us_reached(now, home_chord_replay_until_us))") == std::string::npos
+    ) {
+        throw std::runtime_error("PS/Home chord gate must mask PS/Home during the chord window and replay unconsumed taps by duration");
+    }
+
+    const std::string dynamic_block = extract_between(
+        companion_cpp,
+        "DynamicChordProcessingResult process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {",
+        "\n}\n\nvoid apply_button_remap"
+    );
+    if (
+        dynamic_block.find("DynamicChordProcessingResult result{};") == std::string::npos
+        || dynamic_block.find("result.home_chord_consumed = true;") == std::string::npos
+        || dynamic_block.find("result.mute_chord_pressed = true;") == std::string::npos
+    ) {
+        throw std::runtime_error("Dynamic chord processing must report when PS/Home or Mute starters are consumed");
+    }
+
+    const std::string process_block = extract_between(
+        companion_cpp,
+        "void companion_process_controller_report(uint8_t *report, uint16_t len) {",
+        "\n}\n\nvoid companion_update_controller_report"
+    );
+    const auto dynamic_pos = process_block.find("const DynamicChordProcessingResult dynamic_chord_result = process_dynamic_chord_bindings(report, len);");
+    const auto shortcut_pos = process_block.find("const bool shortcut_home_chord_consumed = process_shortcut_bindings(report);");
+    const auto consumed_pos = process_block.find("const bool home_chord_consumed = dynamic_chord_result.home_chord_consumed || shortcut_home_chord_consumed;");
+    const auto gate_pos = process_block.find("apply_home_chord_gate(report, len, home_pressed, home_chord_consumed);");
+    const auto dpad_guard_pos = process_block.find("if (home_pressed && dpad_pressed)");
+    if (
+        dynamic_pos == std::string::npos
+        || shortcut_pos == std::string::npos
+        || consumed_pos == std::string::npos
+        || gate_pos == std::string::npos
+        || dpad_guard_pos == std::string::npos
+        || dynamic_pos > shortcut_pos
+        || shortcut_pos > consumed_pos
+        || consumed_pos > gate_pos
+        || gate_pos > dpad_guard_pos
+    ) {
+        throw std::runtime_error("PS/Home chord gate must run after shortcut/chord consumption and before Home+Dpad suppression");
     }
 }
 
@@ -638,6 +716,7 @@ int main() {
         assert_persona_switch_quiets_input_only(source_root);
         assert_usb_suspend_poweroff_is_debounced(source_root);
         assert_mute_keyboard_chord_starter_is_deferred(source_root);
+        assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(source_root);
         assert_mic_pass_through_defaults_to_enabled(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
