@@ -71,4 +71,14 @@ describe('IPC contract', () => {
     expect(bridgeServiceSource).toContain('async mountPicoBootloader(): Promise<void>');
     expect(bridgeServiceSource).toContain('COMMAND_ID.ENTER_BOOTLOADER');
   });
+
+  it('shows connected controller battery status in the tray tooltip', () => {
+    expect(mainSource).toContain('function trayTooltipForSnapshot(snapshot: BridgeSnapshot): string');
+    expect(mainSource).toContain('if (!snapshot.status?.controllerConnected)');
+    expect(mainSource).toContain('return APP_NAME;');
+    expect(mainSource).toContain("`${name} \\u2014 ${snapshot.status.batteryPercent}%`");
+    expect(mainSource).toContain('updateTrayTooltip(bridgeService.getSnapshot())');
+    expect(mainSource).toContain("bridgeService.on('snapshot', (snapshot) => {");
+    expect(mainSource).toContain('updateTrayTooltip(snapshot);');
+  });
 });

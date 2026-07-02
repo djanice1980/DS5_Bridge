@@ -29,6 +29,7 @@ import type {
 import type { BridgeToast } from './bridge-service';
 import type {
   AudioHapticsSession,
+  BridgeSnapshot,
   PicoFirmwareAction,
   PicoFirmwareActionResult,
   UiScalePercent,
@@ -144,6 +145,27 @@ function applySnapshotWindowScale(snapshot: { settings: { uiScalePercent: UiScal
 
 function currentUiScalePercent(): UiScalePercent {
   return bridgeService?.getSnapshot().settings.uiScalePercent ?? 100;
+}
+
+function trayControllerName(type: NonNullable<BridgeSnapshot['status']>['controllerType'] | undefined): string {
+  if (type === 'dualsense-edge') return 'DualSense Edge';
+  if (type === 'dualsense') return 'DualSense';
+  return 'Controller';
+}
+
+function trayTooltipForSnapshot(snapshot: BridgeSnapshot): string {
+  if (!snapshot.status?.controllerConnected) {
+    return APP_NAME;
+  }
+
+  const name = trayControllerName(snapshot.status.controllerType);
+  return snapshot.status.batteryPercent === null
+    ? name
+    : `${name} \u2014 ${snapshot.status.batteryPercent}%`;
+}
+
+function updateTrayTooltip(snapshot: BridgeSnapshot): void {
+  tray?.setToolTip(trayTooltipForSnapshot(snapshot));
 }
 
 function restoreMainWindowScale(recenter: boolean): void {
@@ -1032,7 +1054,7 @@ app.whenReady().then(async () => {
   screen.on('display-metrics-changed', () => scheduleMainWindowScaleRestore(true));
 
   tray = new Tray(await createTrayIcon());
-  tray.setToolTip(APP_NAME);
+  updateTrayTooltip(bridgeService.getSnapshot());
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `Open ${APP_NAME}`, click: showWindowCentered },
     { type: 'separator' },
@@ -1041,6 +1063,7 @@ app.whenReady().then(async () => {
   tray.on('click', showWindowCentered);
 
   bridgeService.on('snapshot', (snapshot) => {
+    updateTrayTooltip(snapshot);
     sendToMainWindow('bridge:snapshot', snapshot);
   });
   bridgeService.on('toast', (toast) => {
