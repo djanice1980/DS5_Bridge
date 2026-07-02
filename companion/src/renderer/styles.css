@@ -4631,6 +4631,7 @@ button.feature-icon {
   display: grid;
   align-content: stretch;
   gap: 10px;
+  margin-top: 8px;
 }
 
 .audio-buffer-control {

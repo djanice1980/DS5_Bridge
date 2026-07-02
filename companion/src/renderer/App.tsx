@@ -7433,7 +7433,6 @@ export function App() {
                               label="Audio Buffer Length"
                               tooltip="Sets the DualSense audio buffer value. Lower values reduce haptic delay but increase stutter risk; higher values improve speaker stability at the cost of latency."
                               className="audio-buffer-title"
-                              showQuestionMark={true}
                             />
                             <div className="audio-buffer-readout">
                               <strong>{audioBufferLengthValue}</strong>

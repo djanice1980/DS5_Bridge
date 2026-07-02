@@ -474,6 +474,7 @@ describe('companion layout CSS', () => {
 
   it('keeps the audio buffer length control compact and aligned', () => {
     expect(appSource).toContain("className={`audio-buffer-control framed-slider ${audioBufferLengthControlDisabled ? 'disabled' : ''}`}");
+    expect(cssBlock('.audio-secondary-controls', 'margin-top: 8px;')).toContain('align-content: stretch;');
     expect(cssBlock('.audio-buffer-control', 'padding: 14px 18px;')).toContain('overflow: visible;');
     expect(cssBlock('.audio-buffer-control.disabled', 'opacity: 0.58;')).toContain('opacity: 0.58;');
     expect(cssBlock('.audio-buffer-header', 'grid-template-columns: minmax(0, 1fr) minmax(92px, auto) 30px;')).toContain(

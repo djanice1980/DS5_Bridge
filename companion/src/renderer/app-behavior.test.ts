@@ -106,16 +106,17 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('audio-buffer-readout');
     expect(appSource).toContain("className={`audio-buffer-control framed-slider ${audioBufferLengthControlDisabled ? 'disabled' : ''}`}");
     expect(appSource).toContain('className="audio-buffer-title"');
-    expect(appSource).toContain('showQuestionMark={true}');
     expect(appSource).toContain('aria-valuetext={`${audioBufferLengthValue}, ${audioBufferDelayLabel(audioBufferLengthValue)}, ${audioBufferZoneLabel(audioBufferLengthValue)}`}');
     const micPresetIndex = appSource.indexOf('{MIC_VOLUME_PRESETS.map(([label, value]) => (');
     const speakerPresetIndex = appSource.indexOf('{SPEAKER_VOLUME_PRESETS.map(([label, value]) => (');
     const bufferControlIndex = appSource.indexOf('className={`audio-buffer-control framed-slider');
     const testCardIndex = appSource.indexOf('<section className="feature-card test-card">', speakerPresetIndex);
+    const bufferControlSource = appSource.slice(bufferControlIndex, testCardIndex);
     expect(micPresetIndex).toBeGreaterThanOrEqual(0);
     expect(speakerPresetIndex).toBeGreaterThan(micPresetIndex);
     expect(bufferControlIndex).toBeGreaterThan(speakerPresetIndex);
     expect(bufferControlIndex).toBeLessThan(testCardIndex);
+    expect(bufferControlSource).not.toContain('showQuestionMark={true}');
     expect(appSource.slice(micPresetIndex, speakerPresetIndex)).not.toContain('audio-buffer-control');
     expect(appSource).not.toContain('Math.min(255, Math.round(length))');
   });
