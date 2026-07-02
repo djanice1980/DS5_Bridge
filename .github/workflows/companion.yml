@@ -48,4 +48,4 @@ jobs:
 
       - name: Build companion
         working-directory: companion
-        run: npm run build
+        run: npm run build:app

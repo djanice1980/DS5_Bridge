@@ -78,7 +78,7 @@ Build the companion app:
 npm run build
 ```
 
-`npm run build` also publishes the audio helper from:
+`npm run build` publishes the audio helper from:
 
 ```text
 companion/native/AudioHelper
@@ -88,6 +88,15 @@ The helper output is written to:
 
 ```text
 companion/native/AudioHelper/bin/publish/win-x64
+```
+
+Packaging also builds the repo-owned Pico Universal Flash Nuke utility from
+`tools/pico-universal-flash-nuke`, then writes the bundled UF2 and manifest used
+by the Bridge Settings nuke action to:
+
+```text
+companion/firmware/pico-universal-flash-nuke.uf2
+companion/firmware/pico-universal-flash-nuke.uf2.sha256
 ```
 
 For local development:
@@ -110,8 +119,8 @@ Build the Windows installer:
 npm run installer:win
 ```
 
-The installer build includes the published audio helper as an Electron
-extra resource.
+The installer build includes the published audio helper and Pico Universal Flash
+Nuke UF2/manifest as Electron extra resources.
 
 ### Installer Upgrades
 

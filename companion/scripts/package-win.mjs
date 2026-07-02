@@ -15,6 +15,8 @@ const assetDir = path.join('assets', 'controllers');
 const appIcon = path.join(repoDir, assetDir, 'ds5-bridge_app-icon-tile.ico');
 const audioHelperDir = path.join(companionDir, 'native', 'AudioHelper', 'bin', 'publish', 'win-x64');
 const windowsCleanupScript = path.join(repoDir, 'tools', 'windows', 'clean-ds5bridge-devices.ps1');
+const picoUniversalFlashNukeUf2 = path.join(companionDir, 'firmware', 'pico-universal-flash-nuke.uf2');
+const picoUniversalFlashNukeSha256 = `${picoUniversalFlashNukeUf2}.sha256`;
 const appPackage = JSON.parse(fs.readFileSync(path.join(companionDir, 'package.json'), 'utf8'));
 const appAssets = [
   'ds5-bridge_app-icon-tile.ico',
@@ -98,6 +100,12 @@ if (!fs.existsSync(path.join(companionDir, 'dist'))) {
 if (!fs.existsSync(path.join(audioHelperDir, 'AudioHelper.exe'))) {
   throw new Error('Audio helper is missing. Run npm run build:audio-helper first.');
 }
+if (!fs.existsSync(picoUniversalFlashNukeUf2)) {
+  throw new Error('Pico flash nuke UF2 is missing. Run npm run build:firmware-tools first.');
+}
+if (!fs.existsSync(picoUniversalFlashNukeSha256)) {
+  throw new Error('Pico flash nuke SHA-256 manifest is missing. Run npm run build:firmware-tools first.');
+}
 
 copyRecursive(electronDist, outDir);
 copyRecursive(path.join(repoDir, 'NOTICE'), path.join(outDir, 'NOTICE'));
@@ -129,6 +137,8 @@ for (const asset of appAssets) {
 }
 copyRecursive(audioHelperDir, path.join(outDir, 'resources', 'native', 'AudioHelper'));
 copyRecursive(windowsCleanupScript, path.join(outDir, 'resources', 'tools', 'windows', 'clean-ds5bridge-devices.ps1'));
+copyRecursive(picoUniversalFlashNukeUf2, path.join(outDir, 'resources', 'firmware', 'pico-universal-flash-nuke.uf2'));
+copyRecursive(picoUniversalFlashNukeSha256, path.join(outDir, 'resources', 'firmware', 'pico-universal-flash-nuke.uf2.sha256'));
 for (const packageName of runtimePackages) {
   copyPackage(packageName);
 }
