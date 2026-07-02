@@ -499,9 +499,10 @@ describe('companion layout CSS', () => {
 
   it('keeps Pico firmware maintenance actions compact inside Bridge Settings', () => {
     expect(appSource).toContain('className="settings-menu-row pico-firmware-row"');
+    expect(appSource).not.toContain('<strong>Pico Firmware</strong>');
     expect(cssBlock('.pico-firmware-row', 'grid-template-columns: minmax(0, 1fr);')).toContain('gap: 7px;');
     expect(cssBlock('.pico-firmware-header', 'grid-template-columns: minmax(0, 1fr) auto;')).toContain(
-      'align-items: start;'
+      'align-items: center;'
     );
     expect(cssBlock('.pico-firmware-actions', 'flex-wrap: wrap;')).toContain('justify-content: flex-end;');
     expect(cssBlock('.pico-firmware-actions .heading-action', 'min-height: 30px;')).toContain('white-space: nowrap;');

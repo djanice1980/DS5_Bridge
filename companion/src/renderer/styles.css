@@ -1991,13 +1991,12 @@ button {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: 10px;
 }
 
 .pico-firmware-header strong {
   min-width: 0;
-  padding-top: 4px;
   line-height: 1.15;
 }
 

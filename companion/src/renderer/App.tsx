@@ -9471,10 +9471,9 @@ export function App() {
                     <span />
                   </button>
                 </div>
-                <div className="settings-menu-section-label">Firmware</div>
                 <div className="settings-menu-row pico-firmware-row">
                   <div className="pico-firmware-header">
-                    <strong>Pico Firmware</strong>
+                    <strong>Firmware</strong>
                     <div className="pico-firmware-actions">
                       <button
                         type="button"

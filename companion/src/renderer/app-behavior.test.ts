@@ -128,7 +128,8 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('window.bridge.mountPicoBootloader()');
     expect(appSource).toContain('window.bridge.flashPicoFirmware()');
     expect(appSource).toContain('window.bridge.nukePicoFlash()');
-    expect(appSource).toContain('Pico Firmware');
+    expect(appSource).toContain('<strong>Firmware</strong>');
+    expect(appSource).not.toContain('<strong>Pico Firmware</strong>');
     expect(appSource).toContain('pico-firmware-dual-action');
     expect(appSource).toContain('picoFirmwareMessage');
     expect(appSource).toContain('picoFirmwareError');
