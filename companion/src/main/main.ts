@@ -27,7 +27,13 @@ import type {
   TriggerTestTarget
 } from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
-import type { AudioHapticsSession, PicoFirmwareActionResult, UiScalePercent, UiThemePreset } from '../shared/types';
+import type {
+  AudioHapticsSession,
+  PicoFirmwareAction,
+  PicoFirmwareActionResult,
+  UiScalePercent,
+  UiThemePreset
+} from '../shared/types';
 
 const APP_NAME = 'DS5 Bridge';
 const WINDOWS_APP_USER_MODEL_ID = 'io.github.sundaymoments.ds5bridge';
@@ -748,7 +754,7 @@ async function confirmPicoFlashNuke(): Promise<boolean> {
     type: 'warning',
     title: 'Nuke Pico flash?',
     message: 'Nuke Pico flash?',
-    detail: 'This copies the bundled Pico Universal Flash Nuke UF2 to the mounted Pico bootloader drive. The Pico flash will be wiped.',
+    detail: 'This will copy the bundled Pico Universal Flash Nuke UF2 to the mounted Pico bootloader drive and erase the Pico flash.\n\nThe bridge will not work again until you flash the DS5 Bridge firmware back onto the Pico. Use this only when recovering from a bad or stuck firmware install.',
     buttons: ['Nuke Pico', 'Cancel'],
     defaultId: 1,
     cancelId: 1,
@@ -770,6 +776,39 @@ async function nukePicoFlash(service: BridgeService): Promise<PicoFirmwareAction
     };
   }
   return copyPicoFlashNuke(picoFirmwareOptions(service, true));
+}
+
+function picoFirmwareErrorMessage(error: unknown): string {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : '';
+  const cleaned = message
+    .replace(/^Error invoking remote method '[^']+':\s*/i, '')
+    .replace(/^Error:\s*/i, '')
+    .trim();
+
+  if (/No companion bridge is connected/i.test(cleaned)) {
+    return 'No companion bridge is connected. Connect the companion bridge, then try again.';
+  }
+
+  return cleaned || 'Pico firmware action failed.';
+}
+
+async function runPicoFirmwareIpcAction(
+  action: PicoFirmwareAction,
+  task: () => Promise<PicoFirmwareActionResult>
+): Promise<PicoFirmwareActionResult> {
+  try {
+    return await task();
+  } catch (error) {
+    return {
+      ok: false,
+      action,
+      message: picoFirmwareErrorMessage(error)
+    };
+  }
 }
 
 function registerIpc(service: BridgeService): void {
@@ -877,9 +916,18 @@ function registerIpc(service: BridgeService): void {
     service.setHostPersonaMode(value)
   ));
   ipcMain.handle('bridge:sleepController', () => service.sleepController());
-  ipcMain.handle('bridge:mountPicoBootloader', () => mountPicoBootloaderDrive(picoFirmwareOptions(service)));
-  ipcMain.handle('bridge:flashPicoFirmware', () => flashSelectedPicoFirmware(service));
-  ipcMain.handle('bridge:nukePicoFlash', () => nukePicoFlash(service));
+  ipcMain.handle('bridge:mountPicoBootloader', () => runPicoFirmwareIpcAction(
+    'mount',
+    () => mountPicoBootloaderDrive(picoFirmwareOptions(service))
+  ));
+  ipcMain.handle('bridge:flashPicoFirmware', () => runPicoFirmwareIpcAction(
+    'flash',
+    () => flashSelectedPicoFirmware(service)
+  ));
+  ipcMain.handle('bridge:nukePicoFlash', () => runPicoFirmwareIpcAction(
+    'nuke',
+    () => nukePicoFlash(service)
+  ));
   ipcMain.handle('bridge:setNotifyControllerConnection', (_event, value: boolean) => (
     service.setNotifyControllerConnection(value)
   ));

@@ -65,6 +65,9 @@ describe('IPC contract', () => {
     expect(mainSource).toContain("ipcMain.handle('bridge:mountPicoBootloader'");
     expect(mainSource).toContain("ipcMain.handle('bridge:flashPicoFirmware'");
     expect(mainSource).toContain("ipcMain.handle('bridge:nukePicoFlash'");
+    expect(mainSource).toContain('function picoFirmwareErrorMessage(error: unknown): string');
+    expect(mainSource).toContain('function runPicoFirmwareIpcAction(');
+    expect(mainSource).toContain("return 'No companion bridge is connected. Connect the companion bridge, then try again.';");
     expect(bridgeServiceSource).toContain('async mountPicoBootloader(): Promise<void>');
     expect(bridgeServiceSource).toContain('COMMAND_ID.ENTER_BOOTLOADER');
   });
