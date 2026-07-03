@@ -49,9 +49,26 @@ jobs:
           mkdir -p artifacts
           cp build/companion/ds5-bridge.uf2 artifacts/ds5-bridge-companion.uf2
 
+      - name: Build companion firmware (Waveshare RP2350B-Plus-W)
+        run: |
+          cmake -S . -B build/waveshare -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DENABLE_COMPANION=ON \
+            -DWAVESHARE_RP2350B_PLUS_W_BUILD=ON
+          cmake --build build/waveshare --target ds5-bridge
+          cp build/waveshare/ds5-bridge.uf2 artifacts/ds5-bridge-companion-waveshare.uf2
+
       - name: Upload companion UF2 artifact
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/ds5-bridge-companion.uf2
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload Waveshare companion UF2 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/ds5-bridge-companion-waveshare.uf2
           archive: false
           if-no-files-found: error
