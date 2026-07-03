@@ -1760,7 +1760,11 @@ function controllerName(type: string | undefined): string {
 
 function healthLabel(snapshot: BridgeSnapshot | null | undefined): string {
   if (!snapshot) return 'Unavailable';
-  if (snapshot.state !== 'connected') return snapshot.message;
+  if (snapshot.state !== 'connected') {
+    return /^Firmware .+ update required$/i.test(snapshot.message)
+      ? 'Update required: Bridge Settings > Firmware'
+      : snapshot.message;
+  }
   if (snapshot.diagnostics.lastError) return snapshot.diagnostics.lastError;
   return 'All systems normal';
 }
