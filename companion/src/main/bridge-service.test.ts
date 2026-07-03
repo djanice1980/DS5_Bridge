@@ -654,11 +654,11 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.5 update required');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.6.1 update required');
     expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
   });
 
-  it('requires users to update pre-1.5 bridge firmware', async () => {
+  it('requires users to update pre-1.6.1 bridge firmware', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ firmwareMajor: 0, firmwareMinor: 5, firmwarePatch: 15 });
@@ -669,9 +669,9 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('incompatible');
-    expect(snapshot.message).toBe('Firmware 1.5.5 update required');
+    expect(snapshot.message).toBe('Firmware 1.6.1 update required');
     expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
-    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.5 or newer');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.6.1 or newer');
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toBeNull();
     expect(device.sentReports).toEqual([]);
   });
