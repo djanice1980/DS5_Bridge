@@ -1766,6 +1766,9 @@ function healthLabel(snapshot: BridgeSnapshot | null | undefined): string {
       : snapshot.message;
   }
   if (snapshot.diagnostics.lastError) return snapshot.diagnostics.lastError;
+  if (snapshot.diagnostics.firmwareUpdateAvailable) {
+    return `Firmware ${snapshot.diagnostics.firmwareUpdateAvailable.availableVersion} available`;
+  }
   return 'All systems normal';
 }
 
@@ -3789,16 +3792,26 @@ export function App() {
   const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
     .replace(' / Real-time', '')
     ?? '--';
+  const firmwareUpdateAvailable = Boolean(snapshot?.diagnostics.firmwareUpdateAvailable);
   const overviewHealthLabel = healthLabel(snapshot);
   const overviewHealthTone = personaTransitionActive
     ? 'warn'
     : snapshot?.diagnostics.lastError
     ? 'bad'
+    : firmwareUpdateAvailable
+    ? 'warn'
     : connected && controllerConnected
       ? 'good'
       : connected
         ? 'warn'
         : 'idle';
+  const systemHealthTone = personaTransitionActive
+    ? 'warn'
+    : snapshot?.diagnostics.lastError
+      ? 'bad'
+      : firmwareUpdateAvailable
+        ? 'warn'
+        : 'good';
   const overviewConnectionStatus = personaTransitionActive
     ? 'Switching'
     : connected && controllerConnected
@@ -8915,8 +8928,8 @@ export function App() {
                       </div>
                       <div className="device-row device-status-row">
                         <span>Status</span>
-                        <strong className={`health-label ${personaTransitionActive ? 'warn' : snapshot.diagnostics.lastError ? 'bad' : 'good'}`}>
-                          <span className={`dot ${personaTransitionActive ? 'warn' : snapshot.diagnostics.lastError ? 'bad' : statusTone}`} />
+                        <strong className={`health-label ${systemHealthTone}`}>
+                          <span className={`dot ${systemHealthTone === 'good' ? statusTone : systemHealthTone}`} />
                           {healthLabel(snapshot)}
                         </strong>
                       </div>

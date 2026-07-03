@@ -125,6 +125,10 @@ export interface BridgeDiagnostics {
   settingsRevision: number | null;
   lastAck: BridgeAckPayload | null;
   lastError: string | null;
+  firmwareUpdateAvailable: {
+    currentVersion: string;
+    availableVersion: string;
+  } | null;
   lastPollAt: number | null;
   rawDevices: HidDeviceSummary[];
   audioDebugLogPath: string | null;

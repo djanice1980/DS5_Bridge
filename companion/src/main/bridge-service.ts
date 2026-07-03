@@ -106,6 +106,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
+const BUNDLED_FIRMWARE_VERSION = '1.6.3';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.5';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -236,12 +237,45 @@ function isDualSenseDevice(device: HidDeviceSummary): boolean {
     && /DualSense/i.test(device.product ?? '');
 }
 
-function isSupportedFirmwareVersion(version: string): boolean {
+function parseFirmwareVersion(version: string): { major: number; minor: number; patch: number } | null {
   const [major = 0, minor = 0, patch = 0] = version.split('.').map((part) => Number.parseInt(part, 10));
   if (![major, minor, patch].every(Number.isFinite)) {
-    return false;
+    return null;
   }
-  return major > 1 || (major === 1 && (minor > 5 || (minor === 5 && patch >= 5)));
+  return { major, minor, patch };
+}
+
+function compareFirmwareVersions(left: string, right: string): number | null {
+  const leftVersion = parseFirmwareVersion(left);
+  const rightVersion = parseFirmwareVersion(right);
+  if (!leftVersion || !rightVersion) {
+    return null;
+  }
+  for (const part of ['major', 'minor', 'patch'] as const) {
+    const delta = leftVersion[part] - rightVersion[part];
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
+function isSupportedFirmwareVersion(version: string): boolean {
+  const comparison = compareFirmwareVersions(version, MIN_SUPPORTED_FIRMWARE_VERSION);
+  return comparison !== null && comparison >= 0;
+}
+
+function firmwareUpdateAvailable(
+  version: string
+): BridgeDiagnostics['firmwareUpdateAvailable'] {
+  const comparison = compareFirmwareVersions(version, BUNDLED_FIRMWARE_VERSION);
+  if (comparison === null || comparison >= 0) {
+    return null;
+  }
+  return {
+    currentVersion: version,
+    availableVersion: BUNDLED_FIRMWARE_VERSION
+  };
 }
 
 function isBridgeTransportError(error: unknown): boolean {
@@ -264,6 +298,7 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     settingsRevision: null,
     lastAck: null,
     lastError: null,
+    firmwareUpdateAvailable: null,
     lastPollAt: null,
     rawDevices,
     audioDebugLogPath: null,
@@ -3320,6 +3355,7 @@ export class BridgeService extends EventEmitter {
           settingsRevision: status.settingsRevision,
           lastAck: this.snapshot.diagnostics.lastAck,
           lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to ${MIN_SUPPORTED_FIRMWARE_VERSION} or newer.`,
+          firmwareUpdateAvailable: null,
           lastPollAt: Date.now(),
           rawDevices
         })
@@ -3379,6 +3415,7 @@ export class BridgeService extends EventEmitter {
         settingsRevision: status.settingsRevision,
         lastAck: this.snapshot.diagnostics.lastAck,
         lastError: null,
+        firmwareUpdateAvailable: firmwareUpdateAvailable(status.firmwareVersion),
         lastPollAt: Date.now(),
         rawDevices
       }),
@@ -3719,6 +3756,7 @@ export class BridgeService extends EventEmitter {
       diagnostics: {
         ...this.snapshot.diagnostics,
         lastError: message,
+        firmwareUpdateAvailable: null,
         lastPollAt: Date.now()
       }
     };
@@ -3795,6 +3833,7 @@ export class BridgeService extends EventEmitter {
         settingsRevision: this.snapshot.diagnostics.settingsRevision,
         lastAck: this.snapshot.diagnostics.lastAck,
         lastError: this.snapshot.diagnostics.lastError,
+        firmwareUpdateAvailable: this.snapshot.diagnostics.firmwareUpdateAvailable,
         audioDebugLogPath: this.snapshot.diagnostics.audioDebugLogPath,
         audioDebugLogLineCount: this.snapshot.diagnostics.audioDebugLogLines.length,
         audioDebugLogTail: this.snapshot.diagnostics.audioDebugLogLines.at(-1) ?? null,
