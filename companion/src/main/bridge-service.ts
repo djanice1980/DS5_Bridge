@@ -7,6 +7,8 @@ import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
   COMMAND_ID,
+  PROTOCOL_MAJOR,
+  PROTOCOL_MINOR,
   REPORT_ID,
   REPORT_LENGTH,
   CHORD_FUNCTION_EVENT_BASE,
@@ -25,6 +27,7 @@ import {
   parseTriggerTraceReport,
   parseFeedbackTraceReport,
   parseStatusReport,
+  readReportProtocolVersion,
   SHORTCUT_EVENT,
   buildButtonRemapPayload,
   hostPersonaModeValue,
@@ -56,6 +59,7 @@ import type {
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
+  ReportProtocolVersion,
   ShortcutEvent,
   TriggerTestMode,
   TriggerTestTarget
@@ -153,6 +157,7 @@ type CommandOptions = {
   throwOnCommandError?: boolean;
   extraPayload?: ArrayLike<number>;
   allowAckTransportLoss?: boolean;
+  allowProtocolMismatch?: boolean;
 };
 
 type HostPersonaTransitionState = HostPersonaTransition & {
@@ -245,6 +250,10 @@ function isBridgeTransportError(error: unknown): boolean {
     || /WinUSB bridge helper request timed out/i.test(message)
     || /A device attached to the system is not functioning/i.test(message)
     || /No companion bridge is connected/i.test(message);
+}
+
+function isProtocolMismatch(error: unknown): error is ProtocolError {
+  return error instanceof ProtocolError && error.code === 'bad-version';
 }
 
 function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
@@ -1194,6 +1203,7 @@ export class BridgeService extends EventEmitter {
   private feedbackTraceDroppedCount = 0;
   private feedbackTraceSupported: boolean | null = null;
   private audioStatus: AudioStatusPayload | null = null;
+  private incompatibleCompanionProtocolVersion: ReportProtocolVersion | null = null;
   private lastAudioStatsSignature: string | null = null;
   private systemAudioHapticsRetryAt = 0;
   private systemAudioHapticsPassthroughActive = false;
@@ -2746,7 +2756,8 @@ export class BridgeService extends EventEmitter {
 
   async mountPicoBootloader(): Promise<void> {
     await this.sendCommand(COMMAND_ID.ENTER_BOOTLOADER, 0, {
-      allowAckTransportLoss: true
+      allowAckTransportLoss: true,
+      allowProtocolMismatch: true
     });
   }
 
@@ -3062,15 +3073,19 @@ export class BridgeService extends EventEmitter {
 
   private async sendCommand(commandId: number, value: number, options: CommandOptions = {}) {
     return this.enqueueCommand(async () => {
-      await this.ensureCompanionDevice();
+      await this.ensureCompanionDevice(options.allowProtocolMismatch ? { allowProtocolMismatch: true } : undefined);
       if (!this.device) {
         throw new Error('No companion bridge is connected.');
       }
 
       const sequence = this.nextSequence();
+      const protocolMinor = this.commandProtocolMinorFor(options);
       const previousSettingsRevision = this.snapshot.diagnostics.settingsRevision;
       try {
-        await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
+        const commandReport = protocolMinor === undefined
+          ? buildCommandReport(commandId, sequence, value, options.extraPayload)
+          : buildCommandReport(commandId, sequence, value, options.extraPayload, { protocolMinor });
+        await this.device.sendFeatureReport(commandReport);
       } catch (error) {
         if (!options.allowAckTransportLoss || !isBridgeTransportError(error)) {
           throw error;
@@ -3079,7 +3094,10 @@ export class BridgeService extends EventEmitter {
       }
       let ack: BridgeAckPayload;
       try {
-        ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
+        const rawAckReport = await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH);
+        ack = options.allowProtocolMismatch
+          ? parseAckReport(rawAckReport, { allowProtocolMismatch: true })
+          : parseAckReport(rawAckReport);
       } catch (error) {
         if (!options.allowAckTransportLoss || !isBridgeTransportError(error)) {
           throw error;
@@ -3390,11 +3408,36 @@ export class BridgeService extends EventEmitter {
     await this.pollShortcutEvent();
   }
 
-  private async ensureCompanionDevice(): Promise<void> {
+  private commandProtocolMinorFor(options: CommandOptions): number | undefined {
+    if (!options.allowProtocolMismatch) {
+      return undefined;
+    }
+    const version = this.incompatibleCompanionProtocolVersion;
+    return version?.major === PROTOCOL_MAJOR && version.minor <= PROTOCOL_MINOR
+      ? version.minor
+      : undefined;
+  }
+
+  private rememberIncompatibleProtocolVersion(report: ArrayLike<number>): void {
+    try {
+      this.incompatibleCompanionProtocolVersion = readReportProtocolVersion(report, REPORT_ID.STATUS);
+    } catch {
+      this.incompatibleCompanionProtocolVersion = null;
+    }
+  }
+
+  private async ensureCompanionDevice(options: { allowProtocolMismatch?: boolean } = {}): Promise<void> {
     if (this.device) {
       return;
     }
-    await this.openAndReadStatus();
+    try {
+      await this.openAndReadStatus();
+    } catch (error) {
+      if (options.allowProtocolMismatch && isProtocolMismatch(error) && this.device) {
+        return;
+      }
+      throw error;
+    }
   }
 
   private async openAndReadStatus() {
@@ -3415,7 +3458,17 @@ export class BridgeService extends EventEmitter {
         this.sessionPath = null;
         this.resetStartupReapplyState();
       }
-      const status = parseStatusReport(await this.device.getFeatureReport(REPORT_ID.STATUS, REPORT_LENGTH));
+      const rawStatusReport = await this.device.getFeatureReport(REPORT_ID.STATUS, REPORT_LENGTH);
+      let status: BridgeStatusPayload;
+      try {
+        status = parseStatusReport(rawStatusReport);
+        this.incompatibleCompanionProtocolVersion = null;
+      } catch (error) {
+        if (isProtocolMismatch(error)) {
+          this.rememberIncompatibleProtocolVersion(rawStatusReport);
+        }
+        throw error;
+      }
       return status;
     } catch (error) {
       if (error instanceof ProtocolError) {
@@ -3685,6 +3738,7 @@ export class BridgeService extends EventEmitter {
     }
     this.devicePath = null;
     this.audioStatus = null;
+    this.incompatibleCompanionProtocolVersion = null;
     this.triggerTraceSupported = null;
     this.feedbackTraceSupported = null;
     this.controllerPowerSavingActive = null;

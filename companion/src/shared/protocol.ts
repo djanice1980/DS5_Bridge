@@ -582,6 +582,11 @@ export class ProtocolError extends Error {
   }
 }
 
+export interface ReportProtocolVersion {
+  major: number;
+  minor: number;
+}
+
 function assertReport(report: ArrayLike<number>, reportId: number): void {
   if (report.length !== REPORT_LENGTH) {
     throw new ProtocolError(`Expected ${REPORT_LENGTH} bytes, received ${report.length}.`, 'bad-length');
@@ -602,6 +607,26 @@ function assertVersion(report: ArrayLike<number>): void {
       'bad-version'
     );
   }
+}
+
+function assertCurrentOrOlderVersion(report: ArrayLike<number>): void {
+  if (report[5] !== PROTOCOL_MAJOR || report[6] > PROTOCOL_MINOR) {
+    throw new ProtocolError(
+      `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}, received ${report[5]}.${report[6]}.`,
+      'bad-version'
+    );
+  }
+}
+
+export function readReportProtocolVersion(
+  report: ArrayLike<number>,
+  reportId: number
+): ReportProtocolVersion {
+  assertReport(report, reportId);
+  return {
+    major: report[5],
+    minor: report[6]
+  };
 }
 
 function readU16(report: ArrayLike<number>, offset: number): number {
@@ -740,9 +765,16 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
   };
 }
 
-export function parseAckReport(report: ArrayLike<number>): BridgeAckPayload {
+export function parseAckReport(
+  report: ArrayLike<number>,
+  options: { allowProtocolMismatch?: boolean } = {}
+): BridgeAckPayload {
   assertReport(report, REPORT_ID.ACK);
-  assertVersion(report);
+  if (options.allowProtocolMismatch) {
+    assertCurrentOrOlderVersion(report);
+  } else {
+    assertVersion(report);
+  }
 
   return {
     commandId: report[7],
@@ -938,7 +970,8 @@ export function buildCommandReport(
   commandId: number,
   sequence: number,
   value: number,
-  extraPayload: ArrayLike<number> = []
+  extraPayload: ArrayLike<number> = [],
+  options: { protocolMinor?: number } = {}
 ): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.COMMAND;
@@ -947,7 +980,7 @@ export function buildCommandReport(
   report[3] = MAGIC.charCodeAt(2);
   report[4] = MAGIC.charCodeAt(3);
   report[5] = PROTOCOL_MAJOR;
-  report[6] = PROTOCOL_MINOR;
+  report[6] = options.protocolMinor ?? PROTOCOL_MINOR;
   report[7] = commandId & 0xff;
   report[8] = sequence & 0xff;
   report[9] = value & 0xff;

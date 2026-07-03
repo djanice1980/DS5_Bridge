@@ -195,6 +195,19 @@ describe('companion protocol', () => {
     expect(ack.settingsRevision).toBe(9);
   });
 
+  it('can parse an older ACK report when protocol mismatch is explicitly allowed', () => {
+    const report = baseReport(REPORT_ID.ACK);
+    report[6] = PROTOCOL_MINOR - 1;
+    report[7] = COMMAND_ID.ENTER_BOOTLOADER;
+    report[8] = 4;
+    report[9] = ACK_RESULT.OK;
+
+    expect(() => parseAckReport(report)).toThrow(ProtocolError);
+    const ack = parseAckReport(report, { allowProtocolMismatch: true });
+    expect(ack.commandId).toBe(COMMAND_ID.ENTER_BOOTLOADER);
+    expect(ack.protocolVersion).toBe(`${PROTOCOL_MAJOR}.${PROTOCOL_MINOR - 1}`);
+  });
+
   it('parses an audio debug report', () => {
     const report = baseReport(REPORT_ID.AUDIO_DEBUG);
     report[7] = 1;
@@ -375,6 +388,14 @@ describe('companion protocol', () => {
     expect(report[8]).toBe(12);
     expect(report[9]).toBe(175);
     expect(report[10]).toBe(0);
+  });
+
+  it('can build a Pico bootloader command report for an older protocol minor', () => {
+    const oldMinor = PROTOCOL_MINOR - 1;
+    const report = buildCommandReport(COMMAND_ID.ENTER_BOOTLOADER, 11, 0, [], { protocolMinor: oldMinor });
+    expect(report[5]).toBe(PROTOCOL_MAJOR);
+    expect(report[6]).toBe(oldMinor);
+    expect(report[7]).toBe(COMMAND_ID.ENTER_BOOTLOADER);
   });
 
   it('builds a mute button action command report', () => {

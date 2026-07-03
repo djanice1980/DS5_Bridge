@@ -321,11 +321,14 @@ function ackReport(options: {
   sequence: number;
   result: number;
   settingsRevision: number;
+  protocolMajor?: number;
+  protocolMinor?: number;
 }): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.ACK;
   writeMagic(report);
-  writeVersion(report);
+  report[5] = options.protocolMajor ?? PROTOCOL_MAJOR;
+  report[6] = options.protocolMinor ?? PROTOCOL_MINOR;
   report[7] = options.commandId;
   report[8] = options.sequence;
   report[9] = options.result;
@@ -2081,6 +2084,34 @@ describe('BridgeService', () => {
     expect(command?.[9]).toBe(0);
     expect(device.closeCount).toBe(1);
     expect(service.getSnapshot().diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.OK);
+  });
+
+  it('sends Pico bootloader command using an older incompatible firmware protocol minor', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    const oldMinor = PROTOCOL_MINOR - 1;
+    device.status = statusReport({ protocolMinor: oldMinor });
+    device.ackReports.push(ackReport({
+      commandId: COMMAND_ID.ENTER_BOOTLOADER,
+      sequence: 1,
+      result: ACK_RESULT.OK,
+      settingsRevision: 0,
+      protocolMinor: oldMinor
+    }));
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    expect(service.getSnapshot().state).toBe('incompatible');
+
+    await service.mountPicoBootloader();
+
+    const command = device.sentReports.find((report) => report[7] === COMMAND_ID.ENTER_BOOTLOADER);
+    expect(command?.[5]).toBe(PROTOCOL_MAJOR);
+    expect(command?.[6]).toBe(oldMinor);
+    expect(command?.[7]).toBe(COMMAND_ID.ENTER_BOOTLOADER);
+    expect(command?.[9]).toBe(0);
+    expect(service.getSnapshot().diagnostics.lastAck?.protocolVersion).toBe(`${PROTOCOL_MAJOR}.${oldMinor}`);
   });
 
   it('tolerates Pico bootloader transport loss while sending the command', async () => {
