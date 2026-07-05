@@ -17,9 +17,9 @@
 </p>
 
 <p align="center">
-  <strong>DS5 Bridge 1.0 is live.</strong><br>
-  The first stable release includes the Windows companion app, Pico 2 W firmware,
-  profiles, visual button remapping, microphone support, and headphone-jack audio.
+  <strong>DS5 Bridge 1.6.3 is live.</strong><br>
+  This release includes controller microphone support, Audio Haptics, Trigger
+  Lab, controller personas, chords, and companion firmware tools.
 </p>
 
 DS5 Bridge lets you use a real Sony DualSense or DualSense Edge controller
@@ -27,8 +27,8 @@ wirelessly on a Windows PC through a Raspberry Pi Pico 2 W. The controller pairs
 to the Pico over Bluetooth, and the Pico plugs into your PC over USB.
 
 The companion app gives you a clean place to adjust audio, haptics, trigger
-strength, lighting, button remaps, shortcuts, and other controller behavior
-without reflashing the Pico.
+strength, lighting, button remaps, shortcuts, firmware tools, and other
+controller behavior without rebuilding firmware.
 
 ## Quick Start
 
@@ -36,9 +36,11 @@ without reflashing the Pico.
    [Releases](https://github.com/SundayMoments/DS5_Bridge/releases/latest).
 2. With the Pico 2 W unplugged, hold `BOOTSEL`, then connect it to your PC.
 3. Copy the `.uf2` file onto the Pico drive that appears in Windows.
-4. Put the DualSense controller into Bluetooth pairing mode.
-5. After the Pico restarts from flashing, wait for the controller to pair.
-6. Install and open DS5 Bridge to check the connection and adjust your settings.
+4. Put the DualSense controller into Bluetooth pairing mode by holding `Create`
+   and `PS` until the lightbar rapidly blinks blue.
+5. Wait for the controller to pair to the Pico, not directly to Windows.
+6. Install and open DS5 Bridge. The Overview page should show the connected
+   bridge and firmware version.
 
 Once the controller connects to the Pico, Windows sees it as a normal
 DualSense-compatible USB controller.
@@ -46,10 +48,14 @@ DualSense-compatible USB controller.
 ## Features
 
 - Use a DualSense or DualSense Edge wirelessly through a Pico 2 W.
+- Use the controller speaker, headset jack, microphone, and audio-driven haptics.
 - Tune audio, haptics, adaptive triggers, and lighting from the Windows app.
+- Use Audio Haptics to turn system or app audio into controller feedback.
 - Save controller setups as profiles.
-- Remap controller buttons visually.
+- Remap buttons and assign chord shortcuts.
+- Switch the host persona between DualSense, DualShock 4, and Xbox modes.
 - See Bluetooth signal quality at a glance.
+- Mount, flash, or nuke Pico firmware from Bridge Settings.
 
 ## Companion App Tour
 
@@ -58,36 +64,54 @@ the setup you actually want to play with.
 
 ### Overview
 
-See the connection, battery, audio route, Bluetooth signal quality, active
-profile, and the settings most likely to matter during play.
+See connection health, firmware version, battery, audio route, Bluetooth signal
+quality, host persona, and the settings most likely to matter during play.
 
 <p align="center">
   <img src="assets/readme/app-overview.png" width="680" alt="Overview dashboard in the DS5 Bridge companion app">
 </p>
 
-### Haptics
-
-Adjust HD haptics and classic rumble strength, then test the feel before
-opening a game.
-
-<p align="center">
-  <img src="assets/readme/app-haptics.png" width="680" alt="Haptics and rumble controls in the DS5 Bridge companion app">
-</p>
-
 ### Audio
 
-Control the controller speaker, headphone-jack audio, and microphone level.
+Control the controller speaker, headphone-jack route, microphone level, speaker
+gain, and buffer length.
 
 <p align="center">
   <img src="assets/readme/app-audio.png" width="680" alt="Audio controls in the DS5 Bridge companion app">
 </p>
 
+### Haptics
+
+Adjust HD haptics, classic rumble, feedback boost, and audio buffer length, then
+test the feel before opening a game.
+
+<p align="center">
+  <img src="assets/readme/app-haptics.png" width="680" alt="Haptics and rumble controls in the DS5 Bridge companion app">
+</p>
+
+### Audio Haptics
+
+Turn system audio or an app session into controller haptic feedback.
+
+<p align="center">
+  <img src="assets/readme/app-audio-haptics.png" width="680" alt="Audio Haptics controls in the DS5 Bridge companion app">
+</p>
+
 ### Triggers
 
-Set adaptive trigger strength and try sample effects without leaving the app.
+Set adaptive trigger strength, try effects, or open Trigger Lab for per-trigger
+profiles.
 
 <p align="center">
   <img src="assets/readme/app-triggers.png" width="680" alt="Adaptive trigger controls in the DS5 Bridge companion app">
+</p>
+
+### Trigger Lab
+
+Build and preview adaptive trigger effects before applying them to the controller.
+
+<p align="center">
+  <img src="assets/readme/app-trigger-lab.png" width="680" alt="Trigger Lab controls in the DS5 Bridge companion app">
 </p>
 
 ### Lighting
@@ -110,28 +134,52 @@ with it.
 
 ### System
 
-Manage profiles, mute button behavior, polling rate, and diagnostics.
+Manage profiles, mute button behavior, polling rate, host persona, diagnostics,
+and device repair.
 
 <p align="center">
   <img src="assets/readme/app-system.png" width="680" alt="System controls in the DS5 Bridge companion app">
 </p>
 
-### Settings
+### Chords
 
-Set UI scale, startup behavior, power saving, shortcuts, idle disconnect, PC
-sleep disconnect, and the Pico LED.
+Create reusable keyboard, media, and controller actions, then assign them to
+starter chords.
+
+<p align="center">
+  <img src="assets/readme/app-chords.png" width="680" alt="Chord assignment controls in the DS5 Bridge companion app">
+</p>
+
+### Bridge Settings
+
+Set theme, UI scale, tray and startup behavior, firmware maintenance, power
+saving, LEDs, shortcuts, idle disconnect, and PC sleep disconnect.
+
+<p align="center">
+  <img src="assets/readme/app-bridge-settings.png" width="680" alt="Bridge Settings dialog in the DS5 Bridge companion app">
+</p>
 
 ## Troubleshooting
 
+- Use the companion app and firmware from the same release when possible.
+- For first-time flashing, hold `BOOTSEL` before plugging the Pico 2 W into the
+  PC. The Pico should appear as a USB drive.
+- Pair the controller to the Pico, not Windows. Hold `Create` and `PS` until the
+  lightbar rapidly blinks blue.
+- If audio, mic, haptics, or flashing behave oddly, try a direct USB port and a
+  data-capable micro-USB cable before using a hub.
 - If controller audio sounds doubled, distorted, or too loud, restart your PC,
   reopen DS5 Bridge, and run the speaker test again.
+- If Windows keeps stale or duplicate controller/audio devices, use
+  [Windows device cleanup](docs/windows-device-cleanup.md) or System >
+  Emergency Device Repair.
 - Battery level may be inaccurate while the controller is charging.
 
 ## Requirements
 
 - Raspberry Pi Pico 2 W.
 - Sony DualSense or DualSense Edge controller.
-- USB cable from the Pico 2 W to the PC.
+- Data-capable USB cable with a micro-USB end for the Pico 2 W.
 - Windows for the companion app.
 
 ## For Developers
@@ -194,8 +242,3 @@ and credited in [NOTICE](NOTICE).
   report packet references.
 - Alex Smith of The Cynic Project for the speaker test sound, "Crystal Cave"
   (`song18`).
-
-## Disclaimer
-
-This project was vibecoded, so the occasional peculiarity may show through.
-That said, it has been tested and edited with care.
