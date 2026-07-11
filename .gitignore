@@ -1,6 +1,7 @@
 build
 build-*
 !tools/build-pico-universal-flash-nuke.ps1
+!tools/build-pico-universal-flash-nuke.sh
 artifacts
 .vscode
 .idea
