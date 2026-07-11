@@ -138,6 +138,13 @@
         }
       ]
     },
+    "pacman": {
+      "fpm": [
+        "--after-install=../packaging/linux/pacman-after-install.sh",
+        "--after-remove=../packaging/linux/pacman-after-remove.sh",
+        "../packaging/linux/60-ds5bridge.rules=/usr/lib/udev/rules.d/60-ds5bridge.rules"
+      ]
+    },
     "nsis": {
       "guid": "40464839-1bb3-5f24-b04b-13b55106e88b",
       "oneClick": false,

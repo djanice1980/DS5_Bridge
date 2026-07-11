@@ -295,6 +295,7 @@ jobs:
             || cp companion/artifacts/installer/DS5-Bridge-Companion-${version}-linux-x64.AppImage artifacts/
           cp companion/artifacts/installer/DS5-Bridge-Companion-${version}-linux-x64.pacman artifacts/
           cp packaging/linux/60-ds5bridge.rules artifacts/
+          cp packaging/linux/install-udev-rules.sh artifacts/
 
       - name: Upload Linux companion assets to release
         env:

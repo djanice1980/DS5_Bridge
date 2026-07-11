@@ -43,22 +43,27 @@ install.
 ## 2. Install the udev rules (required once)
 
 The companion needs unprivileged access to the bridge's USB interfaces and to
-`/dev/uinput` for chord key injection. The rules file
-`60-ds5bridge.rules` ships with every release (also inside the package at
-`resources/udev/60-ds5bridge.rules`, and in the repo at
-`packaging/linux/60-ds5bridge.rules`).
+`/dev/uinput` for chord key injection.
+
+**pacman package: nothing to do.** The package installs the rules to
+`/usr/lib/udev/rules.d/`, reloads udev, and enables `uinput` automatically
+(and cleans up on uninstall). Just replug the bridge after installing.
+
+**AppImage: one command.** Download `install-udev-rules.sh` from the same
+release into the folder that holds the AppImage, then:
 
 ```bash
-sudo cp 60-ds5bridge.rules /etc/udev/rules.d/
-sudo udevadm control --reload
-sudo udevadm trigger
+sudo bash install-udev-rules.sh
 ```
 
-Then unplug and replug the bridge.
+It installs the rules (extracting them from the AppImage if the standalone
+`60-ds5bridge.rules` isn't next to it), reloads udev, and enables the
+`uinput` module now and on boot. Then unplug and replug the bridge.
 
-`uinput` note: CachyOS loads the `uinput` module out of the box (Steam needs
-it too). Verify with `ls /dev/uinput`; if it is missing, run
-`echo uinput | sudo tee /etc/modules-load.d/uinput.conf` and reboot.
+Manual fallback (what the script does): copy `60-ds5bridge.rules` to
+`/etc/udev/rules.d/`, run `sudo udevadm control --reload && sudo udevadm
+trigger`, and ensure `uinput` is loaded
+(`echo uinput | sudo tee /etc/modules-load.d/ds5bridge-uinput.conf`).
 
 ## 3. Flash firmware and pair (same as Windows)
 
