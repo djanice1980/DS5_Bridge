@@ -215,6 +215,93 @@ jobs:
           $assets = Get-ChildItem artifacts -File | ForEach-Object { $_.FullName }
           gh release upload $env:RELEASE_TAG @assets --clobber
 
+  companion-linux:
+    name: Build and upload Linux companion
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: companion/package-lock.json
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Install firmware and packaging dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake python3 build-essential ninja-build libarchive-tools
+
+      - name: Cache ARM toolchain
+        id: cache-arm-toolchain
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.ARM_TOOLCHAIN_PATH }}
+          key: ${{ runner.os }}-${{ runner.arch }}-arm-toolchain-${{ env.ARM_TOOLCHAIN_VERSION }}
+
+      - name: Download ARM toolchain
+        if: steps.cache-arm-toolchain.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$ARM_TOOLCHAIN_PATH"
+          curl -fsSL "$ARM_TOOLCHAIN_URL" | sudo tar -xJ -C "$ARM_TOOLCHAIN_PATH" --strip-components=1
+          sudo chmod -R a+rX "$ARM_TOOLCHAIN_PATH"
+
+      - name: Add ARM toolchain to PATH
+        run: |
+          echo "$ARM_TOOLCHAIN_PATH/bin" >> "$GITHUB_PATH"
+
+      - name: Download Pico SDK
+        run: |
+          git clone --depth 1 --branch "$PICO_SDK_REF" https://github.com/raspberrypi/pico-sdk.git "$PICO_SDK_PATH"
+          git -C "$PICO_SDK_PATH" submodule update --init --recursive
+
+      - name: Switch TinyUSB to configured tag
+        run: |
+          if ! git -C "$PICO_SDK_PATH/lib/tinyusb" rev-parse -q --verify "refs/tags/$TINYUSB_REF" >/dev/null; then
+            git -C "$PICO_SDK_PATH/lib/tinyusb" fetch --depth 1 origin "refs/tags/$TINYUSB_REF:refs/tags/$TINYUSB_REF"
+          fi
+          git -C "$PICO_SDK_PATH/lib/tinyusb" checkout --detach "$TINYUSB_REF"
+
+      - name: Build Pico Universal Flash Nuke
+        run: |
+          chmod +x tools/build-pico-universal-flash-nuke.sh
+          ./tools/build-pico-universal-flash-nuke.sh
+
+      - name: Install companion dependencies
+        working-directory: companion
+        run: npm ci
+
+      - name: Build Linux companion packages
+        working-directory: companion
+        run: npm run package:linux
+
+      - name: Stage Linux companion release assets
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./companion/package.json').version")
+          mkdir -p artifacts
+          cp companion/artifacts/installer/DS5-Bridge-Companion-${version}-linux-x86_64.AppImage artifacts/ 2>/dev/null \
+            || cp companion/artifacts/installer/DS5-Bridge-Companion-${version}-linux-x64.AppImage artifacts/
+          cp companion/artifacts/installer/DS5-Bridge-Companion-${version}-linux-x64.pacman artifacts/
+          cp packaging/linux/60-ds5bridge.rules artifacts/
+
+      - name: Upload Linux companion assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "$RELEASE_TAG" artifacts/* --clobber
+
   metadata:
     name: Upload release metadata
     runs-on: ubuntu-latest

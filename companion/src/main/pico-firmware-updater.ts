@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { PicoFirmwareActionResult } from '../shared/types';
+import { linuxRemovableMediaRoots, tryMountPicoBootloaderBlockDevice } from './linux-removable-media';
 import { PICO_UNIVERSAL_FLASH_NUKE_SHA256 } from './pico-universal-flash-nuke-hash';
 
 export const PICO_UNIVERSAL_FLASH_NUKE_FILE = 'pico-universal-flash-nuke.uf2';
@@ -27,7 +28,13 @@ function windowsDriveRoots(): string[] {
 }
 
 function defaultDriveRoots(): string[] {
-  return process.platform === 'win32' ? windowsDriveRoots() : [];
+  if (process.platform === 'win32') {
+    return windowsDriveRoots();
+  }
+  if (process.platform === 'linux') {
+    return linuxRemovableMediaRoots();
+  }
+  return [];
 }
 
 function normalizeDriveRoot(root: string): string {
@@ -47,11 +54,24 @@ async function readPicoBootloaderInfo(root: string): Promise<string | null> {
   }
 }
 
-export async function findPicoBootloaderDrive(driveRoots = defaultDriveRoots()): Promise<PicoBootloaderDrive | null> {
-  for (const root of driveRoots) {
+export async function findPicoBootloaderDrive(driveRoots?: string[]): Promise<PicoBootloaderDrive | null> {
+  for (const root of driveRoots ?? defaultDriveRoots()) {
     const info = await readPicoBootloaderInfo(root);
     if (info) {
       return { root: normalizeDriveRoot(root), info };
+    }
+  }
+
+  // Without an automounter (gamescope Steam session) the UF2 drive never shows
+  // up under the media roots; ask udisks2 to mount it. Skipped when the caller
+  // injects explicit roots so tests stay hermetic.
+  if (!driveRoots && process.platform === 'linux') {
+    const mountedRoot = await tryMountPicoBootloaderBlockDevice();
+    if (mountedRoot) {
+      const info = await readPicoBootloaderInfo(mountedRoot);
+      if (info) {
+        return { root: normalizeDriveRoot(mountedRoot), info };
+      }
     }
   }
   return null;
@@ -64,7 +84,7 @@ async function wait(ms: number): Promise<void> {
 }
 
 export async function waitForPicoBootloaderDrive(
-  driveRoots = defaultDriveRoots(),
+  driveRoots?: string[],
   timeoutMs = PICO_BOOTLOADER_WAIT_MS
 ): Promise<PicoBootloaderDrive | null> {
   const deadline = Date.now() + timeoutMs;

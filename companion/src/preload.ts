@@ -23,6 +23,7 @@ import type {
 } from './shared/types';
 
 const api = {
+  platform: process.platform as string,
   getStatus: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:getStatus'),
   listDevices: () => ipcRenderer.invoke('bridge:listDevices'),
   listAudioHapticsSessions: (): Promise<AudioHapticsSession[]> => (

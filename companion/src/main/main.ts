@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BridgeService } from './bridge-service';
+import { applyLinuxLaunchAtStartup } from './linux-autostart';
 import {
   PICO_UNIVERSAL_FLASH_NUKE_FILE,
   PICO_UNIVERSAL_FLASH_NUKE_SHA256_FILE,
@@ -349,6 +350,18 @@ function loginItemArgs(): string[] {
 }
 
 function applyLaunchAtStartup(enabled: boolean): void {
+  if (process.platform === 'linux') {
+    try {
+      applyLinuxLaunchAtStartup(enabled, {
+        execPath: process.execPath,
+        args: loginItemArgs()
+      });
+    } catch (error) {
+      console.warn('Failed to update launch at startup setting:', error);
+    }
+    return;
+  }
+
   if (process.platform !== 'win32') {
     return;
   }

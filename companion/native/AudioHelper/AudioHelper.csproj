@@ -2,14 +2,27 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <!-- Windows keeps the WASAPI/WinRT helper; net9.0 builds the Linux helper
+         (PipeWire + libusb + uinput backends under Linux/). Non-Windows hosts
+         cannot restore the -windows TFM, so they build net9.0 only. -->
+    <TargetFrameworks>net9.0-windows10.0.19041.0;net9.0</TargetFrameworks>
+    <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net9.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <ApplicationIcon>Assets\ds5-audio-bridge.ico</ApplicationIcon>
     <AssemblyTitle>DS5 Bridge Audio Helper</AssemblyTitle>
     <Description>DS5 Bridge Audio Helper</Description>
     <Product>DS5 Bridge Audio Helper</Product>
     <Company>DS5 Bridge</Company>
+    <IsWindowsTarget>$(TargetFramework.Contains('-windows'))</IsWindowsTarget>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsWindowsTarget)' == 'True'">
+    <ApplicationIcon>Assets\ds5-audio-bridge.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsWindowsTarget)' != 'True'">
+    <!-- Fixed-size uinput device name buffer in LinuxUinputKeyboard. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
@@ -19,7 +32,28 @@
     <PathMap>$(MSBuildProjectDirectory)=/_/companion/native/AudioHelper</PathMap>
   </PropertyGroup>
 
-  <ItemGroup>
+  <!-- Windows-only sources (WASAPI, WinUSB, WinRT, Shell). -->
+  <ItemGroup Condition="'$(IsWindowsTarget)' != 'True'">
+    <Compile Remove="AudioSessionCatalog.cs" />
+    <Compile Remove="AudioSessionMonitor.cs" />
+    <Compile Remove="CompanionTransportServer.cs" />
+    <Compile Remove="EndpointManager.cs" />
+    <Compile Remove="PackageAppMetadataResolver.cs" />
+    <Compile Remove="PicoTransport.cs" />
+    <Compile Remove="ProcessIconDataUrlResolver.cs" />
+    <Compile Remove="ProcessLoopbackAudioClient.cs" />
+    <Compile Remove="Program.cs" />
+    <Compile Remove="WindowsMediaSessionCli.cs" />
+    <Compile Remove="WinUsbBridgeTransport.cs" />
+    <Compile Remove="WinUsbPcmTransport.cs" />
+  </ItemGroup>
+
+  <!-- Linux-only sources. -->
+  <ItemGroup Condition="'$(IsWindowsTarget)' == 'True'">
+    <Compile Remove="Linux\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(IsWindowsTarget)' == 'True'">
     <PackageReference Include="Concentus" Version="1.1.7" />
     <PackageReference Include="HidSharp" Version="2.1.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />

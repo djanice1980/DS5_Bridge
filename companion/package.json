@@ -2,20 +2,23 @@
   "name": "ds5-bridge-companion",
   "version": "1.6.3",
   "private": true,
-  "description": "Windows companion app for the Pico DS5 Bridge companion firmware.",
+  "description": "Companion app for the Pico DS5 Bridge companion firmware.",
   "author": "SundayMoments",
+  "homepage": "https://github.com/SundayMoments/DS5_Bridge",
   "productName": "DS5 Bridge",
   "license": "AGPL-3.0-only",
   "main": "dist/main/main/main.js",
   "scripts": {
     "dev": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "build:audio-helper": "dotnet publish native/AudioHelper/AudioHelper.csproj -c Release -r win-x64 --self-contained true -o native/AudioHelper/bin/publish/win-x64",
+    "build:audio-helper": "dotnet publish native/AudioHelper/AudioHelper.csproj -c Release -f net9.0-windows10.0.19041.0 -r win-x64 --self-contained true -o native/AudioHelper/bin/publish/win-x64",
+    "build:audio-helper:linux": "dotnet publish native/AudioHelper/AudioHelper.csproj -c Release -f net9.0 -r linux-x64 --self-contained true -o native/AudioHelper/bin/publish/linux-x64",
     "build:firmware-tools": "powershell -NoProfile -ExecutionPolicy Bypass -File ../tools/build-pico-universal-flash-nuke.ps1",
     "build:app": "tsc -p tsconfig.main.json && vite build",
     "build": "npm run build:audio-helper && npm run build:app",
     "package:win": "npm run build:firmware-tools && npm run build && node scripts/package-win.mjs",
     "installer:win": "npm run build:firmware-tools && npm run build && electron-builder --win nsis --x64",
+    "package:linux": "npm run build:audio-helper:linux && npm run build:app && electron-builder --linux --x64",
     "test": "npm run test:companion && npm run test:installer && npm run test:native && npm run test:firmware",
     "test:companion": "vitest run src",
     "test:installer": "node scripts/check-installer-upgrade-config.mjs",
@@ -38,6 +41,8 @@
       "node_modules/node-hid/nodehid.js",
       "node_modules/node-hid/package.json",
       "node_modules/node-hid/prebuilds/HID-win32-x64/**/*",
+      "node_modules/node-hid/prebuilds/HID_hidraw-linux-x64/**/*",
+      "node_modules/node-hid/prebuilds/HID-linux-x64/**/*",
       "node_modules/pkg-prebuilds/bindings.js",
       "node_modules/pkg-prebuilds/lib/**/*",
       "node_modules/pkg-prebuilds/package.json"
@@ -54,25 +59,11 @@
         ]
       },
       {
-        "from": "native/AudioHelper/bin/publish/win-x64",
-        "to": "native/AudioHelper",
-        "filter": [
-          "**/*"
-        ]
-      },
-      {
         "from": "firmware",
         "to": "firmware",
         "filter": [
           "pico-universal-flash-nuke.uf2",
           "pico-universal-flash-nuke.uf2.sha256"
-        ]
-      },
-      {
-        "from": "../tools/windows",
-        "to": "tools/windows",
-        "filter": [
-          "clean-ds5bridge-devices.ps1"
         ]
       }
     ],
@@ -84,9 +75,63 @@
     "win": {
       "icon": "../assets/controllers/ds5-bridge_app-icon-tile.ico",
       "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "native/AudioHelper/bin/publish/win-x64",
+          "to": "native/AudioHelper",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "../tools/windows",
+          "to": "tools/windows",
+          "filter": [
+            "clean-ds5bridge-devices.ps1"
+          ]
+        }
+      ],
       "target": [
         {
           "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "../assets/controllers/ds5-bridge_app-icon-tile.png",
+      "category": "Game",
+      "maintainer": "SundayMoments <sundaymoments@users.noreply.github.com>",
+      "synopsis": "Companion app for the DS5 Bridge Pico dongle",
+      "artifactName": "DS5-Bridge-Companion-${version}-linux-${arch}.${ext}",
+      "executableName": "ds5-bridge",
+      "extraResources": [
+        {
+          "from": "native/AudioHelper/bin/publish/linux-x64",
+          "to": "native/AudioHelper",
+          "filter": [
+            "**/*"
+          ]
+        },
+        {
+          "from": "../packaging/linux",
+          "to": "udev",
+          "filter": [
+            "60-ds5bridge.rules"
+          ]
+        }
+      ],
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "pacman",
           "arch": [
             "x64"
           ]

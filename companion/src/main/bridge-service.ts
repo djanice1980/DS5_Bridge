@@ -83,6 +83,8 @@ import {
   playBridgeSpeakerTestTone,
   getDefaultRenderEndpointStatus,
   setDefaultRenderBridgeEndpoint,
+  stopVirtualKeyboardEngine,
+  virtualKeyboardEngine,
   type DefaultRenderEndpointStatus,
   type SystemAudioHapticsConfig
 } from './audio-helper';
@@ -280,9 +282,10 @@ function firmwareUpdateAvailable(
 
 function isBridgeTransportError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /WinUSB bridge (?:GET_REPORT|SET_REPORT|sendFeatureReport|getFeatureReport) failed/i.test(message)
-    || /WinUSB bridge helper request timed out/i.test(message)
+  return /(?:Win)?USB bridge (?:GET_REPORT|SET_REPORT|sendFeatureReport|getFeatureReport) failed/i.test(message)
+    || /(?:Win)?USB bridge helper request timed out/i.test(message)
     || /A device attached to the system is not functioning/i.test(message)
+    || /LIBUSB_ERROR_(?:NO_DEVICE|NOT_FOUND|IO|PIPE)/i.test(message)
     || /No companion bridge is connected/i.test(message);
 }
 
@@ -712,6 +715,12 @@ async function sendVirtualKeySequence(codes: number[]): Promise<void> {
     .map((code) => Math.max(0, Math.min(0xff, Math.round(code))))
     .filter((code) => Number.isFinite(code) && code > 0);
   if (normalized.length === 0) {
+    return;
+  }
+  if (process.platform === 'linux') {
+    // The helper maps the Windows virtual-key codes (the app's internal key
+    // currency) to evdev codes and types them on a persistent uinput keyboard.
+    await virtualKeyboardEngine().sendKeySequence(normalized);
     return;
   }
   const downCodes = normalized.join(',');
@@ -1361,6 +1370,7 @@ export class BridgeService extends EventEmitter {
     }
 
     await this.stopControllerAudioPolling();
+    await stopVirtualKeyboardEngine();
     this.hidDiscovery.stop();
     this.closeDevice();
   }

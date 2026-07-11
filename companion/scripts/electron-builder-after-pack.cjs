@@ -33,14 +33,19 @@ function sourceNotice(repoDir) {
 }
 
 exports.default = async function afterPack(context) {
-  const exePath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.exe`);
   const repoDir = path.resolve(__dirname, '..', '..');
-  const appIcon = path.join(repoDir, 'assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
 
   fs.copyFileSync(path.join(repoDir, 'LICENSE'), path.join(context.appOutDir, 'LICENSE'));
   fs.copyFileSync(path.join(repoDir, 'NOTICE'), path.join(context.appOutDir, 'NOTICE'));
   fs.writeFileSync(path.join(context.appOutDir, 'SOURCE.txt'), sourceNotice(repoDir), 'utf8');
 
+  // PE version resources only exist on the Windows executable.
+  if (context.electronPlatformName !== 'win32') {
+    return;
+  }
+
+  const exePath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.exe`);
+  const appIcon = path.join(repoDir, 'assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
   await rcedit(exePath, {
     icon: appIcon,
     'file-version': appPackage.version,

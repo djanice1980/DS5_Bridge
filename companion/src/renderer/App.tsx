@@ -132,6 +132,8 @@ import type {
 } from '../shared/protocol';
 import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
 
+const IS_WINDOWS_HOST = window.bridge?.platform === 'win32';
+
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system';
 type StartupTutorialStep = 'feature-toggle' | 'support' | 'done';
 type ControllerType = BridgeStatusPayload['controllerType'];
@@ -7004,7 +7006,7 @@ export function App() {
                         <span className={`dot ${audioReactiveHapticsStatusTone}`} />
                         <strong>{audioReactiveHapticsStatusLabel}</strong>
                       </span>
-                      <span className={`status-badge ${audioReactiveHapticsStatusTone}`} title={audioReactiveHapticsSourceKey === 'system-audio' ? 'Using the mixed Windows output.' : 'Using the selected app audio session.'}>
+                      <span className={`status-badge ${audioReactiveHapticsStatusTone}`} title={audioReactiveHapticsSourceKey === 'system-audio' ? (IS_WINDOWS_HOST ? 'Using the mixed Windows output.' : 'Using the mixed system output.') : 'Using the selected app audio session.'}>
                         <span className={`dot ${audioReactiveHapticsEnabled ? audioReactiveHapticsStatusTone : 'idle'}`} />
                         <strong>{selectedAudioHapticsSourceDisplayName}</strong>
                       </span>
@@ -8661,16 +8663,18 @@ export function App() {
                   <p>Configure bridge behavior and defaults.</p>
                 </div>
                 <div className="profile-controls">
-                  <button
-                    className="heading-icon-action emergency-repair-button"
-                    type="button"
-                    title="Emergency device repair"
-                    aria-label="Emergency device repair"
-                    disabled={pendingAction !== null}
-                    onClick={openDeviceCleanupConfirm}
-                  >
-                    <IconTool size={20} />
-                  </button>
+                  {IS_WINDOWS_HOST && (
+                    <button
+                      className="heading-icon-action emergency-repair-button"
+                      type="button"
+                      title="Emergency device repair"
+                      aria-label="Emergency device repair"
+                      disabled={pendingAction !== null}
+                      onClick={openDeviceCleanupConfirm}
+                    >
+                      <IconTool size={20} />
+                    </button>
+                  )}
                   <CustomSelect
                     value={selectedControllerProfileId}
                     disabled={!connected || pendingAction !== null}
@@ -9410,7 +9414,7 @@ export function App() {
                 <div className="settings-menu-row">
                   <div className="settings-menu-copy">
                     <strong>Launch at Startup</strong>
-                    <span>Start in the tray when Windows starts</span>
+                    <span>{IS_WINDOWS_HOST ? 'Start in the tray when Windows starts' : 'Start in the tray at login'}</span>
                   </div>
                   <button
                     type="button"

@@ -104,6 +104,31 @@ The helper output is written to:
 companion/native/AudioHelper/bin/publish/win-x64
 ```
 
+### Linux companion
+
+The audio helper is multi-targeted: `net9.0-windows10.0.19041.0` builds the
+Windows helper, plain `net9.0` builds the Linux helper (PipeWire + libusb +
+uinput backends in `companion/native/AudioHelper/Linux/`). On Windows both
+frameworks compile, which keeps Linux-only sources honest in CI; on Linux only
+`net9.0` builds.
+
+```bash
+cd companion
+npm ci
+npm run build:audio-helper:linux   # publishes bin/publish/linux-x64
+npm run build:app
+npx electron .                     # run from source
+npm run package:linux              # AppImage + pacman (needs the flash-nuke UF2)
+```
+
+`package:linux` expects `companion/firmware/pico-universal-flash-nuke.uf2`;
+build it with `tools/build-pico-universal-flash-nuke.sh` before `build:app`.
+Like the PowerShell script, it regenerates the embedded hash in
+`pico-universal-flash-nuke-hash.ts` so the app and the UF2 it bundles always
+come from the same build. Device permissions come from
+`packaging/linux/60-ds5bridge.rules`. End-user install steps live in
+[cachyos-install.md](cachyos-install.md).
+
 Packaging also builds the repo-owned Pico Universal Flash Nuke utility from
 `tools/pico-universal-flash-nuke`, then writes the bundled UF2 and manifest used
 by the Bridge Settings nuke action to:

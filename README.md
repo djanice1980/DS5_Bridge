@@ -180,7 +180,8 @@ saving, LEDs, shortcuts, idle disconnect, and PC sleep disconnect.
 - Raspberry Pi Pico 2 W.
 - Sony DualSense or DualSense Edge controller.
 - Data-capable USB cable with a micro-USB end for the Pico 2 W.
-- Windows for the companion app.
+- Windows or Linux for the companion app. For Linux (CachyOS/Arch, including
+  BC-250 Steam machines), see [docs/cachyos-install.md](docs/cachyos-install.md).
 
 ## For Developers
 

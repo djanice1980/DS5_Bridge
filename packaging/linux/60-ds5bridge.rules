@@ -1,0 +1,24 @@
+# DS5 Bridge — device access for the Linux companion app.
+# Install to /usr/lib/udev/rules.d/ (or /etc/udev/rules.d/), then run:
+#   sudo udevadm control --reload && sudo udevadm trigger
+# and replug the bridge.
+
+# Companion HID interface (node-hid, hidraw) for every bridge persona.
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="db05", TAG+="uaccess"
+
+# Vendor companion interface (libusb) for every bridge persona.
+SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="0ce6", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="0df2", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="09cc", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="db05", TAG+="uaccess"
+
+# Chord key injection (virtual keyboard).
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
+
+# Xbox 360 persona uses a pid.codes identity that the xpad driver does not
+# know; teach it on hotplug so the gamepad works in that mode.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="db05", \
+  RUN+="/bin/sh -c 'modprobe xpad 2>/dev/null; echo 1209 db05 > /sys/bus/usb/drivers/xpad/new_id 2>/dev/null || true'"

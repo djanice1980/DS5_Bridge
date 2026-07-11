@@ -55,7 +55,9 @@ const HELPER_COMMAND_TIMEOUT_MS = 2500;
 const HELPER_SESSION_MONITOR_START_TIMEOUT_MS = 3000;
 const HELPER_SESSION_MONITOR_STOP_TIMEOUT_MS = 500;
 const HELPER_STDERR_MAX_CHARS = 8192;
-const HELPER_RELATIVE_PATH = path.join('native', 'AudioHelper', 'AudioHelper.exe');
+const HELPER_EXECUTABLE_NAME = process.platform === 'win32' ? 'AudioHelper.exe' : 'AudioHelper';
+const HELPER_PUBLISH_RID = process.platform === 'win32' ? 'win-x64' : 'linux-x64';
+const HELPER_RELATIVE_PATH = path.join('native', 'AudioHelper', HELPER_EXECUTABLE_NAME);
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
 
 const DEV_HELPER_RELATIVE_PATH = path.join(
@@ -63,8 +65,8 @@ const DEV_HELPER_RELATIVE_PATH = path.join(
   'AudioHelper',
   'bin',
   'publish',
-  'win-x64',
-  'AudioHelper.exe'
+  HELPER_PUBLISH_RID,
+  HELPER_EXECUTABLE_NAME
 );
 
 export type AudioHelperCommand = {
@@ -954,6 +956,212 @@ export class MicKeepaliveEngine extends EventEmitter {
   }
 }
 
+const UINPUT_READY_MESSAGE = 'status: uinput-ready';
+const UINPUT_UNAVAILABLE_PREFIX = 'status: uinput-unavailable';
+const UINPUT_START_TIMEOUT_MS = 5000;
+
+// Persistent helper-hosted /dev/uinput keyboard for chord key injection on
+// Linux. The device stays open between chords: compositors ignore events from
+// a uinput device for a short window after it appears, so a device-per-press
+// approach drops keystrokes.
+export class VirtualKeyboardEngine extends EventEmitter {
+  private process: ChildProcessWithoutNullStreams | null = null;
+  private starting: Promise<void> | null = null;
+  private queue: Promise<void> = Promise.resolve();
+  private pendingResponse: { resolve: () => void; reject: (error: Error) => void } | null = null;
+  private stdoutBuffer = '';
+
+  async sendKeySequence(codes: number[]): Promise<void> {
+    const task = this.queue.then(() => this.sendKeySequenceInternal(codes));
+    this.queue = task.then(
+      () => undefined,
+      () => undefined
+    );
+    return task;
+  }
+
+  async stop(): Promise<void> {
+    const helper = this.process;
+    this.process = null;
+    this.failPendingResponse(new Error('Virtual keyboard helper stopped.'));
+    if (!helper) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        if (!helper.killed) {
+          helper.kill('SIGKILL');
+        }
+        resolve();
+      }, 500);
+
+      helper.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+
+      helper.stdin?.end();
+      helper.kill();
+    });
+  }
+
+  private async sendKeySequenceInternal(codes: number[]): Promise<void> {
+    await this.ensureStarted();
+    const helper = this.process;
+    if (!helper?.stdin?.writable) {
+      throw new Error('Virtual keyboard helper is not running.');
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pendingResponse = null;
+        reject(new Error('Timed out waiting for the virtual keyboard helper.'));
+      }, HELPER_COMMAND_TIMEOUT_MS);
+      this.pendingResponse = {
+        resolve: () => {
+          clearTimeout(timeout);
+          resolve();
+        },
+        reject: (error: Error) => {
+          clearTimeout(timeout);
+          reject(error);
+        }
+      };
+      helper.stdin.write(`keys ${codes.join(',')}\n`, (error) => {
+        if (error) {
+          this.pendingResponse = null;
+          clearTimeout(timeout);
+          reject(error);
+        }
+      });
+    });
+  }
+
+  private async ensureStarted(): Promise<void> {
+    if (this.process) {
+      return;
+    }
+    if (this.starting) {
+      return this.starting;
+    }
+    this.starting = this.startInternal().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  private startInternal(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const helperPath = resolveHelperPath();
+      const helper = spawn(helperPath, ['--uinput-keyboard'], {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe']
+      }) as ChildProcessWithoutNullStreams;
+
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          helper.kill();
+          reject(new Error('Timed out starting the virtual keyboard helper.'));
+        }
+      }, UINPUT_START_TIMEOUT_MS);
+
+      helper.stderr.on('data', (chunk: Buffer) => {
+        for (const line of chunk.toString('utf8').split(/\r?\n/)) {
+          const trimmed = line.trim();
+          if (!trimmed) {
+            continue;
+          }
+          this.emit('status', trimmed);
+          if (!settled && trimmed.startsWith(UINPUT_READY_MESSAGE)) {
+            settled = true;
+            clearTimeout(timeout);
+            this.process = helper;
+            resolve();
+          } else if (!settled && trimmed.startsWith(UINPUT_UNAVAILABLE_PREFIX)) {
+            settled = true;
+            clearTimeout(timeout);
+            helper.kill();
+            reject(new Error(`Virtual keyboard unavailable: ${trimmed}`));
+          }
+        }
+      });
+
+      helper.stdout.on('data', (chunk: Buffer) => {
+        this.stdoutBuffer += chunk.toString('utf8');
+        let newlineIndex = this.stdoutBuffer.indexOf('\n');
+        while (newlineIndex >= 0) {
+          const line = this.stdoutBuffer.slice(0, newlineIndex).trim();
+          this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
+          newlineIndex = this.stdoutBuffer.indexOf('\n');
+          if (!line) {
+            continue;
+          }
+          const pending = this.pendingResponse;
+          this.pendingResponse = null;
+          if (!pending) {
+            continue;
+          }
+          if (line === 'ok') {
+            pending.resolve();
+          } else {
+            pending.reject(new Error(`Shortcut key injection failed: ${line}`));
+          }
+        }
+      });
+
+      helper.on('error', (error) => {
+        this.emit('error', error);
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(error);
+        }
+        this.failPendingResponse(error);
+      });
+
+      helper.on('exit', (code, signal) => {
+        if (this.process === helper) {
+          this.process = null;
+        }
+        this.emit('status', `virtual keyboard helper exited (${signal ?? code ?? 'unknown'})`);
+        const exitError = new Error('Virtual keyboard helper exited.');
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+          reject(exitError);
+        }
+        this.failPendingResponse(exitError);
+      });
+    });
+  }
+
+  private failPendingResponse(error: Error): void {
+    const pending = this.pendingResponse;
+    this.pendingResponse = null;
+    pending?.reject(error);
+  }
+}
+
+let sharedVirtualKeyboardEngine: VirtualKeyboardEngine | null = null;
+
+export function virtualKeyboardEngine(): VirtualKeyboardEngine {
+  if (!sharedVirtualKeyboardEngine) {
+    sharedVirtualKeyboardEngine = new VirtualKeyboardEngine();
+  }
+  return sharedVirtualKeyboardEngine;
+}
+
+export async function stopVirtualKeyboardEngine(): Promise<void> {
+  const engine = sharedVirtualKeyboardEngine;
+  sharedVirtualKeyboardEngine = null;
+  if (engine) {
+    await engine.stop();
+  }
+}
+
 export function resolveAudioHelperPath(): string {
   const packagedCandidate = process.resourcesPath ? path.join(process.resourcesPath, HELPER_RELATIVE_PATH) : null;
   const devCandidates = [
@@ -1019,7 +1227,7 @@ function audioHelperBuildDllFallbackCandidates(helperPath: string): string[] {
         continue;
       }
       candidates.push(
-        path.join(configurationDirectory, targetFramework, 'win-x64', 'AudioHelper.dll'),
+        path.join(configurationDirectory, targetFramework, HELPER_PUBLISH_RID, 'AudioHelper.dll'),
         path.join(configurationDirectory, targetFramework, 'AudioHelper.dll')
       );
     }
