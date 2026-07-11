@@ -246,6 +246,233 @@ export class SystemAudioHapticsEngine extends EventEmitter {
   }
 }
 
+export type HapticsFrameWriter = (fragment: number[]) => void;
+
+// Compact-frame + fragment constants, mirroring AudioConstants /
+// LegacyFramePacketizer in the native helper.
+const COMPACT_FRAME_BYTES = 264;
+const FAST_PAYLOAD_BYTES = 57;
+const HID_REPORT_BYTES = 64;
+const LEGACY_AUDIO_STREAM_REPORT_ID = 0x07;
+const FAST_FRAME_FRAGMENT_TYPE = 0x08;
+const MAX_FRAME_BYTES = 4096;
+
+// Linux path for Audio Haptics. The native helper (--haptics-only --stdout-only)
+// captures audio, runs the DSP, and writes 264-byte haptic frames to stdout.
+// This engine reassembles those frames, splits each into the firmware's 64-byte
+// fragments, and forwards them over the vendor USB interface the main transport
+// already holds — because libusb interface claims are exclusive, a standalone
+// helper cannot open a second handle the way the Windows WinUSB helper does.
+export class LinuxUsbHapticsEngine extends EventEmitter {
+  private process: ChildProcessWithoutNullStreams | null = null;
+  private starting: Promise<void> | null = null;
+  private activeHostPersonaMode: HostPersonaMode = 'dualsense';
+  private activeConfig: SystemAudioHapticsConfig = {
+    source: 'system-audio',
+    gainPercent: 100,
+    bassFocus: 'balanced',
+    response: 'balanced',
+    attack: 'balanced',
+    release: 'balanced'
+  };
+  private frameBuffer: Buffer = Buffer.alloc(0);
+  private frameSequence = 0;
+
+  constructor(private readonly getFrameWriter: () => HapticsFrameWriter | null) {
+    super();
+  }
+
+  async start(config: SystemAudioHapticsConfig, hostPersonaMode: HostPersonaMode = 'dualsense'): Promise<void> {
+    const nextConfig = normalizeSystemAudioHapticsConfig(config);
+    const nextHostPersonaMode = normalizeBridgePersonaMode(hostPersonaMode);
+    if (this.process) {
+      if (
+        audioReactiveHapticsSourceKey(this.activeConfig.source) !== audioReactiveHapticsSourceKey(nextConfig.source)
+        || this.activeHostPersonaMode !== nextHostPersonaMode
+      ) {
+        await this.stop();
+        return this.start(nextConfig, nextHostPersonaMode);
+      }
+      this.setConfig(nextConfig);
+      return;
+    }
+    if (this.starting) {
+      await this.starting;
+      return this.start(nextConfig, nextHostPersonaMode);
+    }
+
+    this.starting = this.startInternal(nextConfig, nextHostPersonaMode).finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  setConfig(config: SystemAudioHapticsConfig): void {
+    this.activeConfig = normalizeSystemAudioHapticsConfig(config);
+    const helper = this.process;
+    if (!helper || helper.stdin.destroyed || !helper.stdin.writable) {
+      return;
+    }
+    const line = `haptics-config ${this.activeConfig.gainPercent} ${this.activeConfig.bassFocus} ${this.activeConfig.response} ${this.activeConfig.attack} ${this.activeConfig.release}`;
+    try {
+      helper.stdin.write(`${line}\n`, (error) => {
+        if (error && !isExpectedHelperPipeError(error)) {
+          this.emit('error', error);
+        }
+      });
+    } catch (error) {
+      if (!isExpectedHelperPipeError(error)) {
+        this.emit('error', error);
+      }
+    }
+  }
+
+  async stop(): Promise<void> {
+    const helper = this.process;
+    this.process = null;
+    this.frameBuffer = Buffer.alloc(0);
+    if (!helper) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        if (!helper.killed) {
+          helper.kill('SIGKILL');
+        }
+        resolve();
+      }, 500);
+      helper.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      helper.stdin?.end();
+      helper.kill();
+    });
+  }
+
+  isActive(): boolean {
+    return this.process !== null;
+  }
+
+  private async startInternal(config: SystemAudioHapticsConfig, hostPersonaMode: HostPersonaMode): Promise<void> {
+    const helperPath = resolveHelperPath();
+    this.activeConfig = config;
+    this.activeHostPersonaMode = hostPersonaMode;
+    this.frameBuffer = Buffer.alloc(0);
+    const args = [
+      ...bridgePersonaArgs(hostPersonaMode),
+      '--source',
+      'render-loopback',
+      '--haptics-only',
+      '--stdout-only',
+      '--haptics-gain',
+      `${config.gainPercent}`,
+      '--haptics-bass-focus',
+      config.bassFocus,
+      '--haptics-response',
+      config.response,
+      '--haptics-attack',
+      config.attack,
+      '--haptics-release',
+      config.release
+    ];
+    const appSource = audioReactiveHapticsAppSource(config.source);
+    if (appSource) {
+      if (Number.isFinite(appSource.processId) && appSource.processId > 0) {
+        args.push('--haptics-app-process-id', `${Math.round(appSource.processId)}`);
+      }
+      if (appSource.processPath) {
+        args.push('--haptics-app-process-path', appSource.processPath);
+      }
+      if (appSource.executableName) {
+        args.push('--haptics-app-executable', appSource.executableName);
+      }
+    }
+
+    const helper = spawn(helperPath, args, {
+      env: buildSystemAudioHapticsHelperEnv(),
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    this.process = helper;
+    helper.stdin.on('error', (error) => {
+      if (!isExpectedHelperPipeError(error)) {
+        this.emit('error', error);
+      }
+    });
+    helper.stdout.on('data', (chunk: Buffer) => this.handleFrameData(chunk));
+    helper.on('error', (error) => this.emit('error', error));
+    helper.on('exit', (code, signal) => {
+      if (this.process === helper) {
+        this.process = null;
+        this.emit('status', `usb haptics helper exited (${signal ?? code ?? 'unknown'})`);
+      }
+    });
+
+    await waitForHelperRecordingStarted(helper, (line) => this.emit('status', line));
+  }
+
+  private handleFrameData(chunk: Buffer): void {
+    this.frameBuffer = this.frameBuffer.length ? Buffer.concat([this.frameBuffer, chunk]) : chunk;
+    while (this.frameBuffer.length >= 2) {
+      const length = this.frameBuffer.readUInt16LE(0);
+      if (length === 0 || length > MAX_FRAME_BYTES) {
+        // Stream desync — drop the buffer rather than emit garbage frames.
+        this.frameBuffer = Buffer.alloc(0);
+        return;
+      }
+      if (this.frameBuffer.length < 2 + length) {
+        return;
+      }
+      const frame = this.frameBuffer.subarray(2, 2 + length);
+      this.frameBuffer = Buffer.from(this.frameBuffer.subarray(2 + length));
+      if (length === COMPACT_FRAME_BYTES) {
+        this.emitFrame(frame);
+      }
+    }
+  }
+
+  private emitFrame(frame: Buffer): void {
+    const writer = this.getFrameWriter();
+    if (!writer) {
+      return;
+    }
+    const sequence = this.frameSequence & 0xffff;
+    this.frameSequence = (this.frameSequence + 1) & 0xffff;
+    for (const fragment of buildHapticFrameFragments(frame, sequence)) {
+      writer(fragment);
+    }
+  }
+}
+
+// Split a 264-byte compact frame into the firmware's 64-byte fragment reports.
+// Byte-for-byte equivalent of LegacyFramePacketizer.WriteFastHidFragments in
+// the native helper; exported so the layout can be unit-tested without hardware.
+export function buildHapticFrameFragments(frame: ArrayLike<number>, sequence: number): number[][] {
+  const seq = sequence & 0xffff;
+  const fragmentCount = Math.ceil(frame.length / FAST_PAYLOAD_BYTES);
+  const fragments: number[][] = [];
+  let fragmentIndex = 0;
+  for (let offset = 0; offset < frame.length; offset += FAST_PAYLOAD_BYTES) {
+    const payloadLength = Math.min(FAST_PAYLOAD_BYTES, frame.length - offset);
+    const report = new Array<number>(HID_REPORT_BYTES).fill(0);
+    report[0] = LEGACY_AUDIO_STREAM_REPORT_ID;
+    report[1] = FAST_FRAME_FRAGMENT_TYPE;
+    report[2] = seq & 0xff;
+    report[3] = (seq >> 8) & 0xff;
+    report[4] = fragmentIndex;
+    report[5] = fragmentCount;
+    report[6] = payloadLength;
+    for (let i = 0; i < payloadLength; i += 1) {
+      report[7 + i] = frame[offset + i] & 0xff;
+    }
+    fragments.push(report);
+    fragmentIndex += 1;
+  }
+  return fragments;
+}
+
 export class AudioHapticsSessionMonitor extends EventEmitter {
   private process: ChildProcessWithoutNullStreams | null = null;
   private starting: Promise<void> | null = null;

@@ -182,6 +182,26 @@ export class WinUsbCompanionTransport extends EventEmitter {
     await this.writeReport(report, 'write');
   }
 
+  // Fire-and-forget bulk-OUT write for the haptics frame stream (~470/s on
+  // Linux). It does not register a pending request or await the helper's ack —
+  // the ack comes back with an id that handleResponse simply discards — so the
+  // frame rate is not gated by per-write round-trips. Bad frames are dropped
+  // rather than surfaced, to keep one glitch from tearing down the stream.
+  writeFrameFragment(report: ArrayLike<number>): void {
+    if (this.closed || this.helper.stdin.destroyed || !this.helper.stdin.writable) {
+      return;
+    }
+    try {
+      const id = this.nextRequestId++;
+      const message = JSON.stringify({ id, op: 'write', report: normalizeReport(report) });
+      this.helper.stdin.write(`${message}\n`, () => {
+        /* fire-and-forget: ignore write-callback errors */
+      });
+    } catch {
+      /* drop the frame fragment */
+    }
+  }
+
   close(): void {
     if (this.closed) {
       return;

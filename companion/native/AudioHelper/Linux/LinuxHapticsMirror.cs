@@ -1,10 +1,19 @@
 using System.Diagnostics;
 
-// Linux twin of the Windows --haptics-only engine: capture the user's default
-// output (or one app's stream), run the reactive-haptics DSP, and lay the
-// result onto channels 2/3 of the bridge's 4-channel endpoint. Status-line
-// vocabulary matches the Windows helper exactly so bridge-service.ts needs no
-// platform branches.
+// Linux twin of the Windows --haptics-only engine.
+//
+// Primary path (--stdout-only, what bridge-service uses on Linux): capture the
+// chosen audio source, run the reactive-haptics DSP, pack the result into the
+// firmware's 264-byte compact frames (haptic buckets, no Opus), and write those
+// frames to stdout. The Electron main process forwards them over the vendor USB
+// interface it already holds. This delivers haptics the same way Windows does,
+// completely independent of the controller's UAC audio channels (which a UCM
+// split hides on Linux), and with no feedback loop — so it works even when the
+// controller is the default output.
+//
+// Fallback path (no --stdout-only): render the haptics onto channels 2/3 of the
+// bridge's 4-channel audio sink. Kept for completeness; requires the sink to
+// expose those channels.
 static class LinuxHapticsMirror
 {
     private const int CaptureChannels = 2;
@@ -55,8 +64,11 @@ static class LinuxHapticsMirror
                 return 1;
             }
 
-            // Feedback-loop guard: mirroring the bridge into itself would echo.
-            if (LinuxEndpointManager.IsBridgeNode(captureNode))
+            // Feedback-loop guard only matters for the audio-render fallback,
+            // where mirroring the bridge into itself would echo. Frames over
+            // USB never feed back, so the stdout path can safely capture the
+            // bridge's own monitor (game audio going to the controller).
+            if (!options.StdoutOnly && LinuxEndpointManager.IsBridgeNode(captureNode))
             {
                 Console.Error.WriteLine(
                     $"status: system-haptics-bypassed reason=source-is-bridge device='{StatusText.Escape(captureNode.Description)}'");
@@ -64,12 +76,16 @@ static class LinuxHapticsMirror
             }
         }
 
-        var targetNode = LinuxEndpointManager.SelectBridgeSink(snapshot);
-        if (targetNode is null)
+        PipeWireNode? targetNode = null;
+        if (!options.StdoutOnly)
         {
-            Console.Error.WriteLine(
-                "status: capture-unavailable reason=target-unavailable device='DS5 Bridge audio endpoint not found'");
-            return 1;
+            targetNode = LinuxEndpointManager.SelectBridgeSink(snapshot);
+            if (targetNode is null)
+            {
+                Console.Error.WriteLine(
+                    "status: capture-unavailable reason=target-unavailable device='DS5 Bridge audio endpoint not found'");
+                return 1;
+            }
         }
 
         var dsp = new ReactiveHapticsDsp(
@@ -84,7 +100,10 @@ static class LinuxHapticsMirror
         try
         {
             capture = PipeWireAudio.StartCapture(captureNode.Name, captureSinkMonitor, CaptureChannels);
-            playback = PipeWireAudio.StartPlayback(targetNode.Name, OutputChannels, "FL,FR,RL,RR", volume: -1);
+            if (!options.StdoutOnly)
+            {
+                playback = PipeWireAudio.StartPlayback(targetNode!.Name, OutputChannels, "FL,FR,RL,RR", volume: -1);
+            }
         }
         catch (Exception error)
         {
@@ -94,8 +113,9 @@ static class LinuxHapticsMirror
             return 1;
         }
 
+        var transport = options.StdoutOnly ? "usb-frames" : "audio-mirror";
         Console.Error.WriteLine(
-            $"status: audio-capture-format source=system-haptics-mirror device='{StatusText.Escape(captureNode.Description)}' target='{StatusText.Escape(targetNode.Description)}' sampleRate={AudioConstants.TargetSampleRate} channels={CaptureChannels} bits=16 encoding=Pcm targetRate={AudioConstants.TargetSampleRate} targetChannels={OutputChannels} targetBits=16 targetEncoding=Pcm bufferMs=10");
+            $"status: audio-capture-format source=system-haptics-mirror device='{StatusText.Escape(captureNode.Description)}' target='{StatusText.Escape(targetNode?.Description ?? "usb-frames")}' sampleRate={AudioConstants.TargetSampleRate} channels={CaptureChannels} bits=16 encoding=Pcm bufferMs=10 transport={transport}");
 
         using var stopRequested = new ManualResetEventSlim(false);
         Console.CancelKeyPress += (_, eventArgs) =>
@@ -132,6 +152,8 @@ static class LinuxHapticsMirror
 
         // Route watching: default-output changes restart the engine, a dead
         // app session stops it — both handled by the parent on 'route-changed'.
+        // In stdout/USB mode a default-output change is fine (we still capture
+        // whatever the new default plays), so only watch app-session liveness.
         var routeChangeReason = "";
         var routeThread = new Thread(() =>
         {
@@ -148,7 +170,7 @@ static class LinuxHapticsMirror
                             return;
                         }
                     }
-                    else
+                    else if (!options.StdoutOnly)
                     {
                         var current = PipeWireAudio.Query();
                         if (!string.Equals(current.DefaultSinkName, snapshot.DefaultSinkName, StringComparison.Ordinal))
@@ -170,7 +192,90 @@ static class LinuxHapticsMirror
         };
         routeThread.Start();
 
-        var exitCode = 0;
+        var exitCode = options.StdoutOnly
+            ? RunFrameLoop(capture, dsp, stopRequested)
+            : RunAudioLoop(capture, playback!, dsp, stopRequested);
+
+        KillQuietly(capture);
+        KillQuietly(playback);
+
+        if (routeChangeReason.Length > 0)
+        {
+            Console.Error.WriteLine($"status: route-changed reason={routeChangeReason}");
+        }
+        return exitCode;
+    }
+
+    // Capture -> DSP -> 264-byte compact frames -> stdout. The parent forwards
+    // each frame over the vendor USB interface.
+    private static int RunFrameLoop(Process capture, ReactiveHapticsDsp dsp, ManualResetEventSlim stopRequested)
+    {
+        var recordingAnnounced = false;
+        var stdout = Console.OpenStandardOutput();
+        var hapticLeftBlock = new float[AudioConstants.PicoInputBlockFrames];
+        var hapticRightBlock = new float[AudioConstants.PicoInputBlockFrames];
+        var blockIndex = 0;
+        var frame = new byte[AudioConstants.CompactFrameBytes];
+        var prefix = new byte[2];
+        var captureChunk = new byte[ChunkFrames * CaptureChannels * BytesPerSample];
+
+        try
+        {
+            var captureStream = capture.StandardOutput.BaseStream;
+            while (!stopRequested.IsSet)
+            {
+                var read = FillChunk(captureStream, captureChunk);
+                if (read <= 0)
+                {
+                    if (!stopRequested.IsSet)
+                    {
+                        Console.Error.WriteLine(
+                            "status: capture-unavailable reason=helper-exit device='pw-record stream ended'");
+                        return 1;
+                    }
+                    break;
+                }
+
+                if (!recordingAnnounced)
+                {
+                    recordingAnnounced = true;
+                    Console.Error.WriteLine("status: recording-started");
+                }
+
+                var frames = read / (CaptureChannels * BytesPerSample);
+                for (var i = 0; i < frames; i++)
+                {
+                    var inputOffset = i * CaptureChannels * BytesPerSample;
+                    var left = BitConverter.ToInt16(captureChunk, inputOffset) / 32768f;
+                    var right = BitConverter.ToInt16(captureChunk, inputOffset + BytesPerSample) / 32768f;
+                    var processed = dsp.ProcessSample(left, right);
+                    hapticLeftBlock[blockIndex] = processed.Left;
+                    hapticRightBlock[blockIndex] = processed.Right;
+                    blockIndex++;
+                    if (blockIndex >= AudioConstants.PicoInputBlockFrames)
+                    {
+                        BuildHapticFrame(frame, hapticLeftBlock, hapticRightBlock);
+                        LegacyFramePacketizer.WriteStdoutFrame(stdout, prefix, frame);
+                        blockIndex = 0;
+                    }
+                }
+            }
+        }
+        catch (IOException)
+        {
+            if (!stopRequested.IsSet)
+            {
+                Console.Error.WriteLine(
+                    "status: capture-unavailable reason=helper-exit device='haptics frame pipe closed'");
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    // Fallback: render haptics onto channels 2/3 of the bridge audio sink.
+    private static int RunAudioLoop(Process capture, Process playback, ReactiveHapticsDsp dsp, ManualResetEventSlim stopRequested)
+    {
         var recordingAnnounced = false;
         try
         {
@@ -188,7 +293,7 @@ static class LinuxHapticsMirror
                     {
                         Console.Error.WriteLine(
                             "status: capture-unavailable reason=helper-exit device='pw-record stream ended'");
-                        exitCode = 1;
+                        return 1;
                     }
                     break;
                 }
@@ -223,20 +328,44 @@ static class LinuxHapticsMirror
             {
                 Console.Error.WriteLine(
                     "status: capture-unavailable reason=helper-exit device='haptics mirror pipe closed'");
-                exitCode = 1;
+                return 1;
             }
         }
-        finally
-        {
-            KillQuietly(capture);
-            KillQuietly(playback);
-        }
+        return 0;
+    }
 
-        if (routeChangeReason.Length > 0)
+    // Pack 512 haptic samples into the firmware's 264-byte compact frame:
+    // 32 buckets of interleaved int8 L/R (bytes 0..63), no Opus (bytes 64..263
+    // stay zero). Mirrors BuildReport in the Windows helper for haptics-only.
+    private static void BuildHapticFrame(byte[] destination, float[] hapticLeftBlock, float[] hapticRightBlock)
+    {
+        Array.Clear(destination);
+        for (var bucket = 0; bucket < AudioConstants.HapticBuckets; bucket++)
         {
-            Console.Error.WriteLine($"status: route-changed reason={routeChangeReason}");
+            var left = ResampleHapticBucket(hapticLeftBlock, bucket);
+            var right = ResampleHapticBucket(hapticRightBlock, bucket);
+            destination[bucket * 2] = FloatToInt8(left);
+            destination[bucket * 2 + 1] = FloatToInt8(right);
         }
-        return exitCode;
+    }
+
+    private static float ResampleHapticBucket(float[] samples, int bucket)
+    {
+        var sourcePosition = ((bucket + 0.5) * AudioConstants.PicoInputBlockFrames / AudioConstants.HapticBuckets) - 0.5;
+        var sourceIndex = Math.Clamp((int)Math.Floor(sourcePosition), 0, AudioConstants.PicoInputBlockFrames - 1);
+        var nextIndex = Math.Min(sourceIndex + 1, AudioConstants.PicoInputBlockFrames - 1);
+        var fraction = Math.Clamp(sourcePosition - sourceIndex, 0, 1);
+        return Lerp(samples[sourceIndex], samples[nextIndex], fraction);
+    }
+
+    private static float Lerp(float a, float b, double amount)
+    {
+        return (float)(a + ((b - a) * amount));
+    }
+
+    private static byte FloatToInt8(float sample)
+    {
+        return unchecked((byte)(sbyte)Math.Round(Math.Clamp(sample, -1f, 1f) * sbyte.MaxValue));
     }
 
     private static int FillChunk(Stream stream, byte[] buffer)
