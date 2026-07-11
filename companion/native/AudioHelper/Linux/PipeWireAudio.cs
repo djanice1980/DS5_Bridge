@@ -314,6 +314,18 @@ static class LinuxEndpointManager
             node.MediaClass == "Audio/Sink" && IsBridgeNode(node));
     }
 
+    // The app-facing "Speaker" sink the ALSA UCM split exposes is stereo and
+    // hides the two haptic channels. The raw hw device (Audio/Sink/Internal,
+    // node.name alsa_output.hw_*) carries all four USB channels, so haptics
+    // must target it to reach channels 2/3. Falls back to the plain sink.
+    public static PipeWireNode? SelectBridgeRawSink(PipeWireSnapshot snapshot)
+    {
+        return snapshot.Nodes.FirstOrDefault(node =>
+                node.MediaClass == "Audio/Sink/Internal"
+                && (IsBridgeNode(node) || node.Name.StartsWith("alsa_output.hw_", StringComparison.Ordinal)))
+            ?? SelectBridgeSink(snapshot);
+    }
+
     public static PipeWireNode? SelectBridgeSource(PipeWireSnapshot snapshot)
     {
         return snapshot.Nodes.FirstOrDefault(node =>

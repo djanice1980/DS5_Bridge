@@ -64,10 +64,7 @@ static class LinuxHapticsMirror
                 return 1;
             }
 
-            // Feedback-loop guard only matters for the audio-render fallback,
-            // where mirroring the bridge into itself would echo. Frames over
-            // USB never feed back, so the stdout path can safely capture the
-            // bridge's own monitor (game audio going to the controller).
+            // Feedback-loop guard: mirroring the bridge into itself would echo.
             if (!options.StdoutOnly && LinuxEndpointManager.IsBridgeNode(captureNode))
             {
                 Console.Error.WriteLine(

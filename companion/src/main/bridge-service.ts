@@ -77,7 +77,6 @@ import type {
 } from '../shared/types';
 import {
   AudioHapticsSessionMonitor,
-  LinuxUsbHapticsEngine,
   MicKeepaliveEngine,
   SystemAudioHapticsEngine,
   applyLinuxSpeakerCompensation,
@@ -1219,16 +1218,11 @@ export class BridgeService extends EventEmitter {
   private pollAgainRequested = false;
   private shortcutPollTimer: NodeJS.Timeout | null = null;
   private shortcutPollInFlight = false;
-  // On Linux, haptics are delivered as vendor-USB frames forwarded through the
-  // transport this service holds (the native helper can't claim the interface
-  // itself); on Windows the helper writes to WinUSB directly.
-  private readonly systemAudioHapticsEngine: SystemAudioHapticsEngine | LinuxUsbHapticsEngine =
-    process.platform === 'linux'
-      ? new LinuxUsbHapticsEngine(() => {
-          const device = this.device;
-          return device ? (fragment) => device.writeFrameFragment(fragment) : null;
-        })
-      : new SystemAudioHapticsEngine();
+  // Audio Haptics writes the haptic waveform into channels 2/3 of the
+  // controller's USB audio device on both platforms (Windows via WASAPI, Linux
+  // via PipeWire). It must NOT ride the vendor control interface — doing so
+  // floods it and starves trigger/status commands.
+  private readonly systemAudioHapticsEngine = new SystemAudioHapticsEngine();
   private readonly audioHapticsSessionMonitor = new AudioHapticsSessionMonitor();
   private readonly micKeepaliveEngine = new MicKeepaliveEngine();
   private readonly hidDiscovery = new HidDiscoveryClient();
