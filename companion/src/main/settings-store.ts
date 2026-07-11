@@ -154,10 +154,10 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   triggerTestMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerTestMode,
   speakerEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerEnabled,
   speakerVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumePercent,
-  // The controller speaker runs noticeably quieter through the Linux
-  // USB-audio stack than on Windows, so default to a louder gain there for a
-  // seamless out-of-the-box level. Windows keeps the original default of 4.
-  speakerGainLevel: process.platform === 'linux' ? 6 : 4,
+  // Kept identical across platforms. Linux's ~6 dB USB-audio path loss is
+  // compensated in the software mixer instead (see applyLinuxSpeakerCompensation),
+  // so a given gain level sounds the same on Linux as on Windows.
+  speakerGainLevel: 4,
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
   audioReactiveHapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,

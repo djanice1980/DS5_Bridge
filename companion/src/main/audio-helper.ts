@@ -1115,6 +1115,14 @@ export async function setDefaultRenderBridgeEndpoint(mode: HostPersonaMode): Pro
   ]);
 }
 
+// Linux only: boost the controller sink's software volume to make up the
+// ~6 dB the PipeWire USB-audio path loses, so a firmware gain level sounds the
+// same as on Windows. The helper no-ops on a sink the user has already
+// adjusted; safe to call again (it re-checks before applying).
+export async function applyLinuxSpeakerCompensation(): Promise<void> {
+  await runAudioHelperCommand(['--apply-speaker-compensation']);
+}
+
 export class MicKeepaliveEngine extends EventEmitter {
   private process: ChildProcess | null = null;
   private starting: Promise<void> | null = null;

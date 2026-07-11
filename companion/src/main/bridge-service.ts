@@ -80,6 +80,7 @@ import {
   LinuxUsbHapticsEngine,
   MicKeepaliveEngine,
   SystemAudioHapticsEngine,
+  applyLinuxSpeakerCompensation,
   playBridgeHapticsTestPattern,
   playBridgeSpeakerTestTone,
   getDefaultRenderEndpointStatus,
@@ -3289,6 +3290,21 @@ export class BridgeService extends EventEmitter {
     }
   }
 
+  // Linux only: on each fresh controller connection, top the controller sink's
+  // software volume up to make up the PipeWire USB-audio path loss (see
+  // applyLinuxSpeakerCompensation). Fire-and-forget and idempotent — the helper
+  // re-checks and skips a sink the user has already set.
+  private applyLinuxSpeakerCompensationOnConnect(): void {
+    if (process.platform !== 'linux') {
+      return;
+    }
+    void applyLinuxSpeakerCompensation().catch((error) => {
+      this.appendAudioDebugLines([
+        `[SpeakerCompensation] ${error instanceof Error ? error.message : String(error)}`
+      ]);
+    });
+  }
+
   private async updateMicKeepaliveEngine(controllerConnected: boolean): Promise<void> {
     try {
       const settings = this.settingsStore.get();
@@ -3455,6 +3471,7 @@ export class BridgeService extends EventEmitter {
     if (status.controllerConnected) {
       if (this.controllerConnectedSince === 0) {
         this.controllerConnectedSince = Date.now();
+        this.applyLinuxSpeakerCompensationOnConnect();
       }
       void this.reapplySettingsUntilSettled();
     } else {

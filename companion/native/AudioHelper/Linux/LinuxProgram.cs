@@ -59,6 +59,11 @@ static class LinuxProgram
                 LinuxEndpointManager.SetDefaultRenderBridge();
                 return 0;
             }
+            if (options.ApplySpeakerCompensation)
+            {
+                LinuxEndpointManager.ApplySpeakerCompensation(options.SpeakerCompensationFactor);
+                return 0;
+            }
             if (options.UinputKeyboard)
             {
                 return LinuxUinputKeyboard.Run();
@@ -99,6 +104,8 @@ sealed class LinuxHelperOptions
     public bool UinputKeyboard;
     public bool HapticsOnly;
     public bool StdoutOnly;
+    public bool ApplySpeakerCompensation;
+    public double SpeakerCompensationFactor = 2.0;
     public bool MediaDebugClock;
     public string? MediaSessionCommand;
     public string? ResolveIconDataUrlPath;
@@ -158,6 +165,18 @@ sealed class LinuxHelperOptions
                 case "--stdout-only":
                     options.StdoutOnly = true;
                     break;
+                case "--apply-speaker-compensation":
+                    options.ApplySpeakerCompensation = true;
+                    break;
+                case "--speaker-compensation-factor":
+                    {
+                        var value = NextValue(args, ref index);
+                        if (double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var factor) && factor > 0)
+                        {
+                            options.SpeakerCompensationFactor = Math.Clamp(factor, 1.0, 4.0);
+                        }
+                        break;
+                    }
                 case "--media-debug-clock":
                     options.MediaDebugClock = true;
                     break;

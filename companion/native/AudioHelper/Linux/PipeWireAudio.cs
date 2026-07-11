@@ -341,6 +341,64 @@ static class LinuxEndpointManager
         Console.Error.WriteLine($"status: default-render-set device='{StatusText.Escape(bridgeSink.Description)}'");
     }
 
+    // Compensate the ~6 dB the Linux USB-audio path loses when it spreads
+    // stereo across the controller's 4 channels: boost the controller sink's
+    // software volume so a given firmware gain level matches Windows. Applied
+    // only to a pristine (~100%) sink so it never fights a user adjustment.
+    public static void ApplySpeakerCompensation(double factor)
+    {
+        var snapshot = PipeWireAudio.Query();
+        var sink = SelectBridgeSink(snapshot);
+        if (sink is null)
+        {
+            Console.Error.WriteLine("status: speaker-compensation-skipped reason=no-sink");
+            return;
+        }
+
+        var current = TryGetNodeVolume(sink.Id);
+        if (current is double vol && Math.Abs(vol - 1.0) > 0.02)
+        {
+            Console.Error.WriteLine(
+                $"status: speaker-compensation-skipped reason=user-set volume={FormatFactor(vol)}");
+            return;
+        }
+
+        _ = PipeWireAudio.RunTool(
+            "wpctl",
+            new[] { "set-volume", sink.Id.ToString(), FormatFactor(factor) },
+            timeoutMs: 5000);
+        Console.Error.WriteLine(
+            $"status: speaker-compensation-applied volume={FormatFactor(factor)} device='{StatusText.Escape(sink.Description)}'");
+    }
+
+    private static double? TryGetNodeVolume(int nodeId)
+    {
+        try
+        {
+            var stdout = PipeWireAudio.RunTool("wpctl", new[] { "get-volume", nodeId.ToString() }, timeoutMs: 5000);
+            var match = System.Text.RegularExpressions.Regex.Match(stdout, @"Volume:\s*([0-9]+(?:\.[0-9]+)?)");
+            if (match.Success
+                && double.TryParse(
+                    match.Groups[1].Value,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var vol))
+            {
+                return vol;
+            }
+        }
+        catch
+        {
+            // Unknown volume — caller treats null as "safe to apply".
+        }
+        return null;
+    }
+
+    private static string FormatFactor(double value)
+    {
+        return value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
     public static void ListDevices()
     {
         var snapshot = PipeWireAudio.Query();
