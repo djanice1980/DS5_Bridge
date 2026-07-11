@@ -105,16 +105,18 @@ function Assert-SemanticVersion([string] $Name, [string] $Version) {
   }
 }
 
+# Path literals use forward slashes so the validation path also works under
+# pwsh on Linux (Windows PowerShell accepts them everywhere).
 $repoRoot = Resolve-RepoRoot
 $companionRoot = Join-Path $repoRoot 'companion'
-$firmwareBuildDir = Join-Path $repoRoot 'build\companion'
+$firmwareBuildDir = Join-Path $repoRoot 'build/companion'
 $firmwareOutput = Join-Path $firmwareBuildDir 'ds5-bridge.uf2'
-$installerDir = Join-Path $companionRoot 'artifacts\installer'
+$installerDir = Join-Path $companionRoot 'artifacts/installer'
 $portableArtifactsDir = Join-Path $companionRoot 'artifacts'
 $companionPackage = Read-JsonFile (Join-Path $companionRoot 'package.json')
 $companionVersion = [string] $companionPackage.version
-$firmwareVersion = Read-FirmwareVersion (Join-Path $repoRoot 'src\companion.cpp')
-$bundledFirmwareVersion = Read-BundledFirmwareVersion (Join-Path $companionRoot 'src\main\bridge-service.ts')
+$firmwareVersion = Read-FirmwareVersion (Join-Path $repoRoot 'src/companion.cpp')
+$bundledFirmwareVersion = Read-BundledFirmwareVersion (Join-Path $companionRoot 'src/main/bridge-service.ts')
 $stamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 $labelSuffix = if ([string]::IsNullOrWhiteSpace($Label)) { '' } else { " $($Label.Trim())" }
 $releaseDir = Join-Path $OutputRoot "DS5 Bridge Release Candidate$labelSuffix $stamp"
@@ -135,7 +137,7 @@ if ($ValidateOnly) {
     (Join-Path $repoRoot 'LICENSE'),
     (Join-Path $repoRoot 'NOTICE'),
     (Join-Path $companionRoot 'package.json'),
-    (Join-Path $repoRoot 'src\companion.cpp')
+    (Join-Path $repoRoot 'src/companion.cpp')
   )
   foreach ($requiredFile in $requiredFiles) {
     if (-not (Test-Path -LiteralPath $requiredFile)) {

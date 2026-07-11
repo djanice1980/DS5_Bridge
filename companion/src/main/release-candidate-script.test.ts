@@ -38,7 +38,9 @@ describe('release candidate toolchain', () => {
     }
   });
 
-  it('validates release inputs without building or collecting artifacts', () => {
+  // Two cold PowerShell starts (probe + script) can exceed the default 5 s
+  // timeout on CI runners.
+  it('validates release inputs without building or collecting artifacts', { timeout: 60000 }, () => {
     const powerShell = findPowerShell();
     if (!powerShell) {
       return;
