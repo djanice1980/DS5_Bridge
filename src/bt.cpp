@@ -1540,9 +1540,13 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
             packet = std::move(audio_queue.front());
             audio_queue.pop();
         } else if (choice == OutputSchedulerChoice::CoalescedState) {
-            if (state_send_blocked_by_audio_locked(now)) {
-                return false;
-            }
+            // The interleave scheduler already decided controller state is starved
+            // and must go now, so do NOT additionally veto it with the legacy
+            // state_send_blocked_by_audio window. During continuous audio that
+            // window is effectively always "recent", which would block every
+            // state send and defeat the scheduler (this is why triggers/rumble
+            // died under audio). The scheduler bounds state's share of the link,
+            // so audio stays protected without this override.
             uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
             memcpy(report, state_pending_report, sizeof(report));
             if (!build_interrupt_output_packet(report, sizeof(report), packet.data)) {
