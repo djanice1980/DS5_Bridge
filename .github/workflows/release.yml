@@ -121,11 +121,15 @@ jobs:
           cmake --build build/traces --target ds5-bridge
           cp build/traces/ds5-bridge.uf2 "artifacts/DS5-Bridge-Firmware-Traces-v${FIRMWARE_VERSION}.uf2"
 
+      - name: Stage trace-troubleshooting scripts
+        # The Traces firmware is only useful paired with these probes, so ship them together.
+        run: cp tools/trigger-probe.py tools/trigger-hold.py artifacts/
+
       - name: Upload firmware to release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$RELEASE_TAG" artifacts/*.uf2 --clobber
+          gh release upload "$RELEASE_TAG" artifacts/*.uf2 artifacts/*.py --clobber
 
   companion:
     name: Build and upload Windows companion
