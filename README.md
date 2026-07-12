@@ -171,9 +171,31 @@ shortcuts, idle disconnect, and PC sleep disconnect.
 - If the controller speaker is quiet or the grips don't buzz, the ALSA UCM profile is likely
   hiding the 4-channel device. The companion ships a WirePlumber rule that fixes this; see
   [docs/cachyos-install.md](docs/cachyos-install.md).
-- Adaptive triggers can weaken while loud audio is playing — the controller↔Pico Bluetooth
-  link shares bandwidth with the audio stream. They recover shortly after audio stops.
+- Adaptive triggers hold through audio as of firmware **1.6.12**. A one-shot trigger *test* still
+  eases off while audio plays (the controller decays a single command), but in games — which
+  re-assert the effect every frame — the triggers stay firm. If audio ever stutters, ease the
+  **Interleave** page toward *Smooth*.
 - Battery level may be inaccurate while the controller is charging.
+
+### Debug mode
+
+If something misbehaves and you want to gather diagnostics (or you've been asked to), launch the
+companion from a terminal with the `DS5_DEBUG` environment variable set:
+
+```bash
+DS5_DEBUG=1 ds5-bridge                            # pacman install
+DS5_DEBUG=1 ./DS5-Bridge-Companion-*.AppImage     # AppImage
+```
+
+This turns on two things — both completely off without the variable, so normal use is unaffected:
+
+- **Developer Tools.** A DevTools window opens next to the app. DS5 Bridge is built on Electron, so
+  this is the same DevTools you'd find in a web browser; its **Console** tab can read the app's live
+  state, e.g. `window.bridge.getStatus().then(s => console.log(s.settings))`.
+- **Extra terminal logging.** The app prints diagnostic lines to the terminal it was launched from
+  (for example, which settings and controller profiles it loaded on startup).
+
+Copy whatever it prints — or a DevTools console result — into your bug report.
 
 ## Requirements
 
