@@ -119,6 +119,9 @@ jobs:
 
   companion:
     name: Build and upload Windows companion
+    # This is the Linux port — do not build or publish Windows binaries.
+    # Windows users should use the upstream project (SundayMoments/DS5_Bridge).
+    if: false
     runs-on: windows-latest
 
     steps:
@@ -336,8 +339,9 @@ jobs:
           Copy-Item -LiteralPath NOTICE -Destination (Join-Path $artifactDir 'NOTICE.txt') -Force
 
           @(
-            'DS5 Bridge source code:',
-            'https://github.com/SundayMoments/DS5_Bridge',
+            'DS5 Bridge (Linux port) source code:',
+            'https://github.com/djanice1980/DS5_Bridge',
+            'Original (Windows) project: https://github.com/SundayMoments/DS5_Bridge',
             '',
             "This binary release corresponds to commit: $commit",
             "Working tree dirty at build time: $(if ($dirty) { 'yes' } else { 'no' })",
@@ -354,10 +358,10 @@ jobs:
             artifacts = @(
               "DS5-Bridge-Firmware-v$firmwareVersion.uf2",
               "DS5-Bridge-Firmware-Waveshare-v$firmwareVersion.uf2",
-              "DS5-Bridge-Companion-Setup-v$companionVersion.exe",
-              "DS5-Bridge-Companion-Portable-v$companionVersion-win32-x64.zip"
+              "DS5-Bridge-Companion-$companionVersion-linux-x64.pacman",
+              "DS5-Bridge-Companion-$companionVersion-linux-x86_64.AppImage"
             )
-            sourceUrl = 'https://github.com/SundayMoments/DS5_Bridge'
+            sourceUrl = 'https://github.com/djanice1980/DS5_Bridge'
             sourceCommit = $commit
             dirty = $dirty
           }
