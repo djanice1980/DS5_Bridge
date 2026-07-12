@@ -166,12 +166,22 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        try:
-            os.write(fd, release)   # release the trigger on exit
-        except OSError:
-            pass
+        # A single release frame can be lost in transit or fail to reset the
+        # trigger motor -- the DualSense latches its last effect, so one lone
+        # "off" report right before we close often doesn't clear the hold
+        # (reopening the app, a full state reset, is what clears it). Assert the
+        # released state as a short burst, the same way the hold was asserted.
+        released = False
+        for _ in range(12):
+            try:
+                os.write(fd, release)
+                released = True
+            except OSError:
+                break
+            time.sleep(0.008)
         os.close(fd)
-        print(f"\nDone ({sent} reports). Trigger released.")
+        tail = "" if released else " (release write failed -- squeeze the triggers or reopen the app to clear)"
+        print(f"\nDone ({sent} reports). Trigger released.{tail}")
 
 
 if __name__ == "__main__":
