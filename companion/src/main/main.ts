@@ -103,13 +103,19 @@ function sendToMainWindow(channel: string, ...args: unknown[]): void {
 }
 
 async function createTrayIcon(): Promise<Electron.NativeImage> {
-  const icon = createImageAsset(APP_TRAY_ICON_ICO);
+  // Windows trays take .ico; Linux/macOS StatusNotifier trays want a PNG and
+  // render a .ico as a placeholder glyph (the stray "W" on KDE). Prefer the
+  // format that the current platform's tray actually understands.
+  const preferred = process.platform === 'win32' ? APP_TRAY_ICON_ICO : APP_TRAY_ICON_PNG;
+  const fallback = process.platform === 'win32' ? APP_TRAY_ICON_PNG : APP_TRAY_ICON_ICO;
+
+  const icon = createImageAsset(preferred);
   if (!icon.isEmpty()) {
     return icon;
   }
 
-  const pngIcon = createImageAsset(APP_TRAY_ICON_PNG);
-  return pngIcon.isEmpty() ? nativeImage.createEmpty() : pngIcon;
+  const alt = createImageAsset(fallback);
+  return alt.isEmpty() ? nativeImage.createEmpty() : alt;
 }
 
 function scaledWindowSize(uiScalePercent: UiScalePercent): { width: number; height: number } {

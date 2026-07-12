@@ -87,8 +87,8 @@ describe('IPC contract', () => {
   it('loads the high-resolution tray mark icon without forcing a 16px resize', () => {
     expect(mainSource).toContain("const APP_TRAY_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_mark.ico');");
     expect(mainSource).toContain("const APP_TRAY_ICON_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');");
-    expect(mainSource).toContain('const icon = createImageAsset(APP_TRAY_ICON_ICO);');
-    expect(mainSource).toContain('const pngIcon = createImageAsset(APP_TRAY_ICON_PNG);');
+    expect(mainSource).toContain("const preferred = process.platform === 'win32' ? APP_TRAY_ICON_ICO : APP_TRAY_ICON_PNG;");
+    expect(mainSource).toContain('const icon = createImageAsset(preferred);');
     expect(mainSource).not.toContain('return icon.resize({ width: 16');
     expect(packageSource).toContain('"ds5-bridge_mark.ico"');
     expect(packageWinSource).toContain("'ds5-bridge_mark.ico'");

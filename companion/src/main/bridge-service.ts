@@ -1289,11 +1289,17 @@ export class BridgeService extends EventEmitter {
     };
     this.systemAudioHapticsEngine.on('error', (error: Error) => {
       this.appendAudioDebugLines([`[SystemHaptics] error: ${error.message}`]);
+      if (process.platform === 'linux') {
+        console.error(`[SystemHaptics] error: ${error.message}`);
+      }
       this.emitSnapshot();
     });
     this.systemAudioHapticsEngine.on('status', (line: string) => {
       if (line) {
         this.appendAudioDebugLines([`[SystemHaptics] ${line}`]);
+        if (process.platform === 'linux') {
+          console.error(`[SystemHaptics] ${line}`);
+        }
       }
       void this.handleSystemAudioHapticsStatus(line);
       this.emitSnapshot();
@@ -2031,6 +2037,15 @@ export class BridgeService extends EventEmitter {
   }
 
   private systemAudioHapticsSupported(): boolean {
+    // The firmware `audioReactiveHapticsControl` flag (protocol minor >= 7) gates
+    // the firmware's own audio-reactive-haptics *control command*, used by the
+    // Windows passthrough fallback. The Linux mirror never uses that command — it
+    // writes the haptic waveform straight into the controller's audio channels
+    // (ch2/3), which the firmware plays regardless of protocol version. So on
+    // Linux the mirror is supported even when that flag is off.
+    if (process.platform === 'linux') {
+      return true;
+    }
     return this.audioReactiveHapticsSupported();
   }
 
@@ -3185,14 +3200,29 @@ export class BridgeService extends EventEmitter {
     });
   }
 
+  private lastSystemHapticsGateLog = '';
+
   private async updateSystemAudioHapticsEngine(): Promise<void> {
     const settings = this.settingsStore.get();
-    if (
-      !this.systemAudioHapticsDesired(settings)
-      || !this.device
-      || !this.controllerAudioReady()
-      || !this.systemAudioHapticsSupported()
-    ) {
+    const desired = this.systemAudioHapticsDesired(settings);
+    const hasDevice = Boolean(this.device);
+    const controllerConnected = this.controllerAudioReady();
+    const firmwareFlag = this.systemAudioHapticsSupported();
+    // Linux diagnostic: when the user has Audio Haptics toggled on, surface why
+    // the mirror does or doesn't run (visible in the terminal when launched from
+    // one). Throttled so it only logs on state change.
+    if (process.platform === 'linux' && settings.audioReactiveHapticsEnabled) {
+      const gateLog =
+        `[SystemHaptics] gates desired=${desired} device=${hasDevice} controllerConnected=${controllerConnected}`
+        + ` firmwareFlag=${firmwareFlag} passthrough=${this.systemAudioHapticsPassthroughActive}`
+        + ` retryMs=${Math.max(0, this.systemAudioHapticsRetryAt - Date.now())}`;
+      if (gateLog !== this.lastSystemHapticsGateLog) {
+        this.lastSystemHapticsGateLog = gateLog;
+        this.appendAudioDebugLines([gateLog]);
+        console.error(gateLog);
+      }
+    }
+    if (!desired || !hasDevice || !controllerConnected || !firmwareFlag) {
       const wasPassthroughActive = this.systemAudioHapticsPassthroughActive;
       this.systemAudioHapticsPassthroughActive = false;
       this.systemAudioHapticsRetryAt = 0;
@@ -3210,12 +3240,19 @@ export class BridgeService extends EventEmitter {
 
     try {
       await this.systemAudioHapticsEngine.start(this.systemAudioHapticsConfig(settings), this.currentHostPersonaMode());
+      if (process.platform === 'linux') {
+        console.error('[SystemHaptics] mirror start() resolved — helper should be running');
+      }
       if (this.systemAudioHapticsPassthroughActive) {
         this.systemAudioHapticsPassthroughActive = false;
         await this.applyAudioReactiveHapticsSettings(settings, false);
       }
       this.systemAudioHapticsRetryAt = 0;
     } catch (error) {
+      if (process.platform === 'linux') {
+        const detail = error instanceof Error ? error.message : String(error);
+        console.error(`[SystemHaptics] mirror start() threw: ${detail}`);
+      }
       await this.systemAudioHapticsEngine.stop();
       if (this.systemAudioHapticsPassthroughActive) {
         this.systemAudioHapticsRetryAt = Date.now() + SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS;
