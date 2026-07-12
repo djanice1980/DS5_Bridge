@@ -97,9 +97,13 @@ def u32(buf, off):
 
 
 DEFAULT_HELPER_PATHS = [
+    # Linux
     "/opt/DS5 Bridge/resources/native/AudioHelper/AudioHelper",
     os.path.expanduser("~/Applications/DS5 Bridge/resources/native/AudioHelper/AudioHelper"),
     "/usr/lib/ds5-bridge/resources/native/AudioHelper/AudioHelper",
+    # Windows
+    os.path.expandvars(r"%PROGRAMFILES%\DS5 Bridge\resources\native\AudioHelper\AudioHelper.exe"),
+    os.path.expandvars(r"%LOCALAPPDATA%\Programs\DS5 Bridge\resources\native\AudioHelper\AudioHelper.exe"),
 ]
 
 
