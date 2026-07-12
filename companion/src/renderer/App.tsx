@@ -28,7 +28,6 @@ import {
   IconDeviceAudioTape,
   IconBrandXbox,
   IconBrandGithub,
-  IconHeart as Heart,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
   IconKeyboard as Keyboard,
@@ -86,7 +85,6 @@ import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/s
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
 import {
   DEFAULT_UI_THEME_PRESET,
-  UI_THEME_KOFI_BADGES,
   UI_THEME_OPTIONS,
   UI_THEME_PREVIEW_SWATCHES
 } from './ui-themes';
@@ -1219,7 +1217,6 @@ function StartupTutorial({
   step,
   featureExampleActive,
   supportCountdown,
-  kofiBadgeUrl,
   onFeatureExampleToggle,
   onFeatureStepComplete,
   onSupport,
@@ -1228,7 +1225,6 @@ function StartupTutorial({
   step: Exclude<StartupTutorialStep, 'done'>;
   featureExampleActive: boolean;
   supportCountdown: number;
-  kofiBadgeUrl: string;
   onFeatureExampleToggle: () => void;
   onFeatureStepComplete: () => void;
   onSupport: () => void;
@@ -1285,22 +1281,32 @@ function StartupTutorial({
           <>
             <div className="settings-menu-heading bridge-settings-modal-heading">
               <div className="modal-heading-copy">
-                <Heart size={16} />
-                <span>One Tiny Ask</span>
+                <IconBrandGithub size={16} />
+                <span>Linux Port</span>
               </div>
               <span className="startup-tutorial-step">2 / 2</span>
             </div>
             <div className="startup-tutorial-copy">
-              <h2>Enjoying DS5 Bridge?</h2>
-              <p>If this app makes your setup better, please consider supporting the work on Ko-fi.</p>
+              <h2>Community Linux Port</h2>
+              <p>
+                This CachyOS/Linux build is maintained separately from the original Windows
+                app. For help or to report an issue with the Linux version, use the GitHub
+                repository below.
+              </p>
             </div>
             <button
-              className="startup-tutorial-kofi-button"
+              className="settings-menu-link-row startup-tutorial-support-link"
               type="button"
-              aria-label="Support SundayMoments on Ko-fi"
+              aria-label="Open the DS5 Bridge Linux repository on GitHub"
               onClick={onSupport}
             >
-              <img src={kofiBadgeUrl} alt="" />
+              <span className="settings-menu-link-icon" aria-hidden="true">
+                <IconBrandGithub size={18} />
+              </span>
+              <span className="settings-menu-link-copy">
+                <strong>Linux port &amp; support</strong>
+                <span>github.com/djanice1980/DS5_Bridge</span>
+              </span>
             </button>
             <div className="startup-tutorial-actions">
               <button
@@ -6117,7 +6123,6 @@ export function App() {
     );
   }
 
-  const kofiBadgeUrl = UI_THEME_KOFI_BADGES[activeTheme] ?? UI_THEME_KOFI_BADGES[DEFAULT_UI_THEME_PRESET];
 
   return (
     <div
@@ -6279,16 +6284,6 @@ export function App() {
             </div>
           </div>
           <div className="sidebar-actions">
-            <div className="sidebar-support">
-              <button
-                className="sidebar-kofi-link"
-                type="button"
-                aria-label="Support SundayMoments on Ko-fi"
-                onClick={() => void window.bridge.openExternal('https://ko-fi.com/sundaymoments')}
-              >
-                <img className="sidebar-kofi-badge" src={kofiBadgeUrl} alt="" />
-              </button>
-            </div>
             <div className="header-settings">
               <button
                 className={`sidebar-action-button ${showBridgeSettings ? 'active' : ''}`}
@@ -8986,10 +8981,9 @@ export function App() {
           step={startupTutorialStep}
           featureExampleActive={startupTutorialFeatureActive}
           supportCountdown={startupTutorialSupportCountdown}
-          kofiBadgeUrl={kofiBadgeUrl}
           onFeatureExampleToggle={() => setStartupTutorialFeatureActive((active) => !active)}
           onFeatureStepComplete={() => setStartupTutorialStep('support')}
-          onSupport={() => void window.bridge.openExternal('https://ko-fi.com/sundaymoments')}
+          onSupport={() => void window.bridge.openExternal('https://github.com/djanice1980/DS5_Bridge')}
           onFinish={() => {
             saveStartupTutorialCompleted();
             setStartupTutorialStep('done');
@@ -9662,14 +9656,27 @@ export function App() {
                 <button
                   type="button"
                   className="settings-menu-link-row"
-                  onClick={() => void window.bridge.openExternal('https://github.com/SundayMoments')}
+                  onClick={() => void window.bridge.openExternal('https://github.com/djanice1980/DS5_Bridge')}
                 >
                   <span className="settings-menu-link-icon" aria-hidden="true">
                     <IconBrandGithub size={18} />
                   </span>
                   <span className="settings-menu-link-copy">
-                    <strong>GitHub</strong>
-                    <span>SundayMoments</span>
+                    <strong>Linux port &amp; support</strong>
+                    <span>github.com/djanice1980/DS5_Bridge</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="settings-menu-link-row"
+                  onClick={() => void window.bridge.openExternal('https://github.com/SundayMoments/DS5_Bridge')}
+                >
+                  <span className="settings-menu-link-icon" aria-hidden="true">
+                    <IconBrandGithub size={18} />
+                  </span>
+                  <span className="settings-menu-link-copy">
+                    <strong>Original project</strong>
+                    <span>SundayMoments/DS5_Bridge (Windows)</span>
                   </span>
                 </button>
               </div>

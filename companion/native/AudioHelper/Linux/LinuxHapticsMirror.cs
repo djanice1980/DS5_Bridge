@@ -271,6 +271,9 @@ static class LinuxHapticsMirror
     private static int RunAudioLoop(Process capture, Process playback, ReactiveHapticsDsp dsp, ManualResetEventSlim stopRequested)
     {
         var recordingAnnounced = false;
+        var peakIn = 0f;
+        var peakOut = 0f;
+        var framesSinceLog = 0;
         try
         {
             var captureStream = capture.StandardOutput.BaseStream;
@@ -310,10 +313,25 @@ static class LinuxHapticsMirror
                     var outputOffset = frame * OutputChannels * BytesPerSample;
                     WriteInt16(outputChunk, outputOffset + BytesPerSample * 2, processed.Left);
                     WriteInt16(outputChunk, outputOffset + BytesPerSample * 3, processed.Right);
+
+                    peakIn = Math.Max(peakIn, Math.Max(Math.Abs(left), Math.Abs(right)));
+                    peakOut = Math.Max(peakOut, Math.Max(Math.Abs(processed.Left), Math.Abs(processed.Right)));
                 }
 
                 playbackStream.Write(outputChunk, 0, frames * OutputChannels * BytesPerSample);
                 playbackStream.Flush();
+
+                // Once-per-second level meter: capturePeak proves the monitor is
+                // being heard, outputPeak proves the DSP is emitting haptics.
+                framesSinceLog += frames;
+                if (framesSinceLog >= AudioConstants.TargetSampleRate)
+                {
+                    Console.Error.WriteLine(
+                        $"status: haptics-levels capturePeak={peakIn.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)} outputPeak={peakOut.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture)}");
+                    peakIn = 0f;
+                    peakOut = 0f;
+                    framesSinceLog = 0;
+                }
             }
         }
         catch (IOException)

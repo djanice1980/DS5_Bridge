@@ -138,11 +138,8 @@ describe('companion layout CSS', () => {
     expect(themeSource).toContain('export type UiThemePreviewSwatch');
     expect(themeSource).toContain("role: 'Canvas' | 'Surface' | 'Accent' | 'Signal';");
     expect(themeSource).toContain('UI_THEME_PREVIEW_SWATCHES');
-    expect(themeSource).toContain('support_me_on_kofi_beige.png');
-    expect(themeSource).toContain('support_me_on_kofi_blue.png');
-    expect(themeSource).toContain('support_me_on_kofi_red.png');
-    expect(themeSource).toContain("'bubble-gum': kofiBadgeBlueUrl");
-    expect(themeSource).toContain('kiwi: kofiBadgeDarkUrl');
+    // Ko-fi donation badges were removed from the Linux port.
+    expect(themeSource).not.toContain('kofi');
   });
 
   it('uses the cached theme and branded panel for the startup loading state', () => {

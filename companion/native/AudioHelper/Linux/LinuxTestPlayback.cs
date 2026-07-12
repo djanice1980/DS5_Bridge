@@ -65,85 +65,60 @@ static class LinuxTestPlayback
 
     public static void PlayTestHaptics(LinuxHelperOptions options)
     {
-        if (TryPlayViaBridgeFrames(options.HapticsGainPercent))
-        {
-            return;
-        }
-
+        // The running companion app holds the vendor USB interface, so a second
+        // process can't send frames over it. Play the test pattern into the
+        // controller's haptic audio channels (2/3) instead — the same path
+        // Audio Haptics uses. This is also a clean go/no-go for whether writing
+        // those channels reaches the firmware at all.
         PlayViaRenderEndpoint(options);
-    }
-
-    private static bool TryPlayViaBridgeFrames(int hapticsGainPercent)
-    {
-        using var transport = LinuxUsbBridgeTransport.TryOpen();
-        if (transport is null)
-        {
-            return false;
-        }
-
-        var frames = BuildTestFrames(hapticsGainPercent);
-        var hidReport = new byte[AudioConstants.HidReportBytes];
-        var stopwatch = Stopwatch.StartNew();
-        var nextWriteTicks = stopwatch.ElapsedTicks;
-        ushort sequence = 0;
-
-        foreach (var frame in frames)
-        {
-            WaitUntil(stopwatch, nextWriteTicks);
-            try
-            {
-                var written = LegacyFramePacketizer.WriteFastHidFragments(
-                    frame,
-                    sequence++,
-                    hidReport,
-                    report =>
-                    {
-                        transport.WriteReport(report);
-                        return true;
-                    },
-                    out _);
-                if (!written)
-                {
-                    return false;
-                }
-            }
-            catch (Exception error)
-            {
-                Console.Error.WriteLine(
-                    $"status: test-haptics-winusb-failed error='{error.GetType().Name}: {error.Message}'");
-                return false;
-            }
-            nextWriteTicks += AudioConstants.FrameIntervalTicks;
-        }
-
-        Console.Error.WriteLine("status: test-haptics-played transport=usb");
-        return true;
     }
 
     private static void PlayViaRenderEndpoint(LinuxHelperOptions options)
     {
-        var snapshot = PipeWireAudio.Query();
-        var device = LinuxEndpointManager.SelectBridgeSink(snapshot)
-            ?? throw new IOException("DS5 Bridge audio endpoint was not found.");
+        PipeWireSnapshot snapshot;
+        PipeWireNode? device;
+        try
+        {
+            snapshot = PipeWireAudio.Query();
+            device = LinuxEndpointManager.SelectBridgeSink(snapshot);
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"status: test-haptics-unavailable reason='{StatusText.Escape(error.Message)}'");
+            return;
+        }
+        if (device is null)
+        {
+            Console.Error.WriteLine("status: test-haptics-unavailable reason=no-sink");
+            return;
+        }
 
         var pcm = BuildTestPcm(options.HapticsGainPercent);
-        using var playback = PipeWireAudio.StartPlayback(device.Name, channels: 4, channelMap: "FL,FR,RL,RR", volume: -1);
-        var stdin = playback.StandardInput.BaseStream;
-        stdin.Write(pcm, 0, pcm.Length);
-        stdin.Flush();
-        stdin.Close();
-        if (!playback.WaitForExit(3000))
+        try
         {
-            try
+            using var playback = PipeWireAudio.StartPlayback(device.Name, channels: 4, channelMap: "FL,FR,RL,RR", volume: -1);
+            var stdin = playback.StandardInput.BaseStream;
+            stdin.Write(pcm, 0, pcm.Length);
+            stdin.Flush();
+            stdin.Close();
+            if (!playback.WaitForExit(3000))
             {
-                playback.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // Best effort.
+                try
+                {
+                    playback.Kill(entireProcessTree: true);
+                }
+                catch
+                {
+                    // Best effort.
+                }
             }
         }
-        Console.Error.WriteLine($"status: test-haptics-played '{StatusText.Escape(device.Description)}'");
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"status: test-haptics-unavailable reason='{StatusText.Escape(error.Message)}'");
+            return;
+        }
+        Console.Error.WriteLine($"status: test-haptics-played device='{StatusText.Escape(device.Description)}' channels=RL,RR");
     }
 
     // Same waveform as AudioHelperTestHaptics.BuildTestFrames: 3 silent

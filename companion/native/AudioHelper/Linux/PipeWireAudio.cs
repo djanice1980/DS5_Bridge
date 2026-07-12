@@ -377,11 +377,15 @@ static class LinuxEndpointManager
             return;
         }
 
+        // Pin the controller speaker to unity (100%). With UCM disabled the ACP
+        // profile exposes the sink at ~40% by default (too quiet), and a boost
+        // applied by an older build can persist at 200% (distorts). Normalize
+        // either way so "100%" in the app is 100% at the controller.
         var current = TryGetNodeVolume(sink.Id);
-        if (current is double vol && vol >= 0.5)
+        if (current is double vol && vol >= 0.97 && vol <= 1.03)
         {
             Console.Error.WriteLine(
-                $"status: speaker-level-skipped reason=already-set volume={FormatFactor(vol)}");
+                $"status: speaker-level-skipped reason=already-unity volume={FormatFactor(vol)}");
             return;
         }
 
@@ -390,7 +394,7 @@ static class LinuxEndpointManager
             new[] { "set-volume", sink.Id.ToString(), "1.0" },
             timeoutMs: 5000);
         Console.Error.WriteLine(
-            $"status: speaker-level-set volume=1.0 device='{StatusText.Escape(sink.Description)}'");
+            $"status: speaker-level-set volume=1.0 previous={(current is double p ? FormatFactor(p) : "unknown")} device='{StatusText.Escape(sink.Description)}'");
     }
 
     private static double? TryGetNodeVolume(int nodeId)

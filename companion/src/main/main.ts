@@ -391,8 +391,8 @@ function isAppFileUrl(url: string, appIndexPath: string): boolean {
 }
 
 function isAllowedExternalUrl(url: string): boolean {
-  return /^https:\/\/ko-fi\.com\/sundaymoments\/?$/i.test(url)
-    || /^https:\/\/github\.com\/SundayMoments\/?$/i.test(url);
+  // The Linux port's repo (support) and the original upstream project.
+  return /^https:\/\/github\.com\/(djanice1980|SundayMoments)\/DS5_Bridge\/?$/i.test(url);
 }
 
 function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
