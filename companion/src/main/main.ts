@@ -72,9 +72,13 @@ function windowsAppUserModelId(): string {
 if (process.platform === 'win32') {
   app.setAppUserModelId(windowsAppUserModelId());
 } else if (process.platform === 'linux') {
-  // Pin the X11 WM_CLASS / Wayland app-id to the installed desktop file's
-  // basename (ds5-bridge.desktop) so KDE resolves the window's taskbar/tray
-  // icon from it instead of showing a fallback glyph.
+  // KDE resolves a window's icon by mapping its reported app-id / desktop-id to a .desktop file.
+  // Electron derives that id from the app name ("DS5 Bridge" -- a space + capitals), which does NOT
+  // match the installed ds5-bridge.desktop, so the icon fell back to a placeholder glyph. Report the
+  // lowercase, space-free id "ds5-bridge" so it matches the desktop file. app.setName also drives the
+  // userData dir, so pin settings to ~/.config/DS5 Bridge (APP_NAME) first to preserve existing profiles.
+  app.setPath('userData', path.join(app.getPath('appData'), APP_NAME));
+  app.setName('ds5-bridge');
   app.commandLine.appendSwitch('class', 'ds5-bridge');
 }
 
@@ -1256,7 +1260,10 @@ app.whenReady().then(async () => {
     return;
   }
 
-  app.setName(APP_NAME);
+  if (process.platform !== 'linux') {
+    // On Linux the name is pinned to "ds5-bridge" at startup (for the KDE icon); don't revert it.
+    app.setName(APP_NAME);
+  }
   ensureWindowsNotificationShortcut();
   Menu.setApplicationMenu(null);
   const settingsStore = new SettingsStore(app.getPath('userData'));
