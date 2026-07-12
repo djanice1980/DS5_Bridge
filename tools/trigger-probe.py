@@ -251,7 +251,7 @@ class Probe:
     def classic_rumble(self):
         return self.send(CMD_TEST_CLASSIC_RUMBLE, value=0)
 
-    def read_trace_events(self, max_reads=64):
+    def read_trace_events(self, max_reads=400):
         """Drain the trigger-trace ring (report 0x09). One record per GET."""
         events = []
         supported = True
@@ -331,47 +331,62 @@ def cmd_latency(probe, args):
           "For the true controller-vs-audio latency, use `trace` on a traces firmware.")
 
 
+AUDIO_REPORT_ID = 0x36  # DualSense audio-out report; floods the trace during playback
+
+
 def cmd_trace(probe, args):
     # Clear any stale ring, fire one command, then read the resulting timeline.
     probe.read_trace_events()
     probe.set_trigger_intensity(args.intensity)
     if args.command == "rumble":
-        print("Firing TEST_CLASSIC_RUMBLE and reading the firmware trace ...")
+        print("Firing TEST_CLASSIC_RUMBLE (classified output path) and reading the firmware trace ...")
         probe.classic_rumble()
     else:
         print("Firing TEST_ADAPTIVE_TRIGGERS and reading the firmware trace ...")
-        print("(note: adaptive-trigger commands take the urgent path and usually "
-              "show only a Bt stage; use --command rumble for a full "
-              "Host->BridgeIn->BridgeOut->Bt timeline.)")
+        print("(adaptive-trigger commands take the urgent path; use --command rumble "
+              "to exercise the classified path that audio can drop.)")
         probe.engage_trigger(args.mode, args.target)
     time.sleep(0.05)
     events, supported = probe.read_trace_events()
     if not supported:
         print("\nThis firmware does not expose trigger traces (report 0x09).")
-        print("Flash a diagnostics build: cmake ... -DDS5_DIAGNOSTICS_PRESET=traces")
-        print("(ds5-bridge-companion-traces.uf2 on the release page), then retry.")
+        print("Flash the diagnostics build (DS5-Bridge-Firmware-Traces-v*.uf2), then retry.")
         return
     if not events:
         print("\nNo trace events captured. Try again, or --command rumble.")
         return
-    print(f"\n{len(events)} trace event(s):")
-    print(f"  {'stage':<10} {'t(ms)':>10} {'dt(ms)':>8} {'rpt':>4} {'motor':>6}  triggers(R|L first bytes)")
-    prev_ts = None
+
+    # Separate the audio spam from the controller-state packets we care about.
+    audio = [e for e in events if e["report_id"] == AUDIO_REPORT_ID]
+    state = [e for e in events if e["report_id"] != AUDIO_REPORT_ID]
+    print(f"\n{len(events)} trace events: {len(audio)} audio (0x36), {len(state)} controller-state (non-audio).")
+
+    if audio:
+        span = audio[-1]["timestamp_ms"] - audio[0]["timestamp_ms"]
+        rate = f"{span / max(1, len(audio) - 1):.1f} ms/pkt" if len(audio) > 1 else "n/a"
+        print(f"  audio: {len(audio)} Bt packets over {span} ms ({rate}) -> audio IS streaming over Bluetooth.")
+
+    if not state:
+        print("\n  *** NO controller-state (trigger/rumble/lightbar) packets reached the Bluetooth link. ***")
+        print("  With audio streaming, the firmware's audio-protection guard drops classified")
+        print("  controller-state output before it is ever queued. That is the drop to fix.")
+        print("  (Re-run this with audio stopped: you should then see 0x31 state packets appear.)")
+        return
+
+    print(f"\n  controller-state packets:")
+    print(f"  {'stage':<10} {'t(ms)':>10} {'rpt':>5} {'motor':>6}  triggers(R|L first bytes)")
     stage_ts = {}
-    for e in events:
+    for e in state:
         ts = e["timestamp_ms"]
-        dt = "" if prev_ts is None else f"{ts - prev_ts}"
-        prev_ts = ts
         stage_ts.setdefault(e["stage"], ts)
         rt = " ".join(f"{b:02x}" for b in e["right_trigger"][:4])
         lt = " ".join(f"{b:02x}" for b in e["left_trigger"][:4])
-        print(f"  {STAGE_NAMES.get(e['stage'], e['stage']):<10} {ts:>10} {dt:>8} "
-              f"{e['report_id']:>4} {e['motor_power']:>6}  {rt} | {lt}")
+        print(f"  {STAGE_NAMES.get(e['stage'], e['stage']):<10} {ts:>10} "
+              f"0x{e['report_id']:02x} {e['motor_power']:>6}  {rt} | {lt}")
     if 2 in stage_ts and 3 in stage_ts:
-        print(f"\nBridgeIn -> BridgeOut (firmware queue latency): "
-              f"{stage_ts[3] - stage_ts[2]} ms   <-- this is what audio/interleave affects")
+        print(f"\n  BridgeIn -> BridgeOut (firmware queue latency): {stage_ts[3] - stage_ts[2]} ms")
     if 3 in stage_ts and 4 in stage_ts:
-        print(f"BridgeOut -> Bt (Bluetooth transmit): {stage_ts[4] - stage_ts[3]} ms")
+        print(f"  BridgeOut -> Bt (Bluetooth transmit): {stage_ts[4] - stage_ts[3]} ms")
 
 
 def interactive(probe):
