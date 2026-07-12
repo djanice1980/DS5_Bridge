@@ -360,7 +360,16 @@ function restoreMainWindowScale(recenter: boolean): void {
   if (!window || window.isDestroyed()) {
     return;
   }
-  applyWindowScale(window, currentUiScalePercent(), recenter);
+  // On show/restore/focus, keep whatever size the user resized or maximized the
+  // window to — only re-assert the zoom so the UI still fills it. (Resetting the
+  // size here is what made the window snap back to the default on restore.)
+  // A UI-scale change goes through applyWindowScale directly, not this path.
+  void recenter;
+  if (window.isMaximized() || window.isFullScreen()) {
+    return;
+  }
+  const bounds = window.getBounds();
+  window.webContents.setZoomFactor(fitZoomForBounds(bounds.width, bounds.height));
 }
 
 function scheduleMainWindowScaleRestore(recenter: boolean): void {

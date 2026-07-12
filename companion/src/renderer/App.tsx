@@ -37,6 +37,7 @@ import {
   IconMicrophone as Mic,
   IconMicrophoneOff as MicOff,
   IconMinus as Minus,
+  IconSquare as Square,
   IconMoon as Moon,
   IconPalette as Palette,
   IconPencil as Pencil,
@@ -6221,6 +6222,9 @@ export function App() {
           <div className="window-actions">
             <button type="button" title="Minimize" onClick={() => void window.bridge.minimizeWindow()}>
               <Minus size={16} />
+            </button>
+            <button type="button" title="Maximize / Restore" onClick={() => void window.bridge.toggleMaximizeWindow()}>
+              <Square size={14} />
             </button>
             <button type="button" title="Hide to tray" onClick={() => void window.bridge.hideWindow()}>
               <X size={16} />

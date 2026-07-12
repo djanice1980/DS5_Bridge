@@ -11,13 +11,17 @@ function extractFunction(name: string): string {
 }
 
 describe('main window behavior', () => {
-  it('reapplies the saved UI scale when Windows restores a compacted window', () => {
+  it('keeps the user-chosen window size on restore and only re-asserts zoom', () => {
     const showWindowCentered = extractFunction('showWindowCentered');
     const restoreMainWindowScale = extractFunction('restoreMainWindowScale');
     const currentUiScalePercent = extractFunction('currentUiScalePercent');
 
     expect(currentUiScalePercent).toContain('bridgeService?.getSnapshot().settings.uiScalePercent');
-    expect(restoreMainWindowScale).toContain('applyWindowScale(window, currentUiScalePercent(), recenter);');
+    // Restore must NOT reset the window size (that was the snap-back-to-default bug);
+    // it only re-asserts the zoom so the UI still fills whatever size the user set.
+    expect(restoreMainWindowScale).toContain('setZoomFactor(fitZoomForBounds(bounds.width, bounds.height))');
+    expect(restoreMainWindowScale).toContain('window.isMaximized() || window.isFullScreen()');
+    expect(restoreMainWindowScale).not.toContain('applyWindowScale(');
     expect(showWindowCentered.indexOf('restoreMainWindowScale(false);')).toBeGreaterThanOrEqual(0);
     expect(showWindowCentered.indexOf('restoreMainWindowScale(false);')).toBeLessThan(
       showWindowCentered.indexOf('const display = screen.getPrimaryDisplay();')

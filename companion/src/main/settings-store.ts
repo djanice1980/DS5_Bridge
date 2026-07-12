@@ -50,7 +50,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   triggerEffectIntensityPercent: 100,
   triggerTestMode: 'feedback',
   speakerEnabled: true,
-  speakerVolumePercent: 100,
+  speakerVolumePercent: 70,
   micVolumePercent: 100,
   micMuted: false,
   audioReactiveHapticsEnabled: false,
