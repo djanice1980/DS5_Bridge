@@ -2715,33 +2715,16 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     const bool classic_rumble_transition = output_report_is_classic_rumble_transition(data, len);
     const bool stripped_redundant_classic_rumble =
         !classic_rumble_transition && strip_redundant_classic_rumble_from_output(data, len);
-    if (speaker_output_enabled && audio_protected && !classic_rumble_transition) {
-        const uint8_t reason = classify_output_report(data, len);
-        uint8_t trace_transform_flags = OutputTraceTransformAudioProtected;
-        if (stripped_redundant_classic_rumble) {
-            trace_transform_flags |= OutputTraceTransformStrippedZeroRumble;
-        }
-        if (output_report_has_feedback_state_flags(data, len)) {
-            trace_transform_flags |= OutputTraceTransformFeedbackState;
-        }
-        if (output_report_has_state_flags(data, len)) {
-            trace_transform_flags |= OutputTraceTransformState;
-        }
-#ifdef ENABLE_COMPANION
-        companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, data, len, reason);
-        companion_note_feedback_trace_report(
-            CompanionFeedbackTraceBridgeOut,
-            data,
-            len,
-            reason,
-            trace_critical_depth,
-            trace_audio_depth,
-            trace_route_flags,
-            trace_transform_flags
-        );
-#endif
-        return true;
-    }
+    // Audio used to DROP controller-state output here (return true) whenever the
+    // audio route was protected -- which starved adaptive triggers, rumble, and
+    // lightbar the entire time audio played. Worse, it happened upstream of the
+    // output scheduler, so the audio/controller interleave could never balance
+    // them: the state was gone before it was ever queued. Instead, let the state
+    // fall through to the normal coalesced enqueue below. The interleave scheduler
+    // bounds controller state's share of the Bluetooth link, so audio stays full
+    // while triggers/rumble still get through; raise the interleave "audio packets
+    // per controller update" if audio ever needs more protection. audio_protected
+    // is still recorded in the trace transform flags below for diagnostics.
     const bool split_state = split_state_from_mixed_output(data, len);
     const uint8_t reason = classify_output_report(data, len);
     uint8_t trace_transform_flags = 0;
