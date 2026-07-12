@@ -5953,6 +5953,10 @@ button.trigger-lab-chip {
 }
 
 .system-page .profile-controls {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.system-page .profile-controls--repair {
   grid-template-columns: 38px minmax(0, 1fr) auto;
 }
 

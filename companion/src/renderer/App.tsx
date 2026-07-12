@@ -8770,7 +8770,7 @@ export function App() {
                   <h2>System</h2>
                   <p>Configure bridge behavior and defaults.</p>
                 </div>
-                <div className="profile-controls">
+                <div className={`profile-controls${IS_WINDOWS_HOST ? ' profile-controls--repair' : ''}`}>
                   {IS_WINDOWS_HOST && (
                     <button
                       className="heading-icon-action emergency-repair-button"
