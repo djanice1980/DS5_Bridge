@@ -1027,6 +1027,11 @@ export class SettingsStore {
     const persisted = this.read();
     this.settings = persisted.settings;
     this.customSettings = persisted.customSettings;
+    if (process.env.DS5_DEBUG === '1') {
+      const profiles = this.settings.controllerProfiles;
+      const summary = Array.isArray(profiles) ? profiles.map((p) => `${p.id}:${p.name}`).join(', ') : String(profiles);
+      console.log(`[DS5_DEBUG] settings-store loaded ${this.filePath} -> selected=${this.settings.selectedControllerProfileId} controllerProfiles=[${summary}]`);
+    }
   }
 
   get(): CompanionSettings {

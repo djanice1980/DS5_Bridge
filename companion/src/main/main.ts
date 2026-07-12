@@ -498,6 +498,9 @@ function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
   window.on('move', () => bridgeService?.pausePollingFor(700));
 
   window.loadFile(rendererIndexPath);
+  if (process.env.DS5_DEBUG === '1') {
+    window.webContents.openDevTools({ mode: 'detach' });
+  }
   window.webContents.once('did-finish-load', () => {
     applyWindowScale(window, uiScalePercent, false);
   });
