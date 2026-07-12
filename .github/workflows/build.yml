@@ -105,6 +105,15 @@ jobs:
           cmake --build build/traces --target ds5-bridge
           cp build/traces/ds5-bridge.uf2 artifacts/ds5-bridge-companion-traces.uf2
 
+      - name: Build standalone flash-nuke (RP2350)
+        run: |
+          cmake -S tools/pico-universal-flash-nuke -B build/nuke -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DPICO_BOARD=pico2
+          cmake --build build/nuke --target flash_nuke
+          cp build/nuke/flash_nuke.uf2 artifacts/DS5-Bridge-Flash-Nuke.uf2
+
       - name: Upload companion UF2 artifact
         uses: actions/upload-artifact@v7
         with:
@@ -123,5 +132,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/ds5-bridge-companion-traces.uf2
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload standalone flash-nuke UF2 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/DS5-Bridge-Flash-Nuke.uf2
           archive: false
           if-no-files-found: error
