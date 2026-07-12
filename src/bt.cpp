@@ -1259,6 +1259,12 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
+                // A controller found via inquiry is in pairing mode and wants a fresh bond, so any
+                // stored link key for it is stale (it forgot us after pairing to another host). Drop it
+                // now so LINK_KEY_REQUEST forces fresh SSP instead of offering a dead key -- the dead-key
+                // auth fails and the ensuing disconnect reboots the Pico before the drop persists, which
+                // is why switching a controller between Picos used to require a flash nuke.
+                gap_drop_link_key_for_bd_addr(current_device_addr);
                 mark_acl_connection_pending();
                 HCI_SEND_CMD_LOGGED(&hci_create_connection, current_device_addr,
                              hci_usable_acl_packet_types(), 0, 0, 0, 1);
