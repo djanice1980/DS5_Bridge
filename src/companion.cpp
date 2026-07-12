@@ -140,6 +140,7 @@ enum CommandId : uint8_t {
     CommandSetClassicRumbleV1 = 0x25,
     CommandSetSpeakerGain = 0x32,
     CommandEnterBootloader = 0x33,
+    CommandSetAudioInterleave = 0x34,
 };
 
 enum AckResult : uint8_t {
@@ -1943,6 +1944,26 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetAudioInterleave: {
+            // value (buffer[8..9]) = max consecutive audio sends before a pending
+            // controller-state packet is forced out. buffer[10..11] = the state
+            // latency cap in microseconds. bt_set_audio_interleave clamps both to
+            // the supported range, so we only reject an obviously invalid zero.
+            const uint16_t max_audio_run = value;
+            const uint16_t state_max_age_us = read_u16(buffer + 10);
+            if (max_audio_run == 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            bt_set_audio_interleave(
+                static_cast<uint8_t>(max_audio_run > 255 ? 255 : max_audio_run),
+                static_cast<uint32_t>(state_max_age_us)
+            );
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+        }
+
         case CommandSetClassicRumbleGain:
             if (value > kMaxFeedbackGainPercent) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -2301,6 +2322,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             restore_defaults();
+            bt_reset_audio_interleave();
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;

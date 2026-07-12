@@ -13,9 +13,12 @@ import {
   ProtocolError,
   REMAP_BUTTON_IDS,
   REPORT_ID,
+  AUDIO_INTERLEAVE_DEFAULT,
+  buildAudioInterleaveCommand,
   buildButtonRemapPayload,
   buildChordBindingsPayload,
   buildCommandReport,
+  clampAudioInterleaveValues,
   hostPersonaModeValue,
   isChordBindingAllowed,
   normalizeBridgePresetId,
@@ -405,6 +408,36 @@ describe('companion protocol', () => {
     expect(report[9]).toBe(1);
     expect(report[11]).toBe(0x68);
     expect(report[12]).toBe(0x02);
+  });
+
+  it('builds an audio interleave command with the state latency in the extra payload', () => {
+    // Firmware reads value (report[9..10]) as max_consecutive_audio_sends and
+    // read_u16(buffer+10) -> report[11..12] as state_max_age_us (little-endian).
+    const report = buildAudioInterleaveCommand(9, 4, 3000);
+    expect(report[7]).toBe(COMMAND_ID.SET_AUDIO_INTERLEAVE);
+    expect(report[8]).toBe(9);
+    expect(report[9]).toBe(4);
+    expect(report[11]).toBe(3000 & 0xff);
+    expect(report[12]).toBe((3000 >> 8) & 0xff);
+  });
+
+  it('clamps out-of-range audio interleave values to the firmware bounds', () => {
+    expect(clampAudioInterleaveValues(0, 10)).toEqual({
+      maxConsecutiveAudioSends: 1,
+      stateMaxAgeUs: 250
+    });
+    expect(clampAudioInterleaveValues(1000, 999999)).toEqual({
+      maxConsecutiveAudioSends: 64,
+      stateMaxAgeUs: 60000
+    });
+    // The default is a valid, unclamped point.
+    expect(clampAudioInterleaveValues(
+      AUDIO_INTERLEAVE_DEFAULT.maxConsecutiveAudioSends,
+      AUDIO_INTERLEAVE_DEFAULT.stateMaxAgeUs
+    )).toEqual({
+      maxConsecutiveAudioSends: AUDIO_INTERLEAVE_DEFAULT.maxConsecutiveAudioSends,
+      stateMaxAgeUs: AUDIO_INTERLEAVE_DEFAULT.stateMaxAgeUs
+    });
   });
 
   it('builds a USB suspend disconnect setting command report', () => {

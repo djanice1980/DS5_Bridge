@@ -35,6 +35,8 @@ export interface CompanionSettings {
   hapticsGainPercent: number;
   feedbackBoostEnabled: boolean;
   hapticsBufferLength: number;
+  audioInterleaveMaxConsecutiveAudioSends: number;
+  audioInterleaveStateMaxAgeUs: number;
   classicRumbleEnabled: boolean;
   classicRumbleGainPercent: number;
   classicRumbleV1Enabled: boolean;

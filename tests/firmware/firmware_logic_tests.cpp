@@ -191,30 +191,33 @@ DualSenseInputReport sample_dualsense_input_report() {
 
 OutputSchedulerInputs scheduler_inputs() {
     return OutputSchedulerInputs{
-        false,
-        false,
-        0,
-        0,
-        0,
+        false,  // audio_available
+        false,  // coalesced_state_available
+        0,      // consecutive_audio_sends
+        0,      // state_age_us
     };
 }
 
 OutputSchedulerConfig scheduler_config() {
     return OutputSchedulerConfig{
-        1'000,
-        2,
+        4,      // max_consecutive_audio_sends
+        3'000,  // state_max_age_us
     };
 }
 
-void scheduler_prioritizes_audio_when_non_audio_would_delay_streaming() {
+// Audio wins the slot by default so its buffer stays full -- even when a
+// controller-state packet is also pending, as long as that state is still fresh.
+void scheduler_prioritizes_audio_when_state_is_fresh() {
     auto inputs = scheduler_inputs();
     auto config = scheduler_config();
     inputs.audio_available = true;
-    inputs.audio_depth = 1;
     inputs.coalesced_state_available = true;
+    inputs.consecutive_audio_sends = config.max_consecutive_audio_sends - 1;
+    inputs.state_age_us = config.state_max_age_us - 1;
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
 }
 
+// With no audio queued, pending controller state is flushed immediately.
 void scheduler_sends_coalesced_state_when_audio_is_absent() {
     auto inputs = scheduler_inputs();
     auto config = scheduler_config();
@@ -222,22 +225,45 @@ void scheduler_sends_coalesced_state_when_audio_is_absent() {
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::CoalescedState);
 }
 
-void scheduler_audio_due_on_age_backlog_or_fairness_limit() {
+// Once audio has taken max_consecutive_audio_sends slots in a row, a pending
+// controller-state packet is guaranteed the next slot.
+void scheduler_forces_state_after_audio_run() {
     auto inputs = scheduler_inputs();
     auto config = scheduler_config();
     inputs.audio_available = true;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
+    inputs.coalesced_state_available = true;
+    inputs.state_age_us = 0;
+    inputs.consecutive_audio_sends = config.max_consecutive_audio_sends;
+    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::CoalescedState);
+}
 
-    inputs.audio_age_us = config.audio_max_age_us;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
+// The wall-clock latency cap forces state out even inside an audio run.
+void scheduler_forces_state_when_aged_out() {
+    auto inputs = scheduler_inputs();
+    auto config = scheduler_config();
+    inputs.audio_available = true;
+    inputs.coalesced_state_available = true;
+    inputs.consecutive_audio_sends = 0;
+    inputs.state_age_us = config.state_max_age_us;
+    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::CoalescedState);
+}
 
-    inputs.audio_age_us = 0;
-    inputs.audio_depth = 2;
+// A long audio run never yields the slot when there is no controller state
+// waiting -- audio keeps 100% of the link during steady gameplay.
+void scheduler_audio_streams_freely_without_pending_state() {
+    auto inputs = scheduler_inputs();
+    auto config = scheduler_config();
+    inputs.audio_available = true;
+    inputs.coalesced_state_available = false;
+    inputs.consecutive_audio_sends = 255;
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
+}
 
-    inputs.audio_depth = 1;
-    inputs.consecutive_non_audio_sends = config.max_consecutive_non_audio_sends;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
+// Nothing queued -> nothing to send.
+void scheduler_returns_none_when_idle() {
+    auto inputs = scheduler_inputs();
+    auto config = scheduler_config();
+    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::None);
 }
 
 void packet_compositor_initializes_bluetooth_report_and_wraps_sequence() {
@@ -1183,9 +1209,12 @@ struct TestCase {
 };
 
 std::vector<TestCase> tests{
-    {"scheduler prioritizes audio when non-audio would delay streaming", scheduler_prioritizes_audio_when_non_audio_would_delay_streaming},
+    {"scheduler prioritizes audio when state is fresh", scheduler_prioritizes_audio_when_state_is_fresh},
     {"scheduler sends coalesced state when audio is absent", scheduler_sends_coalesced_state_when_audio_is_absent},
-    {"scheduler audio due on age backlog or fairness limit", scheduler_audio_due_on_age_backlog_or_fairness_limit},
+    {"scheduler forces state after audio run", scheduler_forces_state_after_audio_run},
+    {"scheduler forces state when aged out", scheduler_forces_state_when_aged_out},
+    {"scheduler audio streams freely without pending state", scheduler_audio_streams_freely_without_pending_state},
+    {"scheduler returns none when idle", scheduler_returns_none_when_idle},
     {"packet compositor initializes bluetooth report and wraps sequence", packet_compositor_initializes_bluetooth_report_and_wraps_sequence},
     {"classic rumble gain clamps rounds and touches motor payloads", classic_rumble_gain_clamps_rounds_and_touches_motor_payloads},
     {"audio haptics replace tracks state without suppressing classic rumble", audio_haptics_replace_tracks_state_without_suppressing_classic_rumble},
