@@ -212,6 +212,14 @@ See [docs/development.md](docs/development.md) for build requirements, firmware 
 companion app setup, audio helper notes, and packaging. Linux-port internals (PipeWire audio,
 libusb transport, `uinput`, packaging) are covered in [docs/linux-port.md](docs/linux-port.md).
 
+**Backporting to the Windows / upstream build:**
+[docs/upstream-backport-notes.md](docs/upstream-backport-notes.md) is a per-fix technical changelog of
+everything this port changed — firmware *and* companion — each item with its symptom, root cause, exact
+files/functions, and a flag for whether it applies to Windows. Written so the
+[upstream author](https://github.com/SundayMoments/DS5_Bridge) can adopt applicable fixes without
+reverse-engineering the diffs. The three firmware fixes (adaptive-triggers-die-under-audio, the fair-interleave
+output scheduler, and the stale-link-key / dongle-switch fix) apply to the Windows build directly.
+
 ## Project Layout
 
 | Path | Purpose |
