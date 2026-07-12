@@ -225,6 +225,14 @@ static class PipeWireAudio
         startInfo.ArgumentList.Add(AudioConstants.TargetSampleRate.ToString());
         startInfo.ArgumentList.Add("--channels");
         startInfo.ArgumentList.Add(channels.ToString());
+        if (channels == 2)
+        {
+            // Pull only the front pair. When the capture target is the bridge's
+            // own 4.0 sink monitor, this keeps our haptics (on RL/RR) out of the
+            // captured signal so the DSP can't feed back on itself.
+            startInfo.ArgumentList.Add("--channel-map");
+            startInfo.ArgumentList.Add("FL,FR");
+        }
         if (captureSink)
         {
             startInfo.ArgumentList.Add("-P");
@@ -353,34 +361,36 @@ static class LinuxEndpointManager
         Console.Error.WriteLine($"status: default-render-set device='{StatusText.Escape(bridgeSink.Description)}'");
     }
 
-    // Compensate the ~6 dB the Linux USB-audio path loses when it spreads
-    // stereo across the controller's 4 channels: boost the controller sink's
-    // software volume so a given firmware gain level matches Windows. Applied
-    // only to a pristine (~100%) sink so it never fights a user adjustment.
+    // With UCM disabled the controller presents a proper 4.0 sink, so stereo
+    // maps to the front pair at unity — no path loss to compensate. But the
+    // raw hardware volume defaults low (~40%), so just raise a still-quiet sink
+    // to a clean 100%. Anything the user has already set to a usable level
+    // (>= 50%) is left alone; nothing is ever boosted past 100%.
     public static void ApplySpeakerCompensation(double factor)
     {
+        _ = factor;
         var snapshot = PipeWireAudio.Query();
         var sink = SelectBridgeSink(snapshot);
         if (sink is null)
         {
-            Console.Error.WriteLine("status: speaker-compensation-skipped reason=no-sink");
+            Console.Error.WriteLine("status: speaker-level-skipped reason=no-sink");
             return;
         }
 
         var current = TryGetNodeVolume(sink.Id);
-        if (current is double vol && Math.Abs(vol - 1.0) > 0.02)
+        if (current is double vol && vol >= 0.5)
         {
             Console.Error.WriteLine(
-                $"status: speaker-compensation-skipped reason=user-set volume={FormatFactor(vol)}");
+                $"status: speaker-level-skipped reason=already-set volume={FormatFactor(vol)}");
             return;
         }
 
         _ = PipeWireAudio.RunTool(
             "wpctl",
-            new[] { "set-volume", sink.Id.ToString(), FormatFactor(factor) },
+            new[] { "set-volume", sink.Id.ToString(), "1.0" },
             timeoutMs: 5000);
         Console.Error.WriteLine(
-            $"status: speaker-compensation-applied volume={FormatFactor(factor)} device='{StatusText.Escape(sink.Description)}'");
+            $"status: speaker-level-set volume=1.0 device='{StatusText.Escape(sink.Description)}'");
     }
 
     private static double? TryGetNodeVolume(int nodeId)

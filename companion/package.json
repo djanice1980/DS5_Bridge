@@ -101,7 +101,7 @@
       ]
     },
     "linux": {
-      "icon": "../assets/controllers/ds5-bridge_app-icon-tile.png",
+      "icon": "../assets/icons",
       "category": "Game",
       "maintainer": "SundayMoments <sundaymoments@users.noreply.github.com>",
       "synopsis": "Companion app for the DS5 Bridge Pico dongle",
@@ -120,6 +120,13 @@
           "to": "udev",
           "filter": [
             "60-ds5bridge.rules"
+          ]
+        },
+        {
+          "from": "../packaging/linux",
+          "to": "wireplumber",
+          "filter": [
+            "52-ds5-bridge-noucm.conf"
           ]
         }
       ],
@@ -142,7 +149,8 @@
       "fpm": [
         "--after-install=../packaging/linux/pacman-after-install.sh",
         "--after-remove=../packaging/linux/pacman-after-remove.sh",
-        "../packaging/linux/60-ds5bridge.rules=/usr/lib/udev/rules.d/60-ds5bridge.rules"
+        "../packaging/linux/60-ds5bridge.rules=/usr/lib/udev/rules.d/60-ds5bridge.rules",
+        "../packaging/linux/52-ds5-bridge-noucm.conf=/usr/share/wireplumber/wireplumber.conf.d/52-ds5-bridge-noucm.conf"
       ]
     },
     "nsis": {

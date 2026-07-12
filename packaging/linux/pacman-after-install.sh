@@ -21,4 +21,12 @@ mkdir -p /etc/modules-load.d
 echo uinput > /etc/modules-load.d/ds5bridge-uinput.conf
 modprobe uinput 2> /dev/null || true
 
+# Refresh the icon cache so the app shows an icon in the menu.
+if command -v gtk-update-icon-cache > /dev/null 2>&1; then
+  gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2> /dev/null || true
+fi
+
 echo "DS5 Bridge: udev rules active. Unplug and replug the bridge dongle once."
+echo "DS5 Bridge: a WirePlumber rule was installed to fix controller audio/haptics."
+echo "            Restart audio to apply it:  systemctl --user restart wireplumber pipewire pipewire-pulse"
+echo "            (or just log out and back in / reboot)."

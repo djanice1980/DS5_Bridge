@@ -64,13 +64,10 @@ static class LinuxHapticsMirror
                 return 1;
             }
 
-            // Feedback-loop guard: mirroring the bridge into itself would echo.
-            if (!options.StdoutOnly && LinuxEndpointManager.IsBridgeNode(captureNode))
-            {
-                Console.Error.WriteLine(
-                    $"status: system-haptics-bypassed reason=source-is-bridge device='{StatusText.Escape(captureNode.Description)}'");
-                return 0;
-            }
+            // No source-is-bridge bypass: we capture only FL/FR (see
+            // StartCapture) and write haptics to RL/RR, so capturing the
+            // bridge's own monitor doesn't feed back. This is what makes
+            // haptics work when the controller is the default output.
         }
 
         PipeWireNode? targetNode = null;
