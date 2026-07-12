@@ -2871,6 +2871,7 @@ export function App() {
   });
   const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
   const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
+  const [appVersion, setAppVersion] = useState('');
   const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<StandardRemapButtonId, RemapCalloutLayout> | null>(null);
   const [edgeRemapControlLayout, setEdgeRemapControlLayout] = useState<Record<DualSenseEdgeRemapButtonId, EdgeRemapControlLayout> | null>(null);
   const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
@@ -3267,6 +3268,9 @@ export function App() {
         applySnapshot(next);
       }
     });
+    void window.bridge.getAppVersion()
+      .then((version) => { if (!cancelled) setAppVersion(version); })
+      .catch(() => {});
     const unsubscribe = window.bridge.onSnapshot((next) => {
       receivedLiveSnapshot = true;
       if (windowDraggingRef.current) {
@@ -9891,6 +9895,10 @@ export function App() {
                   </button>
                 </div>
                 <div className="settings-menu-section-label">About</div>
+                <div className="settings-menu-link-copy" style={{ padding: '2px 4px 12px' }}>
+                  <strong>DS5 Bridge</strong>
+                  <span>Version {appVersion || '—'}</span>
+                </div>
                 <button
                   type="button"
                   className="settings-menu-link-row"

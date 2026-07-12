@@ -1051,6 +1051,7 @@ async function runPicoFirmwareIpcAction(
 
 function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:getStatus', () => service.getSnapshot());
+  ipcMain.handle('app:getVersion', () => app.getVersion());
   ipcMain.handle('bridge:listDevices', () => service.listDevices());
   ipcMain.handle('bridge:listAudioHapticsSessions', async () => (
     addAudioHapticsSessionIcons(await service.listAudioHapticsSessions())

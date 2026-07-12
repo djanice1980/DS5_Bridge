@@ -24,6 +24,7 @@ import type {
 
 const api = {
   platform: process.platform as string,
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:getVersion'),
   getStatus: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:getStatus'),
   listDevices: () => ipcRenderer.invoke('bridge:listDevices'),
   listAudioHapticsSessions: (): Promise<AudioHapticsSession[]> => (
