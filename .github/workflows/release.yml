@@ -111,6 +111,16 @@ jobs:
           cmake --build build/waveshare --target ds5-bridge
           cp build/waveshare/ds5-bridge.uf2 "artifacts/DS5-Bridge-Firmware-Waveshare-v${FIRMWARE_VERSION}.uf2"
 
+      - name: Build diagnostics (traces) firmware
+        run: |
+          cmake -S . -B build/traces -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DENABLE_COMPANION=ON \
+            -DDS5_DIAGNOSTICS_PRESET=traces
+          cmake --build build/traces --target ds5-bridge
+          cp build/traces/ds5-bridge.uf2 "artifacts/DS5-Bridge-Firmware-Traces-v${FIRMWARE_VERSION}.uf2"
+
       - name: Upload firmware to release
         env:
           GH_TOKEN: ${{ github.token }}
