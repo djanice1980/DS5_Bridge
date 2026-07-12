@@ -1289,17 +1289,11 @@ export class BridgeService extends EventEmitter {
     };
     this.systemAudioHapticsEngine.on('error', (error: Error) => {
       this.appendAudioDebugLines([`[SystemHaptics] error: ${error.message}`]);
-      if (process.platform === 'linux') {
-        console.error(`[SystemHaptics] error: ${error.message}`);
-      }
       this.emitSnapshot();
     });
     this.systemAudioHapticsEngine.on('status', (line: string) => {
       if (line) {
         this.appendAudioDebugLines([`[SystemHaptics] ${line}`]);
-        if (process.platform === 'linux') {
-          console.error(`[SystemHaptics] ${line}`);
-        }
       }
       void this.handleSystemAudioHapticsStatus(line);
       this.emitSnapshot();
@@ -3208,18 +3202,16 @@ export class BridgeService extends EventEmitter {
     const hasDevice = Boolean(this.device);
     const controllerConnected = this.controllerAudioReady();
     const firmwareFlag = this.systemAudioHapticsSupported();
-    // Linux diagnostic: when the user has Audio Haptics toggled on, surface why
-    // the mirror does or doesn't run (visible in the terminal when launched from
-    // one). Throttled so it only logs on state change.
+    // When Audio Haptics is enabled, record why the mirror does or doesn't run
+    // in the in-app Audio Debug (System > Diagnostics). Throttled to state
+    // changes; not printed to the console.
     if (process.platform === 'linux' && settings.audioReactiveHapticsEnabled) {
       const gateLog =
         `[SystemHaptics] gates desired=${desired} device=${hasDevice} controllerConnected=${controllerConnected}`
-        + ` firmwareFlag=${firmwareFlag} passthrough=${this.systemAudioHapticsPassthroughActive}`
-        + ` retryMs=${Math.max(0, this.systemAudioHapticsRetryAt - Date.now())}`;
+        + ` firmwareFlag=${firmwareFlag} passthrough=${this.systemAudioHapticsPassthroughActive}`;
       if (gateLog !== this.lastSystemHapticsGateLog) {
         this.lastSystemHapticsGateLog = gateLog;
         this.appendAudioDebugLines([gateLog]);
-        console.error(gateLog);
       }
     }
     if (!desired || !hasDevice || !controllerConnected || !firmwareFlag) {
@@ -3240,19 +3232,12 @@ export class BridgeService extends EventEmitter {
 
     try {
       await this.systemAudioHapticsEngine.start(this.systemAudioHapticsConfig(settings), this.currentHostPersonaMode());
-      if (process.platform === 'linux') {
-        console.error('[SystemHaptics] mirror start() resolved — helper should be running');
-      }
       if (this.systemAudioHapticsPassthroughActive) {
         this.systemAudioHapticsPassthroughActive = false;
         await this.applyAudioReactiveHapticsSettings(settings, false);
       }
       this.systemAudioHapticsRetryAt = 0;
     } catch (error) {
-      if (process.platform === 'linux') {
-        const detail = error instanceof Error ? error.message : String(error);
-        console.error(`[SystemHaptics] mirror start() threw: ${detail}`);
-      }
       await this.systemAudioHapticsEngine.stop();
       if (this.systemAudioHapticsPassthroughActive) {
         this.systemAudioHapticsRetryAt = Date.now() + SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS;

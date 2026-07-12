@@ -71,6 +71,11 @@ function windowsAppUserModelId(): string {
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(windowsAppUserModelId());
+} else if (process.platform === 'linux') {
+  // Pin the X11 WM_CLASS / Wayland app-id to the installed desktop file's
+  // basename (ds5-bridge.desktop) so KDE resolves the window's taskbar/tray
+  // icon from it instead of showing a fallback glyph.
+  app.commandLine.appendSwitch('class', 'ds5-bridge');
 }
 
 if (!hasSingleInstanceLock) {
@@ -140,13 +145,31 @@ function applyWindowScale(window: BrowserWindow, uiScalePercent: UiScalePercent,
     ? Math.round(Math.max(workArea.y, Math.min(centerY - (height / 2), workArea.y + workArea.height - height)))
     : currentBounds.y;
 
-  window.webContents.setZoomFactor(uiScalePercent / 100);
-  window.setMinimumSize(width, height);
-  window.setMaximumSize(width, height);
+  // The UI-scale control now sets a preferred window SIZE; the zoom follows the
+  // window's actual size (see the 'resize' handler in createWindow), so the
+  // content scales to fill whatever the user resizes or maximizes to.
+  window.setResizable(true);
+  window.setMaximizable(true);
+  window.setFullScreenable(true);
+  window.setMinimumSize(minWindowWidth(), minWindowHeight());
+  window.setMaximumSize(0, 0);
   window.setBounds({ x, y, width, height }, false);
-  window.setResizable(false);
-  window.setMaximizable(false);
-  window.setFullScreenable(false);
+  window.webContents.setZoomFactor(fitZoomForBounds(width, height));
+}
+
+const MIN_WINDOW_SCALE = 0.5;
+function minWindowWidth(): number {
+  return Math.round(BASE_WINDOW_WIDTH * MIN_WINDOW_SCALE);
+}
+function minWindowHeight(): number {
+  return Math.round(BASE_WINDOW_HEIGHT * MIN_WINDOW_SCALE);
+}
+
+// Zoom that makes the fixed-aspect UI fill the given window size without
+// overflowing (min of the two axis ratios). At the exact scaled size this
+// equals uiScalePercent/100.
+function fitZoomForBounds(width: number, height: number): number {
+  return Math.max(0.25, Math.min(width / BASE_WINDOW_WIDTH, height / BASE_WINDOW_HEIGHT));
 }
 
 function applySnapshotWindowScale(snapshot: { settings: { uiScalePercent: UiScalePercent } }): void {
@@ -407,16 +430,14 @@ function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
   const window = new BrowserWindow({
     width,
     height,
-    minWidth: width,
-    minHeight: height,
-    maxWidth: width,
-    maxHeight: height,
+    minWidth: minWindowWidth(),
+    minHeight: minWindowHeight(),
     show: false,
     title: 'DS5 Bridge',
     frame: false,
-    resizable: false,
-    maximizable: false,
-    fullscreenable: false,
+    resizable: true,
+    maximizable: true,
+    fullscreenable: true,
     transparent: false,
     backgroundColor: '#0b1017',
     skipTaskbar: false,
@@ -427,6 +448,16 @@ function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
       nodeIntegration: false,
       sandbox: true
     }
+  });
+
+  // Scale the fixed-aspect UI to fill whatever size the user drags or maximizes
+  // the window to. Zoom follows the window's actual size.
+  window.on('resize', () => {
+    if (window.isDestroyed()) {
+      return;
+    }
+    const bounds = window.getBounds();
+    window.webContents.setZoomFactor(fitZoomForBounds(bounds.width, bounds.height));
   });
 
   window.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
