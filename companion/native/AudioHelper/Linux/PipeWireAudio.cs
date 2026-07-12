@@ -219,6 +219,10 @@ static class PipeWireAudio
             RedirectStandardError = true,
             UseShellExecute = false
         };
+        // Headerless PCM to the pipe. Without --raw, pw-record/pw-play route the
+        // stream through libsndfile, which fails on a headerless pipe with
+        // "Format not recognised" and the process exits immediately.
+        startInfo.ArgumentList.Add("--raw");
         startInfo.ArgumentList.Add("--format");
         startInfo.ArgumentList.Add("s16");
         startInfo.ArgumentList.Add("--rate");
@@ -255,6 +259,10 @@ static class PipeWireAudio
             RedirectStandardError = true,
             UseShellExecute = false
         };
+        // Read headerless PCM from the pipe (matches StartCapture). Without
+        // --raw, pw-play asks libsndfile to detect a container on stdin and dies
+        // with "Format not recognised".
+        startInfo.ArgumentList.Add("--raw");
         startInfo.ArgumentList.Add("--format");
         startInfo.ArgumentList.Add("s16");
         startInfo.ArgumentList.Add("--rate");

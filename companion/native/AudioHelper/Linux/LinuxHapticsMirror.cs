@@ -338,12 +338,43 @@ static class LinuxHapticsMirror
         {
             if (!stopRequested.IsSet)
             {
+                var detail = ReadStderrTail(playback);
                 Console.Error.WriteLine(
-                    "status: capture-unavailable reason=helper-exit device='haptics mirror pipe closed'");
+                    "status: capture-unavailable reason=helper-exit device='haptics mirror pipe closed'"
+                    + (detail.Length > 0 ? $" playbackError='{StatusText.Escape(detail)}'" : ""));
                 return 1;
             }
         }
         return 0;
+    }
+
+    // Last non-empty line a finished child wrote to stderr (e.g. pw-play's
+    // "Format not recognised"), so a dead subprocess reports why instead of a
+    // bare "pipe closed".
+    private static string ReadStderrTail(Process? process)
+    {
+        if (process is null || !process.HasExited)
+        {
+            return "";
+        }
+        try
+        {
+            var text = process.StandardError.ReadToEnd();
+            var lines = text.Split('\n');
+            for (var i = lines.Length - 1; i >= 0; i--)
+            {
+                var line = lines[i].Trim();
+                if (line.Length > 0)
+                {
+                    return line;
+                }
+            }
+        }
+        catch
+        {
+            // Best effort.
+        }
+        return "";
     }
 
     // Pack 512 haptic samples into the firmware's 264-byte compact frame:
