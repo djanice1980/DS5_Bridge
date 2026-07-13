@@ -145,7 +145,10 @@ static tusb_desc_device_t const desc_device =
 #endif
     // v1.6.1 removes the defunct host-encoder PCM mirror interface. Bump the
     // USB revision so Windows re-enumerates the companion bridge cleanly.
-    .bcdDevice = 0x0153,
+    // Wake-on-connect adds the USB remote-wakeup bit (bmAttributes 0xE0) to
+    // the config descriptor; bump the revision again so Windows re-reads the
+    // changed descriptor instead of serving a stale cached copy.
+    .bcdDevice = 0x0154,
 
     .iManufacturer = 0x01,
     .iProduct = 0x02,
