@@ -2751,6 +2751,13 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setWakeOnControllerConnect(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_WAKE_ON_CONNECT, enabled ? 1 : 0, {
+      wakeOnControllerConnect: enabled
+    });
+    return this.getSnapshot();
+  }
+
   async setSleepKeybindEnabled(enabled: boolean): Promise<BridgeSnapshot> {
     await this.sendSettingCommand(COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED, enabled ? 1 : 0, {
       sleepKeybindEnabled: enabled
@@ -3753,6 +3760,12 @@ export class BridgeService extends EventEmitter {
       COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
       settings.usbSuspendDisconnectEnabled ? 1 : 0,
       { expectSettingsRevisionChange }
+    );
+    // Best-effort: firmware without CommandSetWakeOnConnect NACKs harmlessly.
+    await this.sendCommand(
+      COMMAND_ID.SET_WAKE_ON_CONNECT,
+      settings.wakeOnControllerConnect ? 1 : 0,
+      { throwOnCommandError: false }
     );
     await this.sendCommand(
       COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED,

@@ -150,6 +150,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   hapticsBufferLength: 64,
   audioInterleaveMaxConsecutiveAudioSends: AUDIO_INTERLEAVE_DEFAULT.maxConsecutiveAudioSends,
   audioInterleaveStateMaxAgeUs: AUDIO_INTERLEAVE_DEFAULT.stateMaxAgeUs,
+  wakeOnControllerConnect: true,
   classicRumbleEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleEnabled,
   classicRumbleGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleGainPercent,
   classicRumbleV1Enabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleV1Enabled,
@@ -983,6 +984,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     usbSuspendDisconnectEnabled: typeof value?.usbSuspendDisconnectEnabled === 'boolean'
       ? value.usbSuspendDisconnectEnabled
       : DEFAULT_SETTINGS.usbSuspendDisconnectEnabled,
+    wakeOnControllerConnect: typeof value?.wakeOnControllerConnect === 'boolean'
+      ? value.wakeOnControllerConnect
+      : DEFAULT_SETTINGS.wakeOnControllerConnect,
     sleepKeybindEnabled: typeof value?.sleepKeybindEnabled === 'boolean'
       ? value.sleepKeybindEnabled
       : DEFAULT_SETTINGS.sleepKeybindEnabled,

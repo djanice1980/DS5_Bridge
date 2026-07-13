@@ -9746,6 +9746,23 @@ export function App() {
                     <span />
                   </button>
                 </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Wake on Controller Connect</strong>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.wakeOnControllerConnect}
+                    className={`switch ${snapshot.settings.wakeOnControllerConnect ? 'on' : ''}`}
+                    disabled={!connected}
+                    onClick={() => void runAction('wake-on-connect', () => (
+                      window.bridge.setWakeOnControllerConnect(!snapshot.settings.wakeOnControllerConnect)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
                 <div className="settings-menu-row pico-firmware-row">
                   <div className="pico-firmware-header">
                     <strong>Firmware</strong>

@@ -118,6 +118,9 @@ const api = {
   setUsbSuspendDisconnectEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setUsbSuspendDisconnectEnabled', value)
   ),
+  setWakeOnControllerConnect: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setWakeOnControllerConnect', value)
+  ),
   setSleepKeybindEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setSleepKeybindEnabled', value)
   ),
