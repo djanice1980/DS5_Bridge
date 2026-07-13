@@ -189,7 +189,8 @@ uint8_t descriptor_configuration[] = {
 #endif
     0x01, // bConfigurationValue: 1
     0x00, // iConfiguration: 0
-    0xC0, // bmAttributes: SELF-POWERED, NO REMOTE-WAKEUP
+    0xE0, // bmAttributes: SELF-POWERED, REMOTE-WAKEUP (wake host on controller connect). Per-persona:
+          // this is the DualSense/DS4 descriptor; the xusb360 persona returns its own above.
     0xFA, // bMaxPower: 500mA (250 * 2mA)
 
     // --- INTERFACE DESCRIPTOR (0.0): Audio Control ---

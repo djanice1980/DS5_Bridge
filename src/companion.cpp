@@ -25,7 +25,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 13;
+constexpr uint8_t kFirmwarePatch = 14;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -141,6 +141,7 @@ enum CommandId : uint8_t {
     CommandSetSpeakerGain = 0x32,
     CommandEnterBootloader = 0x33,
     CommandSetAudioInterleave = 0x34,
+    CommandSetWakeOnConnect = 0x35,
 };
 
 enum AckResult : uint8_t {
@@ -1964,6 +1965,13 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
         }
 
+        case CommandSetWakeOnConnect:
+            // Wake the host from sleep when a controller connects (USB remote wakeup).
+            usb_set_wake_on_connect(value != 0);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandSetClassicRumbleGain:
             if (value > kMaxFeedbackGainPercent) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -2323,6 +2331,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             restore_defaults();
             bt_reset_audio_interleave();
+            usb_set_wake_on_connect(true);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;

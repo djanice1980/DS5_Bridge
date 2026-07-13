@@ -35,6 +35,10 @@ static volatile bool usb_mounted = false;
 static volatile bool usb_host_suspended = false;
 static volatile uint32_t usb_suspend_at_us = 0;
 static volatile uint32_t usb_reconnect_grace_until_us = 0;
+// Wake-on-controller-connect: whether the host armed remote wakeup at suspend (only possible when the
+// active persona's descriptor declares remote wakeup), and the companion-controlled enable (default on).
+static volatile bool usb_remote_wakeup_armed = false;
+static volatile bool usb_wake_on_connect_enabled = true;
 
 extern "C" {
 uint8_t usb_hid_polling_interval_ms_value = 1;
@@ -230,9 +234,20 @@ void usb_handle_controller_transport_ready() {
     usb_controller_transport_disconnect_pending = false;
     if (usb_bus_suspended()) {
         usb_controller_transport_ready = true;
+        // A controller just connected while the host is asleep. If wake-on-connect is enabled and the
+        // host armed remote wakeup at suspend (only when the active persona's descriptor declares it --
+        // DualSense/DS4, not xusb360), signal a USB resume to wake the host. tud_remote_wakeup() is a
+        // safe no-op if the device isn't actually suspended or remote wakeup wasn't enabled.
+        if (usb_wake_on_connect_enabled && usb_remote_wakeup_armed) {
+            tud_remote_wakeup();
+        }
         return;
     }
     usb_connect_controller_transport(time_us_32());
+}
+
+void usb_set_wake_on_connect(bool enabled) {
+    usb_wake_on_connect_enabled = enabled;
 }
 
 extern "C" void tud_mount_cb(void) {
@@ -271,7 +286,7 @@ extern "C" bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t cons
 }
 
 extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
-    (void) remote_wakeup_en;
+    usb_remote_wakeup_armed = remote_wakeup_en;
     const uint32_t now = time_us_32();
     if (reconnect_grace_active(now)) {
         usb_suspend_at_us = 0;
