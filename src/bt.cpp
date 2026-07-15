@@ -121,6 +121,7 @@
 #define RSSI_POLL_INTERVAL_US 2000000u
 #define RSSI_REQUEST_TIMEOUT_US 1000000u
 #define INQUIRY_RETRY_DELAY_US 2000000u
+#define PAIRING_WINDOW_US 60000000u // Button-armed discovery window for NEW controllers (60s).
 #define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
 #define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
@@ -245,6 +246,7 @@ static bool device_found = false; // Outbound inquiry target found; do not set f
 static bool new_pair = false; // Only newly paired devices create channels; auto-reconnect uses the services.
 static bool inquiry_active = false;
 static uint32_t inquiry_retry_at_us = 0;
+static uint32_t pairing_window_until_us = 0; // Non-zero while a button-armed pairing window is open.
 static bool acl_connection_pending = false;
 static uint32_t acl_connection_pending_at_us = 0;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
@@ -392,12 +394,17 @@ static void schedule_inquiry_retry(uint32_t delay_us = INQUIRY_RETRY_DELAY_US) {
     inquiry_retry_at_us = time_us_32() + delay_us;
 }
 
+static bool pairing_window_active(uint32_t now) {
+    return pairing_window_until_us != 0 && !bt_time_reached(now, pairing_window_until_us);
+}
+
 static void start_inquiry_if_needed() {
     if (
         inquiry_active
         || device_found
         || acl_connection_pending
         || acl_handle != HCI_CON_HANDLE_INVALID
+        || !pairing_window_active(time_us_32())
     ) {
         return;
     }
@@ -1158,6 +1165,34 @@ void bt_connection_recovery_loop() {
 
 void bt_inquiry_loop() {
     const uint32_t now = time_us_32();
+
+    // Button-armed pairing window: blink the onboard LED while it is open, and
+    // close it (stop inquiry, drop discoverability) when it expires. Page scan
+    // (connectable) stays on regardless, so already-bonded controllers keep
+    // reconnecting and waking the host without a button press.
+    if (pairing_window_until_us != 0) {
+        if (bt_time_reached(now, pairing_window_until_us)) {
+            pairing_window_until_us = 0;
+            if (inquiry_active) {
+                inquiry_active = false;
+                gap_inquiry_stop();
+            }
+            gap_discoverable_control(0);
+            if (acl_handle == HCI_CON_HANDLE_INVALID) {
+                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+            }
+            DS5_LOG("[PAIR] Pairing window expired\n");
+        } else {
+            static uint32_t led_toggle_at_us = 0;
+            static bool led_on = false;
+            if (bt_time_reached(now, led_toggle_at_us)) {
+                led_on = !led_on;
+                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_on);
+                led_toggle_at_us = now + 250000u; // ~4 Hz.
+            }
+        }
+    }
+
     if (
         acl_connection_pending
         && acl_handle == HCI_CON_HANDLE_INVALID
@@ -1183,6 +1218,17 @@ void bt_inquiry_loop() {
     }
 }
 
+void bt_arm_pairing_window() {
+    // Only meaningful while idle: no controller connected or mid-connect.
+    if (acl_handle != HCI_CON_HANDLE_INVALID || acl_connection_pending || device_found) {
+        return;
+    }
+    pairing_window_until_us = time_us_32() + PAIRING_WINDOW_US;
+    inquiry_retry_at_us = 0; // Start inquiry immediately.
+    DS5_LOG("[PAIR] Pairing window armed for %us\n", (unsigned)(PAIRING_WINDOW_US / 1000000u));
+    start_inquiry_if_needed();
+}
+
 int bt_init() {
     critical_section_init(&queue_lock);
 
@@ -1194,8 +1240,11 @@ int bt_init() {
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_YES_NO);
     gap_ssp_set_authentication_requirement(SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING);
 
+    // Idle: stay connectable (page scan) so already-bonded controllers reconnect
+    // and wake the host, but NOT discoverable -- pairing a new controller requires
+    // a BOOTSEL single-click to open a pairing window (see bt_arm_pairing_window).
     gap_connectable_control(1);
-    gap_discoverable_control(1);
+    gap_discoverable_control(0);
 
     hci_event_callback_registration.callback = &hci_packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
@@ -1405,7 +1454,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             usb_handle_controller_transport_disconnect();
             reset_controller_input_report_cache();
             gap_connectable_control(1);
-            gap_discoverable_control(1);
+            gap_discoverable_control(0); // Stay reconnectable; new pairing needs a button-armed window.
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
             clear_outbound_inquiry_target();
             clear_acl_connection_pending();
@@ -1698,6 +1747,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     }
                     gap_connectable_control(0);
                     gap_discoverable_control(0);
+                    pairing_window_until_us = 0; // Controller connected; close any open pairing window.
                     inactive_time = time_us_32();
 
                     DS5_LOG("Init DualSense\n");

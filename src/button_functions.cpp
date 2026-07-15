@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "bt.h"
 #include "utils.h"
 
 #include "hardware/gpio.h"
@@ -74,6 +75,12 @@ static bool button_read_bootsel() {
 }
 
 static void button_dispatch(const int clicks) {
+    if (clicks == 1) {
+        DS5_LOG("[BTN] BOOTSEL single click - arm pairing window\n");
+        bt_arm_pairing_window();
+        return;
+    }
+
     if (clicks < 3) {
         return;
     }
