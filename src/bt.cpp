@@ -1358,6 +1358,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 device_found = false;
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
                 DS5_LOG("[HCI] ACL connected handle=0x%04X\n", handle);
+                // Wake the host as soon as the BT link is up -- before bonding/L2CAP/HID -- so a slow
+                // new-controller pairing still resumes the PC while it is in its wakeable sleep window.
+                usb_wake_host_if_suspended();
                 DS5_LOG("[HCI] Request authentication on handle=0x%04X\n", handle);
                 HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
             } else {

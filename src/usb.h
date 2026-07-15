@@ -30,6 +30,7 @@ bool usb_mic_streaming_active();
 bool usb_line_streaming_active();
 void usb_handle_controller_transport_disconnect();
 void usb_handle_controller_transport_ready();
+void usb_wake_host_if_suspended();
 void usb_set_wake_on_connect(bool enabled);
 
 #endif //DS5_BRIDGE_USB_H

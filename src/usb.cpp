@@ -226,6 +226,18 @@ void usb_handle_controller_transport_disconnect() {
     usb_deinit_device_stack();
 }
 
+void usb_wake_host_if_suspended() {
+    // Signal a USB resume to wake the host iff wake-on-connect is enabled and the host armed remote
+    // wakeup at suspend (only when the active persona's descriptor declares it -- DualSense/DS4, not
+    // xusb360). Safe no-op when the bus isn't actually suspended or remote wakeup wasn't enabled.
+    // Called BOTH early (BT link connected, before bonding/HID) and again at HID transport-ready, so a
+    // slow new-controller pairing wakes the host at the first sign of a controller -- while the host is
+    // still in its USB-wakeable sleep window -- instead of only after the HID transport is up.
+    if (usb_bus_suspended() && usb_wake_on_connect_enabled && usb_remote_wakeup_armed) {
+        tud_remote_wakeup();
+    }
+}
+
 void usb_handle_controller_transport_ready() {
     if (usb_controller_transport_ready) {
         return;
@@ -234,13 +246,7 @@ void usb_handle_controller_transport_ready() {
     usb_controller_transport_disconnect_pending = false;
     if (usb_bus_suspended()) {
         usb_controller_transport_ready = true;
-        // A controller just connected while the host is asleep. If wake-on-connect is enabled and the
-        // host armed remote wakeup at suspend (only when the active persona's descriptor declares it --
-        // DualSense/DS4, not xusb360), signal a USB resume to wake the host. tud_remote_wakeup() is a
-        // safe no-op if the device isn't actually suspended or remote wakeup wasn't enabled.
-        if (usb_wake_on_connect_enabled && usb_remote_wakeup_armed) {
-            tud_remote_wakeup();
-        }
+        usb_wake_host_if_suspended(); // Fallback wake in case the early link-connect signal was missed.
         return;
     }
     usb_connect_controller_transport(time_us_32());
