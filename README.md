@@ -42,16 +42,51 @@ controller's speaker + haptic channels, and testing — is in
 2. With the Pico 2 W unplugged, hold `BOOTSEL`, connect it, and copy the `.uf2` onto the Pico
    drive that appears.
 3. Put the DualSense into pairing mode by holding `Create` and `PS` until the lightbar rapidly
-   blinks blue, and wait for it to pair to the Pico — not directly to your PC.
+   blinks blue, then **single-click the Pico's `BOOTSEL` button** to open the pairing window (the
+   Pico's LED blinks). The controller pairs to the Pico — not directly to your PC. See
+   [Syncing a Controller](#syncing-a-controller).
 4. Install the companion (`sudo pacman -U DS5-Bridge-Companion-*.pacman`) and open DS5 Bridge.
    The Overview page should show the connected bridge and firmware version.
 
 Once the controller connects to the Pico, Linux sees it as a normal DualSense-compatible USB
 controller.
 
+## Syncing a Controller
+
+Pairing a controller to the bridge — "syncing" — uses the **`BOOTSEL` button** on the Pico 2 W
+board.
+
+**Sync a new controller:**
+
+1. Put the DualSense into pairing mode: hold **`Create`** + **`PS`** until the lightbar rapidly
+   blinks blue.
+2. **Single-click** the Pico's `BOOTSEL` button. Its onboard LED blinks while a **60-second
+   pairing window** is open.
+3. The controller pairs to the Pico (not to your PC). The LED stops blinking once it connects.
+
+**You only sync each controller once.** The bridge remembers paired controllers and reconnects
+them automatically whenever you power them on — no button press needed. Only a brand-new
+controller needs the sync button. And because the bridge advertises for new controllers *only*
+during the sync window, a stray controller in pairing mode nearby can't latch onto your dongle on
+its own.
+
+**Waking a sleeping PC.** Connecting a controller can wake the PC from sleep — an already-paired
+controller as it reconnects, or a new one as soon as its Bluetooth link comes up during a sync. On
+Windows, enable the bridge's *"Allow this device to wake the computer"* power setting; on Linux the
+companion sets USB wakeup up for you.
+
+| `BOOTSEL` gesture | Action |
+| --- | --- |
+| **Single-click** | Open a 60-second window to sync a new controller (LED blinks). |
+| **Triple-click** | Reboot the Pico into firmware-flashing (`BOOTSEL`) mode. |
+
+*The sync button requires firmware **1.6.16** or newer; earlier firmware pairs any controller
+automatically without a button press.*
+
 ## Features
 
 - Use a DualSense or DualSense Edge wirelessly through a Pico 2 W.
+- Sync a new controller on demand with a single button press; connecting one can wake a sleeping PC.
 - Use the controller speaker, headset jack, microphone, and audio-driven haptics.
 - Tune audio, haptics, adaptive triggers, and lighting from the app.
 - Use Audio Haptics to turn system or app audio into controller feedback.
@@ -165,7 +200,9 @@ shortcuts, idle disconnect, and PC sleep disconnect.
 - For first-time flashing, hold `BOOTSEL` before plugging the Pico 2 W into the PC. The Pico
   should appear as a USB drive.
 - Pair the controller to the Pico, not your PC. Hold `Create` and `PS` until the lightbar
-  rapidly blinks blue.
+  rapidly blinks blue, then single-click the Pico's `BOOTSEL` button to open the pairing window
+  (firmware 1.6.16+). Already-paired controllers reconnect on their own — see
+  [Syncing a Controller](#syncing-a-controller).
 - If the bridge isn't detected, use a direct USB port and a data-capable micro-USB cable
   (not a charge-only cable), then plug the bridge in *before* powering the controller on.
 - If the controller speaker is quiet or the grips don't buzz, the ALSA UCM profile is likely
