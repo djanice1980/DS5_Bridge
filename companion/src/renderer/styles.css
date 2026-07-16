@@ -1511,7 +1511,7 @@ button {
   border-radius: var(--card-radius);
   padding: 18px;
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
+  grid-template-columns: 58px minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
   color: var(--text-control);
@@ -1537,14 +1537,6 @@ button {
     transform 140ms ease;
 }
 
-.startup-tutorial-feature-icon:hover,
-.startup-tutorial-feature-icon:focus-visible {
-  border-color: var(--accent-border-strong);
-  color: var(--accent-strong);
-  background: var(--accent-soft);
-  transform: translateY(-1px);
-}
-
 .startup-tutorial-feature-icon.active {
   border-color: var(--accent-border-strong);
   color: var(--accent-text);
@@ -1554,7 +1546,7 @@ button {
     inset 0 -3px 0 var(--accent-border-strong);
 }
 
-.startup-tutorial-feature-demo > span:last-child {
+.startup-tutorial-feature-demo > span:nth-child(2) {
   min-width: 0;
   display: grid;
   gap: 5px;
@@ -3547,6 +3539,12 @@ button.overview-shortcut-chip {
     background 180ms ease,
     box-shadow 180ms ease,
     opacity 180ms ease;
+}
+
+/* Feature tiles are status indicators, not controls. They can't use :disabled like
+   the old buttons did, so mirror the dimmed "unavailable" look explicitly. */
+.feature-icon.unavailable {
+  opacity: var(--disabled-opacity);
 }
 
 .feature-icon > svg {

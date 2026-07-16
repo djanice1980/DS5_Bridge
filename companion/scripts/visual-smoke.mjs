@@ -82,14 +82,19 @@ try {
     }
 
     if (tab === 'Haptics') {
-      await page.getByRole('switch', { name: 'Enter Audio Haptics' }).click();
-      await page.waitForTimeout(150);
-      await page.screenshot({
-        path: path.join(outputDir, 'audio-haptics.png'),
-        animations: 'disabled'
-      });
-      await page.getByRole('switch', { name: 'Exit Audio Haptics' }).click();
-      await page.waitForTimeout(150);
+      // The Audio Haptics switch is the feature on/off (not a view toggle), so it is
+      // disabled without a bridge/controller. Only exercise it when it is live.
+      const audioHapticsSwitch = page.getByRole('switch', { name: /(Enable|Disable) Audio Haptics/ });
+      if (await audioHapticsSwitch.isEnabled().catch(() => false)) {
+        await audioHapticsSwitch.click();
+        await page.waitForTimeout(150);
+        await page.screenshot({
+          path: path.join(outputDir, 'audio-haptics.png'),
+          animations: 'disabled'
+        });
+        await audioHapticsSwitch.click();
+        await page.waitForTimeout(150);
+      }
     }
 
     if (tab === 'Triggers') {

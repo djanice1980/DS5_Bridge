@@ -1283,35 +1283,39 @@ function StartupTutorial({
         className="settings-menu bridge-settings-modal startup-tutorial-modal"
         role="dialog"
         aria-modal="true"
-        aria-label={step === 'feature-toggle' ? 'Feature tile tutorial' : 'Support DS5 Bridge'}
+        aria-label={step === 'feature-toggle' ? 'Feature switch tutorial' : 'Support DS5 Bridge'}
       >
         {step === 'feature-toggle' ? (
           <>
             <div className="settings-menu-heading bridge-settings-modal-heading">
               <div className="modal-heading-copy">
                 <IconSparkleHighlight size={16} />
-                <span>Feature Tiles</span>
+                <span>Feature Switches</span>
               </div>
               <span className="startup-tutorial-step">1 / 2</span>
             </div>
             <div className="startup-tutorial-copy">
-              <h2>Click The Square</h2>
-              <p>Feature tiles turn effects on and off. Try it once here, then keep going.</p>
+              <h2>Flip The Switch</h2>
+              <p>Every feature has an Enabled switch. The square icon just shows whether it is active. Try it once here, then keep going.</p>
             </div>
             <div className="startup-tutorial-feature-demo">
-              <button
-                className={`startup-tutorial-feature-icon ${featureExampleActive ? 'active' : ''}`}
-                type="button"
-                aria-pressed={featureExampleActive}
-                aria-label="Toggle example effect"
-                onClick={onFeatureExampleToggle}
-              >
+              <span className={`startup-tutorial-feature-icon ${featureExampleActive ? 'active' : ''}`}>
                 <IconSparkleHighlight size={24} />
-              </button>
+              </span>
               <span>
                 <strong>Example Effect</strong>
                 <span>{featureExampleActive ? 'On' : 'Off'}</span>
               </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={featureExampleActive}
+                aria-label="Toggle example effect"
+                className={`switch ${featureExampleActive ? 'on' : ''}`}
+                onClick={onFeatureExampleToggle}
+              >
+                <span />
+              </button>
             </div>
             <div className="startup-tutorial-actions">
               <button
@@ -1402,8 +1406,8 @@ function FeatureTipsPanel({
     {
       key: 'toggle',
       icon: <IconSparkleHighlight size={16} />,
-      title: 'Feature Tiles',
-      text: 'Click the square icon tile to enable or disable that feature.'
+      title: 'Enabled Switch',
+      text: 'Use the Enabled switch to turn a feature on or off. The square icon shows whether it is currently active.'
     },
     {
       key: 'unavailable',
@@ -6926,17 +6930,12 @@ export function App() {
                 <div className="feature-card-grid audio-haptics-grid">
                   <section className="feature-card audio-haptics-card">
                     <div className="feature-card-title">
-                      <button
-                        type="button"
-                        className={`feature-icon audio-haptics-enable-button icon-compact ${audioReactiveHapticsEnabled ? 'active' : ''}`}
-                        aria-pressed={audioReactiveHapticsEnabled}
-                        aria-label={audioReactiveHapticsEnabled ? 'Disable audio haptics' : 'Enable audio haptics'}
+                      <span
+                        className={`feature-icon audio-haptics-enable-button icon-compact ${audioReactiveHapticsEnabled ? 'active' : ''} ${audioReactiveHapticsBlocked ? 'unavailable' : ''}`}
                         title={audioReactiveHapticsStatusLabel}
-                        disabled={audioReactiveHapticsControlDisabled}
-                        onClick={toggleAudioReactiveHapticsEnabled}
                       >
                         <IconDeviceAudioTape size={20} />
-                      </button>
+                      </span>
                       <div className="title-copy">
                         <h3>Audio Haptics</h3>
                         <p>System audio feedback</p>
@@ -7135,17 +7134,12 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card preset-card">
                   <div className="feature-card-title">
-                    <button
-                      type="button"
-                      className={`feature-icon haptics-enable-button ${showClassicRumbleControl ? 'icon-medium' : 'icon-compact'} ${activeHapticsFeatureEnabled ? 'active' : ''} ${controllerPowerSavingActive && activeHapticsFeatureEnabled ? 'power-saving-active' : ''}`}
-                      aria-pressed={activeHapticsFeatureEnabled}
-                      aria-label={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
-                      title={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
-                      disabled={!controllerControlsAvailable || pendingAction !== null}
-                      onClick={showClassicRumbleControl ? toggleClassicRumbleEnabled : toggleHapticsEnabled}
+                    <span
+                      className={`feature-icon haptics-enable-button ${showClassicRumbleControl ? 'icon-medium' : 'icon-compact'} ${activeHapticsFeatureEnabled ? 'active' : ''} ${controllerPowerSavingActive && activeHapticsFeatureEnabled ? 'power-saving-active' : ''} ${!controllerControlsAvailable ? 'unavailable' : ''}`}
+                      title={showClassicRumbleControl ? 'Rumble' : 'Haptics'}
                     >
                       {showClassicRumbleControl ? <Vibrate size={20} /> : <Sparkles size={20} />}
-                    </button>
+                    </span>
                     <div className="title-copy">
                       <h3>{showClassicRumbleControl ? 'Rumble' : 'Intensity'}</h3>
                       <p>{showClassicRumbleControl ? 'Rumble Strength' : 'Haptic Strength'}</p>
@@ -7397,8 +7391,7 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card preset-card">
                   <div className="feature-card-title">
-                    <button
-                      type="button"
+                    <span
                       className={`feature-icon audio-enable-button icon-medium ${
                         showMicrophoneControl
                           ? duplexMicEnabled
@@ -7407,19 +7400,17 @@ export function App() {
                           : snapshot.settings.speakerEnabled
                             ? 'active'
                             : ''
+                      } ${
+                        (showMicrophoneControl
+                          ? !controllerControlsAvailable
+                          : !controllerControlsAvailable || !speakerVolumeSupported)
+                          ? 'unavailable'
+                          : ''
                       }`}
-                      aria-pressed={showMicrophoneControl ? duplexMicEnabled : snapshot.settings.speakerEnabled}
-                      aria-label={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
                       title={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
-                      disabled={
-                        showMicrophoneControl
-                          ? !controllerControlsAvailable || pendingAction !== null
-                          : !controllerControlsAvailable || !speakerVolumeSupported || pendingAction !== null
-                      }
-                      onClick={showMicrophoneControl ? toggleDuplexMicEnabled : toggleSpeakerEnabled}
                     >
                       {showMicrophoneControl ? <Mic size={20} /> : <OutputIcon size={20} />}
-                    </button>
+                    </span>
                     <div className="title-copy">
                       <h3>{showMicrophoneControl ? 'Microphone' : outputControlLabel}</h3>
                       <p>
@@ -7446,6 +7437,24 @@ export function App() {
                         onClick={() => setShowMicrophoneControl(true)}
                       >
                         Mic
+                      </button>
+                    </div>
+                    <div className="inline-switch">
+                      <span>Enabled</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={showMicrophoneControl ? duplexMicEnabled : snapshot.settings.speakerEnabled}
+                        aria-label={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
+                        className={`switch ${(showMicrophoneControl ? duplexMicEnabled : snapshot.settings.speakerEnabled) ? 'on' : ''}`}
+                        disabled={
+                          showMicrophoneControl
+                            ? !controllerControlsAvailable || pendingAction !== null
+                            : !controllerControlsAvailable || !speakerVolumeSupported || pendingAction !== null
+                        }
+                        onClick={showMicrophoneControl ? toggleDuplexMicEnabled : toggleSpeakerEnabled}
+                      >
+                        <span />
                       </button>
                     </div>
                   </div>
@@ -7751,17 +7760,12 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card preset-card">
                   <div className="feature-card-title">
-                    <button
-                      type="button"
-                      className={`feature-icon triggers-enable-button icon-compact ${snapshot.settings.adaptiveTriggersEnabled ? 'active' : ''} ${controllerPowerSavingActive && snapshot.settings.adaptiveTriggersEnabled ? 'power-saving-active' : ''}`}
-                      aria-pressed={snapshot.settings.adaptiveTriggersEnabled}
-                      aria-label="Enable adaptive triggers"
-                      title="Enable adaptive triggers"
-                      disabled={!controllerControlsAvailable || !adaptiveTriggersSupported || pendingAction !== null}
-                      onClick={toggleAdaptiveTriggersEnabled}
+                    <span
+                      className={`feature-icon triggers-enable-button icon-compact ${snapshot.settings.adaptiveTriggersEnabled ? 'active' : ''} ${controllerPowerSavingActive && snapshot.settings.adaptiveTriggersEnabled ? 'power-saving-active' : ''} ${!controllerControlsAvailable || !adaptiveTriggersSupported ? 'unavailable' : ''}`}
+                      title="Adaptive triggers"
                     >
                       <IconDeviceGamepad2 size={20} />
-                    </button>
+                    </span>
                     <div className="title-copy">
                       <h3>Intensity</h3>
                       <p>Set the overall strength of adaptive trigger effects</p>
@@ -7925,17 +7929,12 @@ export function App() {
               <div className="feature-card-grid lighting-grid">
                 <section className="feature-card preset-card">
                   <div className="feature-card-title">
-                    <button
-                      type="button"
-                      className={`feature-icon lighting-enable-button icon-large ${snapshot.settings.lightbarEnabled ? 'active' : ''} ${controllerPowerSavingActive && snapshot.settings.lightbarEnabled ? 'power-saving-active' : ''}`}
-                      aria-pressed={snapshot.settings.lightbarEnabled}
-                      aria-label="Enable lighting"
-                      title="Enable lighting"
-                      disabled={!controllerControlsAvailable || !lightbarSupported || pendingAction !== null}
-                      onClick={toggleLightbarEnabled}
+                    <span
+                      className={`feature-icon lighting-enable-button icon-large ${snapshot.settings.lightbarEnabled ? 'active' : ''} ${controllerPowerSavingActive && snapshot.settings.lightbarEnabled ? 'power-saving-active' : ''} ${!controllerControlsAvailable || !lightbarSupported ? 'unavailable' : ''}`}
+                      title="Lighting"
                     >
                       <IconBulb size={20} />
-                    </button>
+                    </span>
                     <div className="title-copy">
                       <h3>Brightness</h3>
                       <p>Set the controller light bar brightness</p>
