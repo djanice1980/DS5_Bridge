@@ -296,6 +296,8 @@ export interface ControllerProfileSettings {
   hostPersonaMode: HostPersonaMode;
   duplexMicEnabled: boolean;
   controllerPowerSavingEnabled: boolean;
+  /** Linux only: when false, the DualSense touchpad is grabbed so it stops acting as a mouse. */
+  touchpadMouseEnabled: boolean;
 }
 
 export interface ControllerProfile {

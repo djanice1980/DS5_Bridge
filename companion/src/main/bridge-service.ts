@@ -79,6 +79,7 @@ import type {
 import {
   AudioHapticsSessionMonitor,
   MicKeepaliveEngine,
+  TouchpadInhibitEngine,
   SystemAudioHapticsEngine,
   applyLinuxSpeakerCompensation,
   playBridgeHapticsTestPattern,
@@ -1226,6 +1227,7 @@ export class BridgeService extends EventEmitter {
   private readonly systemAudioHapticsEngine = new SystemAudioHapticsEngine();
   private readonly audioHapticsSessionMonitor = new AudioHapticsSessionMonitor();
   private readonly micKeepaliveEngine = new MicKeepaliveEngine();
+  private readonly touchpadInhibitEngine = new TouchpadInhibitEngine();
   private readonly hidDiscovery = new HidDiscoveryClient();
   private audioHapticsSessionCache: { key: string; expiresAt: number; sessions: AudioHapticsSession[] } | null = null;
   private audioHapticsSessionListInFlight: Promise<AudioHapticsSession[]> | null = null;
@@ -1322,6 +1324,19 @@ export class BridgeService extends EventEmitter {
       }
       this.emitSnapshot();
     });
+    this.touchpadInhibitEngine.on('error', (error: Error) => {
+      this.appendAudioDebugLines([`[TouchpadInhibit] error: ${error.message}`]);
+      this.emitSnapshot();
+    });
+    this.touchpadInhibitEngine.on('status', (line: string) => {
+      if (line) {
+        this.appendAudioDebugLines([`[TouchpadInhibit] ${line}`]);
+      }
+      this.emitSnapshot();
+    });
+    // Apply the active profile's touchpad-as-mouse preference at startup (Linux only,
+    // independent of controller connection -- the helper waits for the touchpad to appear).
+    void this.updateTouchpadInhibitEngine();
   }
 
   private enqueueShortcutEvent(event: InputShortcutEvent): void {
@@ -1376,6 +1391,7 @@ export class BridgeService extends EventEmitter {
     }
 
     await this.stopControllerAudioPolling();
+    await this.touchpadInhibitEngine.stop();
     await stopVirtualKeyboardEngine();
     this.hidDiscovery.stop();
     this.closeDevice();
@@ -2789,6 +2805,14 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setTouchpadMouseEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    // Persists into the active controller profile (profile-scoped key), then applies.
+    this.snapshot.settings = this.settingsStore.update({ touchpadMouseEnabled: enabled });
+    await this.updateTouchpadInhibitEngine();
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   setUiScalePercent(value: UiScalePercent): BridgeSnapshot {
     this.snapshot.settings = this.settingsStore.update({
       uiScalePercent: normalizeUiScalePercent(value)
@@ -2964,6 +2988,7 @@ export class BridgeService extends EventEmitter {
     if (ack.resultCode === ACK_RESULT.OK) {
       this.snapshot.settings = this.settingsStore.restoreDefaults();
       await this.updateSystemAudioHapticsEngine();
+      await this.updateTouchpadInhibitEngine();
       this.emitSnapshot();
     }
     return this.getSnapshot();
@@ -2987,6 +3012,7 @@ export class BridgeService extends EventEmitter {
     if (this.snapshot.state === 'connected') {
       await this.applyCurrentSettings(this.snapshot.settings, false);
     }
+    await this.updateTouchpadInhibitEngine();
     this.emitSnapshot();
     return this.getSnapshot();
   }
@@ -3014,6 +3040,7 @@ export class BridgeService extends EventEmitter {
     if (this.snapshot.state === 'connected') {
       await this.applyCurrentSettings(this.snapshot.settings, false);
     }
+    await this.updateTouchpadInhibitEngine();
     this.emitSnapshot();
     return this.getSnapshot();
   }
@@ -3366,6 +3393,23 @@ export class BridgeService extends EventEmitter {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.appendAudioDebugLines([`[MicKeepalive] error: ${message}`]);
+    }
+  }
+
+  private async updateTouchpadInhibitEngine(): Promise<void> {
+    try {
+      const settings = this.settingsStore.get();
+      // Grab the DualSense touchpad only on Linux and only when the active profile has
+      // touchpad-as-mouse turned OFF. The helper self-locates the touchpad and re-grabs
+      // across reconnects, so this is independent of controller-connection state.
+      if (process.platform === 'linux' && !settings.touchpadMouseEnabled) {
+        await this.touchpadInhibitEngine.start();
+      } else {
+        await this.touchpadInhibitEngine.stop();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAudioDebugLines([`[TouchpadInhibit] error: ${message}`]);
     }
   }
 

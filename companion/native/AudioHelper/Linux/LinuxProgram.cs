@@ -72,6 +72,10 @@ static class LinuxProgram
             {
                 return LinuxMicKeepalive.Run();
             }
+            if (options.InhibitTouchpad)
+            {
+                return LinuxTouchpadInhibitor.Run();
+            }
             if (options.HapticsOnly)
             {
                 return LinuxHapticsMirror.Run(options);
@@ -102,6 +106,7 @@ sealed class LinuxHelperOptions
     public bool SetDefaultRenderBridge;
     public bool MicKeepaliveOnly;
     public bool UinputKeyboard;
+    public bool InhibitTouchpad;
     public bool HapticsOnly;
     public bool StdoutOnly;
     public bool ApplySpeakerCompensation;
@@ -158,6 +163,9 @@ sealed class LinuxHelperOptions
                     break;
                 case "--uinput-keyboard":
                     options.UinputKeyboard = true;
+                    break;
+                case "--inhibit-touchpad":
+                    options.InhibitTouchpad = true;
                     break;
                 case "--haptics-only":
                     options.HapticsOnly = true;

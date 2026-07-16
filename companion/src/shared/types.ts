@@ -79,6 +79,8 @@ export interface CompanionSettings {
   notifyLowBattery: boolean;
   duplexMicEnabled: boolean;
   controllerPowerSavingEnabled: boolean;
+  /** Linux only: when false, the DualSense touchpad is grabbed so it stops acting as a mouse. */
+  touchpadMouseEnabled: boolean;
   selectedControllerProfileId: string;
   controllerProfiles: ControllerProfile[];
   selectedButtonRemappingProfileId: string;

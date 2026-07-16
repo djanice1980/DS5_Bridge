@@ -1148,6 +1148,9 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:setControllerPowerSavingEnabled', (_event, value: boolean) => (
     service.setControllerPowerSavingEnabled(value)
   ));
+  ipcMain.handle('bridge:setTouchpadMouseEnabled', (_event, value: boolean) => (
+    service.setTouchpadMouseEnabled(value)
+  ));
   ipcMain.handle('bridge:setUiScalePercent', (_event, value: UiScalePercent) => {
     const snapshot = service.setUiScalePercent(value);
     applySnapshotWindowScale(snapshot);

@@ -136,6 +136,7 @@ import type {
 import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
 
 const IS_WINDOWS_HOST = window.bridge?.platform === 'win32';
+const IS_LINUX = window.bridge?.platform === 'linux';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system' | 'interleave';
 type StartupTutorialStep = 'feature-toggle' | 'support' | 'done';
@@ -1567,7 +1568,8 @@ function controllerProfileSettingsFromSnapshot(snapshot: BridgeSnapshot): Contro
     audioReactiveHapticsResponse: snapshot.settings.audioReactiveHapticsResponse,
     audioReactiveHapticsAttack: snapshot.settings.audioReactiveHapticsAttack,
     audioReactiveHapticsRelease: snapshot.settings.audioReactiveHapticsRelease,
-    controllerPowerSavingEnabled: snapshot.settings.controllerPowerSavingEnabled
+    controllerPowerSavingEnabled: snapshot.settings.controllerPowerSavingEnabled,
+    touchpadMouseEnabled: snapshot.settings.touchpadMouseEnabled
   };
 }
 
@@ -9829,6 +9831,26 @@ export function App() {
                     <span />
                   </button>
                 </div>
+                {IS_LINUX && (
+                  <div className="settings-menu-row">
+                    <div className="settings-menu-copy">
+                      <strong>Touchpad as Mouse</strong>
+                      <span>Use the DualSense touchpad as a mouse pointer. Turn off for games where the touchpad moving the cursor gets in the way. Saved per profile.</span>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={snapshot.settings.touchpadMouseEnabled}
+                      className={`switch ${snapshot.settings.touchpadMouseEnabled ? 'on' : ''}`}
+                      disabled={pendingAction !== null}
+                      onClick={() => void runAction('touchpad-mouse', () => (
+                        window.bridge.setTouchpadMouseEnabled(!snapshot.settings.touchpadMouseEnabled)
+                      ))}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                )}
                 <div className="settings-menu-row">
                   <div className="settings-menu-copy">
                     <strong>Player Slot LED</strong>

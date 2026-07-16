@@ -1191,6 +1191,79 @@ export class MicKeepaliveEngine extends EventEmitter {
   }
 }
 
+/**
+ * Linux only: holds an EVIOCGRAB on the DualSense touchpad's evdev node so it stops
+ * acting as a mouse. The helper self-locates the touchpad and re-grabs across controller
+ * reconnects; killing this process (stop()) releases the grab and restores the touchpad.
+ */
+export class TouchpadInhibitEngine extends EventEmitter {
+  private process: ChildProcess | null = null;
+  private starting: Promise<void> | null = null;
+
+  async start(): Promise<void> {
+    if (this.process) {
+      return;
+    }
+    if (this.starting) {
+      return this.starting;
+    }
+
+    this.starting = this.startInternal().finally(() => {
+      this.starting = null;
+    });
+    return this.starting;
+  }
+
+  async stop(): Promise<void> {
+    const helper = this.process;
+    this.process = null;
+    if (!helper) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        if (!helper.killed) {
+          helper.kill('SIGKILL');
+        }
+        resolve();
+      }, 500);
+
+      helper.once('exit', () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+
+      helper.stdin?.end();
+      helper.kill();
+    });
+  }
+
+  isActive(): boolean {
+    return this.process !== null;
+  }
+
+  private async startInternal(): Promise<void> {
+    const helperPath = resolveHelperPath();
+    const helper = spawn(helperPath, ['--inhibit-touchpad'], {
+      windowsHide: true,
+      stdio: ['pipe', 'ignore', 'pipe']
+    });
+
+    this.process = helper;
+    helper.stderr.on('data', (chunk: Buffer) => {
+      this.emit('status', chunk.toString('utf8').trim());
+    });
+    helper.on('error', (error) => this.emit('error', error));
+    helper.on('exit', (code, signal) => {
+      if (this.process === helper) {
+        this.process = null;
+        this.emit('status', `touchpad inhibitor exited (${signal ?? code ?? 'unknown'})`);
+      }
+    });
+  }
+}
+
 const UINPUT_READY_MESSAGE = 'status: uinput-ready';
 const UINPUT_UNAVAILABLE_PREFIX = 'status: uinput-unavailable';
 const UINPUT_START_TIMEOUT_MS = 5000;

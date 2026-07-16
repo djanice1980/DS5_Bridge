@@ -130,6 +130,9 @@ const api = {
   setControllerPowerSavingEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setControllerPowerSavingEnabled', value)
   ),
+  setTouchpadMouseEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setTouchpadMouseEnabled', value)
+  ),
   setLaunchAtStartupEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setLaunchAtStartupEnabled', value)
   ),

@@ -2453,7 +2453,7 @@ describe('BridgeService', () => {
 
     expect(updated.selectedControllerProfileId).toBe('custom');
     expect(updated.controllerProfiles.map((profile) => profile.name)).toEqual(['Default', 'Custom']);
-    expect(updated.controllerProfiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.settings.speakerVolumePercent).toBe(70);
+    expect(updated.controllerProfiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.settings.speakerVolumePercent).toBe(100);
     expect(updated.controllerProfiles.find((profile) => profile.id === 'custom')?.settings.speakerVolumePercent).toBe(30);
   });
 
@@ -2477,7 +2477,7 @@ describe('BridgeService', () => {
     const restored = await fixture.service.restoreDefaults();
     expect(restored.settings.controllerProfiles[0]?.id).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
     expect(restored.settings.controllerProfiles[0]?.name).toBe('Default');
-    expect(restored.settings.controllerProfiles[0]?.settings.speakerVolumePercent).toBe(70);
+    expect(restored.settings.controllerProfiles[0]?.settings.speakerVolumePercent).toBe(100);
     expect(restored.settings.selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
   });
 

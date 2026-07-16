@@ -52,7 +52,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   triggerEffectIntensityPercent: 100,
   triggerTestMode: 'feedback',
   speakerEnabled: true,
-  speakerVolumePercent: 70,
+  speakerVolumePercent: 100,
   micVolumePercent: 100,
   micMuted: false,
   audioReactiveHapticsEnabled: false,
@@ -77,7 +77,8 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   pollingRateMode: '1000',
   hostPersonaMode: 'dualsense',
   duplexMicEnabled: true,
-  controllerPowerSavingEnabled: false
+  controllerPowerSavingEnabled: false,
+  touchpadMouseEnabled: true
 };
 
 const DEFAULT_CONTROLLER_PROFILE: ControllerProfile = {
@@ -135,7 +136,8 @@ const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>
   'pollingRateMode',
   'hostPersonaMode',
   'duplexMicEnabled',
-  'controllerPowerSavingEnabled'
+  'controllerPowerSavingEnabled',
+  'touchpadMouseEnabled'
 ]);
 
 export const DEFAULT_SETTINGS: CompanionSettings = {
@@ -195,6 +197,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   notifyLowBattery: false,
   duplexMicEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.duplexMicEnabled,
   controllerPowerSavingEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.controllerPowerSavingEnabled,
+  touchpadMouseEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.touchpadMouseEnabled,
   selectedControllerProfileId: DEFAULT_CONTROLLER_PROFILE_ID,
   controllerProfiles: [DEFAULT_CONTROLLER_PROFILE],
   selectedButtonRemappingProfileId: DEFAULT_BUTTON_REMAP_PROFILE_ID,
@@ -380,7 +383,8 @@ export function controllerProfileSettingsFrom(settings: CompanionSettings): Cont
     pollingRateMode: settings.pollingRateMode,
     hostPersonaMode: settings.hostPersonaMode,
     duplexMicEnabled: settings.duplexMicEnabled,
-    controllerPowerSavingEnabled: settings.controllerPowerSavingEnabled
+    controllerPowerSavingEnabled: settings.controllerPowerSavingEnabled,
+    touchpadMouseEnabled: settings.touchpadMouseEnabled
   };
 }
 
@@ -477,7 +481,10 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.duplexMicEnabled,
     controllerPowerSavingEnabled: typeof candidate.controllerPowerSavingEnabled === 'boolean'
       ? candidate.controllerPowerSavingEnabled
-      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.controllerPowerSavingEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.controllerPowerSavingEnabled,
+    touchpadMouseEnabled: typeof candidate.touchpadMouseEnabled === 'boolean'
+      ? candidate.touchpadMouseEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.touchpadMouseEnabled
   };
 }
 
@@ -1007,6 +1014,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     controllerPowerSavingEnabled: typeof value?.controllerPowerSavingEnabled === 'boolean'
       ? value.controllerPowerSavingEnabled
       : DEFAULT_SETTINGS.controllerPowerSavingEnabled,
+    touchpadMouseEnabled: typeof value?.touchpadMouseEnabled === 'boolean'
+      ? value.touchpadMouseEnabled
+      : DEFAULT_SETTINGS.touchpadMouseEnabled,
     selectedControllerProfileId,
     controllerProfiles,
     selectedButtonRemappingProfileId,

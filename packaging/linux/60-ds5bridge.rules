@@ -15,6 +15,13 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="0df2", TAG+="uaccess
 SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="09cc", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="db05", TAG+="uaccess"
 
+# "Touchpad as mouse" toggle: let the companion grab the DualSense touchpad's input
+# event node (EVIOCGRAB) so it can stop the touchpad from acting as a system mouse.
+# Sony personas only (they have a touchpad); the xusb360 persona has none.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0ce6", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="0df2", TAG+="uaccess"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="054c", ATTRS{idProduct}=="09cc", TAG+="uaccess"
+
 # Allow the bridge to wake the host from sleep when a controller connects (USB remote wakeup).
 # Sony personas only (DualSense / DualSense Edge / DS4), matching the firmware's per-persona wake
 # capability; the xusb360 persona (1209:db05) intentionally omitted.

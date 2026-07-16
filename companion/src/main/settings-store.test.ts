@@ -48,7 +48,7 @@ describe('SettingsStore', () => {
       id: DEFAULT_CONTROLLER_PROFILE_ID,
       name: 'Default',
       settings: {
-        speakerVolumePercent: 70,
+        speakerVolumePercent: 100,
         micVolumePercent: 100,
         micMuted: false,
         duplexMicEnabled: true,
@@ -92,7 +92,7 @@ describe('SettingsStore', () => {
     });
     expect(settings.micMuted).toBe(false);
     expect(settings.duplexMicEnabled).toBe(true);
-    expect(settings.controllerProfiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.settings.speakerVolumePercent).toBe(70);
+    expect(settings.controllerProfiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.settings.speakerVolumePercent).toBe(100);
   });
 
   it('auto-forks default controller changes into a saved custom profile', () => {
@@ -108,7 +108,7 @@ describe('SettingsStore', () => {
     expect(updated.selectedControllerProfileId).toBe('custom');
     expect(updated.controllerProfiles.map((profile) => profile.name)).toEqual(['Default', 'Custom']);
     expect(updated.controllerProfiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.settings).toMatchObject({
-      speakerVolumePercent: 70,
+      speakerVolumePercent: 100,
       hapticsGainPercent: 100,
       lightbarBrightnessPercent: 100
     });
@@ -189,10 +189,10 @@ describe('SettingsStore', () => {
     expect(restored.selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
     expect(restored.controllerProfiles.map((profile) => profile.name)).toEqual(['Default', 'Personalized']);
     expect(restored.controllerProfiles[0]?.settings).toMatchObject({
-      speakerVolumePercent: 70,
+      speakerVolumePercent: 100,
       lightbarColor: '#0000ff'
     });
-    expect(restored.speakerVolumePercent).toBe(70);
+    expect(restored.speakerVolumePercent).toBe(100);
     expect(persistedSettings(userDataPath).selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
   });
 
@@ -205,7 +205,7 @@ describe('SettingsStore', () => {
     firstRead.buttonRemappingDraft.cross = 'circle';
 
     const secondRead = store.get();
-    expect(secondRead.controllerProfiles[0]!.settings.speakerVolumePercent).toBe(70);
+    expect(secondRead.controllerProfiles[0]!.settings.speakerVolumePercent).toBe(100);
     expect(secondRead.buttonRemappingProfiles[0]!.mappings.cross).toBe('cross');
     expect(secondRead.buttonRemappingDraft.cross).toBe('cross');
 
@@ -528,7 +528,7 @@ describe('SettingsStore', () => {
     expect(settings.speakerGainLevel).toBe(7);
     expect(settings.idleDisconnectTimeoutMinutes).toBe(1);
     expect(settings.controllerProfiles[0]?.name).toBe('Default');
-    expect(settings.controllerProfiles[0]?.settings.speakerVolumePercent).toBe(70);
+    expect(settings.controllerProfiles[0]?.settings.speakerVolumePercent).toBe(100);
     expect(settings.controllerProfiles[1]?.settings.pollingRateMode).toBe(DEFAULT_SETTINGS.pollingRateMode);
     expect(settings.controllerProfiles[1]?.settings.lightbarColor).toBe('#123456');
   });
