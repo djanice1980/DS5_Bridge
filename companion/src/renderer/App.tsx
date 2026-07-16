@@ -3576,6 +3576,13 @@ export function App() {
   const overviewHostPersonaMode = personaTransition?.to ?? snapshot?.settings.hostPersonaMode ?? 'dualsense';
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const audioReactiveHapticsEnabled = Boolean(snapshot?.settings.audioReactiveHapticsEnabled);
+  // The Audio Haptics header switch is the feature on/off (not just a view toggle), so the
+  // panel view follows the feature state: it opens when enabled and collapses back to the
+  // Haptics view when disabled. Prevents the old bug where flipping the header switch "off"
+  // hid the still-armed feature while the audio->haptics mirror kept running.
+  useEffect(() => {
+    setAudioHapticsOpen(audioReactiveHapticsEnabled);
+  }, [audioReactiveHapticsEnabled]);
   const audioHapticsSessionByKey = useMemo(() => {
     const sessions = new Map<string, AudioHapticsSession>();
     for (const session of audioHapticsSessions) {
@@ -6886,10 +6893,11 @@ export function App() {
                     <button
                       type="button"
                       role="switch"
-                      aria-checked={audioHapticsOpen}
-                      aria-label={audioHapticsOpen ? 'Exit Audio Haptics' : 'Enter Audio Haptics'}
-                      className={`switch audio-haptics-switch ${audioHapticsOpen ? 'on' : ''}`}
-                      onClick={() => setAudioHapticsOpen((open) => !open)}
+                      aria-checked={audioReactiveHapticsEnabled}
+                      aria-label={audioReactiveHapticsEnabled ? 'Disable Audio Haptics' : 'Enable Audio Haptics'}
+                      className={`switch audio-haptics-switch ${audioReactiveHapticsEnabled ? 'on' : ''}`}
+                      disabled={audioReactiveHapticsControlDisabled}
+                      onClick={toggleAudioReactiveHapticsEnabled}
                     >
                       <span />
                     </button>
