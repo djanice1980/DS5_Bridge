@@ -59,6 +59,7 @@ export interface CompanionSettings {
   lightbarColor: string;
   lightbarBrightnessPercent: number;
   lightbarOverrideEnabled: boolean;
+  lightbarRestoreEnabled: boolean;
   muteButtonMode: MuteButtonMode;
   muteKeyboardUsage: number;
   muteKeyboardModifiers: number;

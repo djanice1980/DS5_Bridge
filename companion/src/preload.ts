@@ -103,6 +103,9 @@ const api = {
   setPlayerLedEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setPlayerLedEnabled', value)
   ),
+  setLightbarRestoreEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setLightbarRestoreEnabled', value)
+  ),
   setIdleDisconnectEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setIdleDisconnectEnabled', value),
   setIdleDisconnectTimeoutMinutes: (value: number): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setIdleDisconnectTimeoutMinutes', value)

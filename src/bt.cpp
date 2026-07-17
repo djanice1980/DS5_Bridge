@@ -416,6 +416,7 @@ static uint8_t saved_lightbar_green = 0xd7;
 static uint8_t saved_lightbar_blue = 0x00;
 static uint8_t saved_lightbar_brightness = 100;
 static bool player_led_enabled = true;
+static bool lightbar_restore_enabled = true;
 static bool lightbar_restore_pending = false;
 static uint32_t lightbar_restore_at_us = 0;
 static uint8_t state_report_seq = 0;
@@ -2084,8 +2085,16 @@ void bt_refresh_speaker_output() {
     }
 }
 
+void bt_set_lightbar_restore_enabled(bool enabled) {
+    lightbar_restore_enabled = enabled;
+    if (!enabled) {
+        lightbar_restore_pending = false;
+        lightbar_restore_at_us = 0;
+    }
+}
+
 void bt_schedule_lightbar_restore(uint32_t delay_ms) {
-    if (hid_interrupt_cid == 0) {
+    if (!lightbar_restore_enabled || hid_interrupt_cid == 0) {
         return;
     }
 
@@ -2094,7 +2103,7 @@ void bt_schedule_lightbar_restore(uint32_t delay_ms) {
 }
 
 void bt_lightbar_loop() {
-    if (!lightbar_restore_pending || hid_interrupt_cid == 0) {
+    if (!lightbar_restore_enabled || !lightbar_restore_pending || hid_interrupt_cid == 0) {
         return;
     }
 

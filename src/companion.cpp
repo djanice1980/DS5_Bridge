@@ -152,6 +152,7 @@ enum CommandId : uint8_t {
     CommandForgetControllerPairing = 0x2E,
     CommandSetSpeakerGain = 0x32,
     CommandEnterBootloader = 0x33,
+    CommandSetLightbarRestoreEnabled = 0x36,
 };
 
 enum AckResult : uint8_t {
@@ -796,6 +797,7 @@ void restore_defaults() {
     reset_button_remap();
     bt_set_mute_led(false);
     lightbar_override_enabled = false;
+    bt_set_lightbar_restore_enabled(true);
     set_lightbar_color(0x00, 0x00, 0xff, 100);
     set_led_enabled(true);
     set_player_led_enabled(true);
@@ -2159,6 +2161,16 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             set_player_led_enabled(value == 1);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetLightbarRestoreEnabled:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            bt_set_lightbar_restore_enabled(value == 1);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;

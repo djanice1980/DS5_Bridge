@@ -121,6 +121,7 @@ void bt_replay_adaptive_trigger_effect(
     bool motor_power_valid
 );
 void bt_reset_adaptive_triggers();
+void bt_set_lightbar_restore_enabled(bool enabled);
 void bt_schedule_lightbar_restore(uint32_t delay_ms);
 void bt_lightbar_loop();
 void bt_signal_strength_loop();

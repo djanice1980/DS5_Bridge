@@ -106,6 +106,7 @@ type StatusOverrides = {
 };
 
 const FULL_REAPPLY_COMMANDS = [
+  COMMAND_ID.SET_LIGHTBAR_RESTORE_ENABLED,
   COMMAND_ID.SET_LIGHTBAR_COLOR,
   COMMAND_ID.SET_LIGHTBAR_OVERRIDE,
   COMMAND_ID.SET_MUTE_BUTTON_ACTION,
@@ -1530,6 +1531,24 @@ describe('BridgeService', () => {
     expect(command?.[7]).toBe(COMMAND_ID.SET_PLAYER_LED_ENABLED);
     expect(command?.[9]).toBe(0);
     expect(snapshot.settings.playerLedEnabled).toBe(false);
+  });
+
+  it('sends and stores automatic lightbar restore settings', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await flushReapply();
+    device.sentReports = [];
+    const snapshot = await service.setLightbarRestoreEnabled(false);
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_LIGHTBAR_RESTORE_ENABLED);
+    expect(command?.[9]).toBe(0);
+    expect(snapshot.settings.lightbarRestoreEnabled).toBe(false);
   });
 
   it('sends and stores sleep keybind settings', async () => {

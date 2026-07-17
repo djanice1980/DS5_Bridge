@@ -112,6 +112,14 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('!controllerControlsAvailable || !lightbarSupported || pendingAction !== null');
   });
 
+  it('offers a persisted automatic lightbar restore toggle in bridge settings', () => {
+    expect(appSource).toContain('<strong>Automatic Restore</strong>');
+    expect(appSource).toContain('Reapply the saved color after games clear it');
+    expect(appSource).toContain('snapshot.settings.lightbarRestoreEnabled');
+    expect(appSource).toContain('window.bridge.setLightbarRestoreEnabled(');
+    expect(appSource.indexOf('>Lightbar</div>')).toBeLessThan(appSource.indexOf('>About</div>'));
+  });
+
   it('uses the device container border instead of a compact status dot', () => {
     expect(appSource).toContain('const sidebarDeviceTone =');
     expect(appSource).toContain('className={`hero-main device-status-${sidebarDeviceTone}`}');

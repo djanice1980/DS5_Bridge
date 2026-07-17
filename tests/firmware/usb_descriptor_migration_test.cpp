@@ -1726,6 +1726,52 @@ void assert_companion_trigger_tests_survive_continuous_audio(
     }
 }
 
+void assert_lightbar_restore_can_be_disabled(
+    std::filesystem::path const &root
+) {
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const auto bt_h = read_text(root / "src" / "bt.h");
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+    const std::string setter = extract_between(
+        bt_cpp,
+        "void bt_set_lightbar_restore_enabled",
+        "\n}\n\nvoid bt_schedule_lightbar_restore"
+    );
+    const std::string scheduler = extract_between(
+        bt_cpp,
+        "void bt_schedule_lightbar_restore",
+        "\n}\n\nvoid bt_lightbar_loop"
+    );
+    const std::string loop = extract_between(
+        bt_cpp,
+        "void bt_lightbar_loop",
+        "\n}\n\nvoid bt_signal_strength_loop"
+    );
+
+    if (
+        bt_h.find("void bt_set_lightbar_restore_enabled(bool enabled);")
+            == std::string::npos
+        || setter.find("lightbar_restore_enabled = enabled;")
+            == std::string::npos
+        || setter.find("lightbar_restore_pending = false;")
+            == std::string::npos
+        || scheduler.find("!lightbar_restore_enabled")
+            == std::string::npos
+        || loop.find("!lightbar_restore_enabled")
+            == std::string::npos
+        || companion_cpp.find("CommandSetLightbarRestoreEnabled = 0x36")
+            == std::string::npos
+        || companion_cpp.find("bt_set_lightbar_restore_enabled(value == 1);")
+            == std::string::npos
+        || companion_cpp.find("bt_set_lightbar_restore_enabled(true);")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Automatic lightbar restore must be runtime-toggleable, cancel pending work when disabled, and default on"
+        );
+    }
+}
+
 void assert_dualsense_battery_buckets_preserve_power_state(
     std::filesystem::path const &root
 ) {
@@ -1773,6 +1819,7 @@ int main() {
         assert_bootsel_gestures_and_intentional_disconnects(source_root);
         assert_host_rumble_passes_through_with_bounded_delivery(source_root);
         assert_companion_trigger_tests_survive_continuous_audio(source_root);
+        assert_lightbar_restore_can_be_disabled(source_root);
         assert_dualsense_battery_buckets_preserve_power_state(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {

@@ -9893,6 +9893,25 @@ export function App() {
                     <span />
                   </button>
                 </div>
+                <div className="settings-menu-section-label">Lightbar</div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Automatic Restore</strong>
+                    <span>Reapply the saved color after games clear it</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.lightbarRestoreEnabled}
+                    className={`switch ${snapshot.settings.lightbarRestoreEnabled ? 'on' : ''}`}
+                    disabled={!connected || pendingAction !== null}
+                    onClick={() => void runAction('lightbar-restore', () => (
+                      window.bridge.setLightbarRestoreEnabled(!snapshot.settings.lightbarRestoreEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
                 <div className="settings-menu-section-label">About</div>
                 <button
                   type="button"

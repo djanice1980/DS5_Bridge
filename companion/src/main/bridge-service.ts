@@ -2483,6 +2483,13 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setLightbarRestoreEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_LIGHTBAR_RESTORE_ENABLED, enabled ? 1 : 0, {
+      lightbarRestoreEnabled: enabled
+    });
+    return this.getSnapshot();
+  }
+
   async setIdleDisconnectEnabled(enabled: boolean): Promise<BridgeSnapshot> {
     await this.sendSettingCommand(COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED, enabled ? 1 : 0, {
       idleDisconnectEnabled: enabled
@@ -3649,6 +3656,11 @@ export class BridgeService extends EventEmitter {
   }
 
   private async applyCurrentSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    await this.sendCommand(
+      COMMAND_ID.SET_LIGHTBAR_RESTORE_ENABLED,
+      settings.lightbarRestoreEnabled ? 1 : 0,
+      { expectSettingsRevisionChange }
+    );
     await this.applyLightbarSettings(settings, expectSettingsRevisionChange);
     await this.sendCommand(COMMAND_ID.SET_MUTE_BUTTON_ACTION, muteButtonModeValue(settings.muteButtonMode), {
       expectSettingsRevisionChange,
