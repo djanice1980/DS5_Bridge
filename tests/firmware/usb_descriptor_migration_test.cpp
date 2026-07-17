@@ -463,17 +463,21 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
 
     const std::string disconnect_block = extract_between(
         usb_cpp,
-        "void usb_handle_controller_transport_disconnect() {",
+        "void usb_handle_controller_transport_disconnect(bool expected_disconnect) {",
         "\n}\n\nvoid usb_handle_controller_transport_ready()"
     );
-    const auto disconnect_suspend = disconnect_block.find("usb_bus_suspended()");
-    const auto disconnect_deinit = disconnect_block.find("usb_deinit_device_stack();");
     if (
-        disconnect_suspend == std::string::npos
-        || disconnect_deinit == std::string::npos
-        || disconnect_deinit < disconnect_suspend
+        disconnect_block.find("USB_EXPECTED_DISCONNECT_GRACE_US") == std::string::npos
+        || disconnect_block.find("usb_controller_transport_disconnect_pending = true;")
+            == std::string::npos
+        || disconnect_block.find("usb_deinit_device_stack") != std::string::npos
+        || pm_poll.find("usb_controller_transport_disconnect_not_before_us")
+            == std::string::npos
+        || pm_poll.find("usb_deinit_device_stack();") == std::string::npos
     ) {
-        throw std::runtime_error("Controller disconnect must defer USB deinit while the host is suspended");
+        throw std::runtime_error(
+            "Controller disconnect must be deferred out of the Bluetooth callback and grace intentional sleeps"
+        );
     }
 
     const std::string ready_block = extract_between(
@@ -501,14 +505,15 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         "\n        }\n\n        case GAP_EVENT_RSSI_MEASUREMENT:"
     );
     const auto suspended_query = hci_disconnect.find("usb_host_suspended_active()");
-    const auto watchdog = hci_disconnect.find("watchdog_reboot");
     if (
         suspended_query == std::string::npos
         || hci_disconnect.find("keeping USB on bus") == std::string::npos
-        || watchdog == std::string::npos
-        || watchdog < suspended_query
+        || hci_disconnect.find("keeping Pico alive") == std::string::npos
+        || hci_disconnect.find("watchdog_reboot") != std::string::npos
     ) {
-        throw std::runtime_error("BT disconnect must avoid rebooting while the USB host is suspended");
+        throw std::runtime_error(
+            "Normal controller disconnects must keep the Pico alive, including while USB is suspended"
+        );
     }
 }
 
@@ -905,6 +910,77 @@ void assert_dualsense_feature_startup_is_paced(std::filesystem::path const &root
     }
 }
 
+void assert_bootsel_gestures_and_intentional_disconnects(std::filesystem::path const &root) {
+    const auto button_cpp = read_text(root / "src" / "button_functions.cpp");
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const auto bt_h = read_text(root / "src" / "bt.h");
+    const auto usb_cpp = read_text(root / "src" / "usb.cpp");
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+
+    const std::string dispatch = extract_between(
+        button_cpp,
+        "static void button_dispatch",
+        "\n}\n\nvoid button_check"
+    );
+    if (
+        button_cpp.find("BUTTON_FLASH_SAFE_TIMEOUT_MS = 5") == std::string::npos
+        || button_cpp.find("MULTI_CLICK_WINDOW_SAMPLES = 10") == std::string::npos
+        || button_cpp.find("if (!button_read_bootsel(pressed))") == std::string::npos
+        || dispatch.find("bt_is_controller_connected()") == std::string::npos
+        || dispatch.find(
+            "bt_disconnect_with_intent(BtControllerDisconnectIntentSleep)"
+        ) == std::string::npos
+        || dispatch.find("bt_request_scan()") == std::string::npos
+        || dispatch.find("watchdog_reboot(0, 0, 0)") == std::string::npos
+        || dispatch.find("reset_usb_boot(0, 0)") == std::string::npos
+        || dispatch.find("bt_forget_pairings()") == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "BOOTSEL must implement safe click, reboot, flashing, and forget-pairing gestures"
+        );
+    }
+
+    const std::string disconnect = extract_between(
+        bt_cpp,
+        "bool bt_disconnect_with_intent",
+        "\n}\n\nbool bt_disconnect()"
+    );
+    const std::string recovery = extract_between(
+        bt_cpp,
+        "static void service_disconnect_recovery",
+        "\n}\n\nvoid bt_connection_recovery_loop"
+    );
+    const std::string hci_disconnect = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_DISCONNECTION_COMPLETE: {",
+        "\n        }\n\n        case GAP_EVENT_RSSI_MEASUREMENT:"
+    );
+    if (
+        bt_h.find("BtControllerDisconnectIntentSleep = 1") == std::string::npos
+        || bt_h.find("bool bt_forget_pairings();") == std::string::npos
+        || disconnect.find("controller_disconnect_intent = intent;") == std::string::npos
+        || disconnect.find("gap_disconnect(acl_handle)") == std::string::npos
+        || disconnect.find("DISCONNECT_RETRY_EVENT_TIMEOUT_US") == std::string::npos
+        || recovery.find("DISCONNECT_RETRY_MAX_ATTEMPTS") == std::string::npos
+        || recovery.find("hci_send_cmd(&hci_disconnect") == std::string::npos
+        || hci_disconnect.find("usb_handle_controller_transport_disconnect(expected_disconnect)")
+            == std::string::npos
+        || hci_disconnect.find("keeping Pico alive") == std::string::npos
+        || bt_cpp.find(
+            "bt_disconnect_with_intent(BtControllerDisconnectIntentIdleTimeout)"
+        ) == std::string::npos
+        || companion_cpp.find(
+            "bt_disconnect_with_intent(BtControllerDisconnectIntentSleep)"
+        ) == std::string::npos
+        || usb_cpp.find("#define USB_EXPECTED_DISCONNECT_GRACE_US 1500000")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Intentional disconnects must preserve pairing, retry bounded teardown, and keep the bridge alive"
+        );
+    }
+}
+
 } // namespace
 
 int main() {
@@ -926,6 +1002,7 @@ int main() {
         assert_bluetooth_pairing_and_reconnect_policy(source_root);
         assert_bluetooth_hid_recovery_and_encryption_watchdog(source_root);
         assert_dualsense_feature_startup_is_paced(source_root);
+        assert_bootsel_gestures_and_intentional_disconnects(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

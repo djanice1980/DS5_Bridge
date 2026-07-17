@@ -89,8 +89,10 @@
 #define CONTROL_SEND_HEADSET_AUDIO_IDLE_US 20000
 #define FEATURE_PREFETCH_MAX_REQUESTS 16
 #define FEATURE_PREFETCH_SPACING_US 5000u
-#define CYW43_POWER_CYCLE_HOLD_MS 750
 #define CONTROLLER_DISCONNECT_REBOOT_DELAY_MS 25
+#define DISCONNECT_RETRY_DELAY_US 250000u
+#define DISCONNECT_RETRY_EVENT_TIMEOUT_US 1000000u
+#define DISCONNECT_RETRY_MAX_ATTEMPTS 3u
 #define CLASSIC_LINK_SUPERVISION_TIMEOUT_SLOTS 3200u
 #define DEFAULT_IDLE_DISCONNECT_TIMEOUT_MINUTES 15
 #define MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES 1
@@ -310,6 +312,12 @@ static uint32_t encryption_command_accepted_at_us = 0;
 static bool authentication_retry_pending = false;
 static uint8_t authentication_retry_attempts = 0;
 static uint32_t authentication_retry_at_us = 0;
+static bool disconnect_retry_requested = false;
+static bool disconnect_retry_waiting = false;
+static uint8_t disconnect_retry_attempts = 0;
+static uint32_t disconnect_retry_at_us = 0;
+static BtControllerDisconnectIntent controller_disconnect_intent =
+    BtControllerDisconnectIntentNone;
 static int8_t bt_rssi = 0;
 static bool bt_rssi_known = false;
 static bool bt_rssi_request_pending = false;
@@ -393,18 +401,6 @@ static bool output_pending_locked() {
     return !urgent_queue.empty() || !audio_queue.empty() || state_pending;
 }
 
-static void power_down_cyw43_for_reboot() {
-#ifdef CYW43_PIN_RFSW_VDD
-    cyw43_hal_pin_config(CYW43_PIN_RFSW_VDD, CYW43_HAL_PIN_MODE_OUTPUT, CYW43_HAL_PIN_PULL_NONE, 0);
-    cyw43_hal_pin_low(CYW43_PIN_RFSW_VDD);
-#endif
-#ifdef CYW43_PIN_WL_REG_ON
-    cyw43_hal_pin_config(CYW43_PIN_WL_REG_ON, CYW43_HAL_PIN_MODE_OUTPUT, CYW43_HAL_PIN_PULL_NONE, 0);
-    cyw43_hal_pin_low(CYW43_PIN_WL_REG_ON);
-#endif
-    sleep_ms(CYW43_POWER_CYCLE_HOLD_MS);
-}
-
 static void update_queue_depth_counters_locked() {
     output_counters.audio_queue_depth = static_cast<uint32_t>(audio_queue.size());
     update_max_u32(output_counters.audio_queue_max_depth, output_counters.audio_queue_depth);
@@ -456,6 +452,7 @@ static bool begin_connection_attempt() {
     if (connection_phase != BtConnectionPhase::Listening) {
         return false;
     }
+    controller_disconnect_intent = BtControllerDisconnectIntentNone;
     connection_phase = BtConnectionPhase::Connecting;
     connection_generation++;
     if (connection_generation == 0) {
@@ -759,6 +756,10 @@ void bt_register_data_callback(bt_data_callback_t callback) {
 
 bool bt_is_controller_connected() {
     return hid_interrupt_ready;
+}
+
+bool bt_expected_disconnect_pending() {
+    return controller_disconnect_intent != BtControllerDisconnectIntentNone;
 }
 
 uint8_t bt_controller_type() {
@@ -1324,15 +1325,21 @@ void bt_signal_strength_loop() {
     }
 }
 
-bool bt_disconnect() {
+bool bt_disconnect_with_intent(BtControllerDisconnectIntent intent) {
     if (acl_handle == HCI_CON_HANDLE_INVALID) {
         return false;
     }
-    const BtConnectionPhase previous_phase = connection_phase;
-    const uint32_t previous_phase_started_us = connection_phase_started_us;
+    if (connection_phase == BtConnectionPhase::Disconnecting) {
+        return true;
+    }
     if (!begin_connection_disconnect()) {
         return false;
     }
+    controller_disconnect_intent = intent;
+    disconnect_retry_requested = false;
+    disconnect_retry_waiting = false;
+    disconnect_retry_attempts = 0;
+    disconnect_retry_at_us = 0;
 
     // Let BTstack own its SEND_DISCONNECT/SENT_DISCONNECT state transition.
     // Sending hci_disconnect directly leaves its ACL bookkeeping stale.
@@ -1341,12 +1348,18 @@ bool bt_disconnect() {
     gap_set_bondable_mode(0);
     const uint8_t status = gap_disconnect(acl_handle);
     if (status == ERROR_CODE_SUCCESS || status == ERROR_CODE_COMMAND_DISALLOWED) {
+        disconnect_retry_waiting = true;
+        disconnect_retry_at_us = time_us_32() + DISCONNECT_RETRY_EVENT_TIMEOUT_US;
         return true;
     }
     DS5_LOG("[HCI] GAP disconnect failed handle=0x%04X status=0x%02X\n", acl_handle, status);
-    connection_phase = previous_phase;
-    connection_phase_started_us = previous_phase_started_us;
+    disconnect_retry_requested = true;
+    disconnect_retry_at_us = time_us_32() + DISCONNECT_RETRY_DELAY_US;
     return false;
+}
+
+bool bt_disconnect() {
+    return bt_disconnect_with_intent(BtControllerDisconnectIntentNone);
 }
 
 bool bt_power_off_controller() {
@@ -1386,6 +1399,28 @@ bool bt_request_scan() {
     gap_discoverable_control(0);
     gap_set_bondable_mode(1);
     DS5_LOG("[HCI] Controller pairing window requested\n");
+    return true;
+}
+
+bool bt_forget_pairings() {
+    DS5_LOG("[HCI] Forget controller pairings requested\n");
+    gap_delete_all_link_keys();
+    stored_link_key_present = false;
+    feature_data.clear();
+    clear_feature_prefetch_queue();
+
+    if (acl_handle != HCI_CON_HANDLE_INVALID) {
+        (void)bt_disconnect();
+    }
+
+    const uint32_t now = time_us_32();
+    pairing_window_active = true;
+    pairing_window_deadline_us = now + PAIRING_WINDOW_US;
+    inquiry_retry_scheduled = true;
+    inquiry_retry_at_us = now;
+    gap_connectable_control(0);
+    gap_discoverable_control(0);
+    gap_set_bondable_mode(1);
     return true;
 }
 
@@ -1483,12 +1518,49 @@ static void cancel_hid_channel_recovery_if_ready() {
     }
 }
 
+static void service_disconnect_recovery(uint32_t now) {
+    if (
+        disconnect_retry_waiting
+        && bt_time_reached(now, disconnect_retry_at_us)
+    ) {
+        disconnect_retry_waiting = false;
+        disconnect_retry_requested = true;
+    }
+    if (!disconnect_retry_requested) {
+        return;
+    }
+    if (disconnect_retry_attempts >= DISCONNECT_RETRY_MAX_ATTEMPTS) {
+        disconnect_retry_requested = false;
+        DS5_LOG("[HCI] Disconnect retry exhausted; reboot for bounded transport recovery\n");
+        watchdog_reboot(0, 0, CONTROLLER_DISCONNECT_REBOOT_DELAY_MS);
+        return;
+    }
+    if (!bt_time_reached(now, disconnect_retry_at_us) || !hci_can_send_command_packet_now()) {
+        return;
+    }
+
+    const uint8_t status = hci_send_cmd(&hci_disconnect, acl_handle, 0x13);
+    if (status == ERROR_CODE_SUCCESS) {
+        disconnect_retry_attempts++;
+        disconnect_retry_requested = false;
+        disconnect_retry_waiting = true;
+        disconnect_retry_at_us = now + DISCONNECT_RETRY_EVENT_TIMEOUT_US;
+        DS5_LOG("[HCI] Disconnect retry sent attempt=%u\n", disconnect_retry_attempts);
+    } else {
+        disconnect_retry_at_us = now + DISCONNECT_RETRY_DELAY_US;
+    }
+}
+
 void bt_connection_recovery_loop() {
     if (acl_handle == HCI_CON_HANDLE_INVALID) {
         return;
     }
 
     const uint32_t now = time_us_32();
+    if (connection_phase == BtConnectionPhase::Disconnecting) {
+        service_disconnect_recovery(now);
+        return;
+    }
     if (
         authentication_retry_pending
         && bt_time_reached(now, authentication_retry_at_us)
@@ -1854,6 +1926,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     bt_disconnect();
                 }
             }
+            if (
+                opcode == HCI_OPCODE_HCI_DISCONNECT
+                && connection_phase == BtConnectionPhase::Disconnecting
+                && status != ERROR_CODE_SUCCESS
+            ) {
+                disconnect_retry_waiting = false;
+                disconnect_retry_requested = true;
+                disconnect_retry_at_us = time_us_32() + DISCONNECT_RETRY_DELAY_US;
+            }
             break;
         }
 
@@ -2063,6 +2144,19 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 hci_event_disconnection_complete_get_connection_handle(packet);
             if (
                 status != ERROR_CODE_SUCCESS
+                && connection_handle_is_current(disconnected_handle)
+                && connection_phase == BtConnectionPhase::Disconnecting
+            ) {
+                disconnect_retry_waiting = false;
+                disconnect_retry_requested = true;
+                disconnect_retry_at_us = time_us_32() + DISCONNECT_RETRY_DELAY_US;
+                DS5_LOG("[HCI] Disconnect completion failed handle=0x%04X status=0x%02X; retry queued\n",
+                        disconnected_handle,
+                        status);
+                break;
+            }
+            if (
+                status != ERROR_CODE_SUCCESS
                 || !connection_handle_is_current(disconnected_handle)
             ) {
                 DS5_LOG("[HCI] Ignore stale disconnection status=0x%02X handle=0x%04X\n",
@@ -2070,13 +2164,21 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                         disconnected_handle);
                 break;
             }
+            const BtControllerDisconnectIntent disconnect_intent =
+                controller_disconnect_intent;
+            const bool expected_disconnect =
+                disconnect_intent != BtControllerDisconnectIntentNone;
             const bool host_suspended = usb_host_suspended_active();
-            usb_handle_controller_transport_disconnect();
+            usb_handle_controller_transport_disconnect(expected_disconnect);
             reset_controller_input_report_cache();
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
             clear_outbound_inquiry_target();
             clear_acl_connection_pending();
             inquiry_active = false;
+            disconnect_retry_requested = false;
+            disconnect_retry_waiting = false;
+            disconnect_retry_attempts = 0;
+            disconnect_retry_at_us = 0;
             acl_handle = HCI_CON_HANDLE_INVALID;
             reset_connection_session();
             bt_rssi = 0;
@@ -2108,13 +2210,18 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             } else {
                 restore_passive_reconnect_scan();
             }
+            controller_disconnect_intent = BtControllerDisconnectIntentNone;
             if (host_suspended) {
                 DS5_LOG("[HCI] Disconnected reason=0x%02X while USB host suspended; keeping USB on bus\n", reason);
                 break;
             }
-            DS5_LOG("[HCI] Disconnected reason=0x%02X, power-cycle CYW43 then reboot Pico\n", reason);
-            power_down_cyw43_for_reboot();
-            watchdog_reboot(0, 0, CONTROLLER_DISCONNECT_REBOOT_DELAY_MS);
+            if (expected_disconnect) {
+                DS5_LOG("[HCI] Expected controller disconnect intent=%u reason=0x%02X; keeping Pico alive\n",
+                        static_cast<unsigned int>(disconnect_intent),
+                        reason);
+                break;
+            }
+            DS5_LOG("[HCI] Controller disconnected reason=0x%02X; keeping Pico alive for reconnect\n", reason);
             break;
         }
 
@@ -2347,7 +2454,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             } else if (static_cast<uint64_t>(time_us_32() - inactive_time) > idle_disconnect_timeout_us()) {
                 DS5_LOG("disconnect when inactive\n");
                 inactive_time = time_us_32();
-                bt_disconnect();
+                bt_disconnect_with_intent(BtControllerDisconnectIntentIdleTimeout);
             }
         } else if (channel == hid_control_cid) {
             if (controller_type_check_pending) {

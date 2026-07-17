@@ -20,6 +20,12 @@ enum ControllerType : uint8_t {
     ControllerTypeDualSenseEdge = 2,
 };
 
+enum BtControllerDisconnectIntent : uint8_t {
+    BtControllerDisconnectIntentNone = 0,
+    BtControllerDisconnectIntentSleep = 1,
+    BtControllerDisconnectIntentIdleTimeout = 2,
+};
+
 typedef void (*bt_data_callback_t)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len);
 
 int bt_init();
@@ -29,8 +35,11 @@ uint8_t bt_controller_type();
 int8_t bt_get_signal_strength();
 bool bt_has_signal_strength();
 bool bt_disconnect();
+bool bt_disconnect_with_intent(BtControllerDisconnectIntent intent);
+bool bt_expected_disconnect_pending();
 bool bt_power_off_controller();
 bool bt_request_scan();
+bool bt_forget_pairings();
 bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes);
 uint16_t bt_idle_disconnect_timeout_minutes();
 void bt_write(uint8_t* data,uint16_t len);

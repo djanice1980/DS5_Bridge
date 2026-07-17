@@ -2256,7 +2256,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            if (!bt_disconnect()) {
+            if (!bt_disconnect_with_intent(BtControllerDisconnectIntentSleep)) {
                 set_ack(command_id, sequence, AckNotConnected);
                 return;
             }

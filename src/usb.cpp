@@ -32,6 +32,7 @@ static bool usb_reconnect_connect_pending = false;
 static uint32_t usb_reconnect_at_us = 0;
 static bool usb_controller_transport_ready = false;
 static bool usb_controller_transport_disconnect_pending = false;
+static uint32_t usb_controller_transport_disconnect_not_before_us = 0;
 static volatile bool usb_mounted = false;
 static volatile bool usb_host_suspended = false;
 static volatile uint32_t usb_suspend_at_us = 0;
@@ -49,6 +50,7 @@ uint8_t usb_hid_polling_interval_ms_value = 1;
 #define USB_RECONNECT_HOLD_US           100000
 #define USB_SUSPEND_POWEROFF_DEBOUNCE_US 3000000
 #define USB_RECONNECT_GRACE_US          5000000
+#define USB_EXPECTED_DISCONNECT_GRACE_US 1500000
 
 enum UsbAudioDebugKind : uint8_t {
     UsbAudioDebugSetInterface = 1,
@@ -219,18 +221,17 @@ bool usb_line_streaming_active() {
     return usb_line_streaming;
 }
 
-void usb_handle_controller_transport_disconnect() {
+void usb_handle_controller_transport_disconnect(bool expected_disconnect) {
     usb_reconnect_requested = false;
     usb_reconnect_connect_pending = false;
     usb_controller_transport_ready = false;
+    usb_controller_transport_disconnect_not_before_us = expected_disconnect
+        ? time_us_32() + USB_EXPECTED_DISCONNECT_GRACE_US
+        : 0;
     usb_reset_audio_class_state();
-    if (usb_bus_suspended()) {
-        usb_controller_transport_disconnect_pending = true;
-        return;
-    }
-    usb_controller_transport_disconnect_pending = false;
-    usb_mounted = false;
-    usb_deinit_device_stack();
+    // Reconcile TinyUSB from usb_pm_poll rather than from the Bluetooth
+    // callback running inside cyw43_arch_poll.
+    usb_controller_transport_disconnect_pending = true;
 }
 
 void usb_handle_controller_transport_ready() {
@@ -239,6 +240,7 @@ void usb_handle_controller_transport_ready() {
     }
     usb_reset_audio_class_state();
     usb_controller_transport_disconnect_pending = false;
+    usb_controller_transport_disconnect_not_before_us = 0;
     if (usb_bus_suspended()) {
         usb_controller_transport_ready = true;
         return;
@@ -324,7 +326,14 @@ void usb_pm_poll() {
     }
 
     if (usb_controller_transport_disconnect_pending && !usb_controller_transport_ready) {
+        if (
+            usb_controller_transport_disconnect_not_before_us != 0
+            && !time_reached(now, usb_controller_transport_disconnect_not_before_us)
+        ) {
+            return;
+        }
         usb_controller_transport_disconnect_pending = false;
+        usb_controller_transport_disconnect_not_before_us = 0;
         usb_mounted = false;
         usb_deinit_device_stack();
         return;
