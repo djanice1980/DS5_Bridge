@@ -24,6 +24,7 @@
 #include "persona/dualsense_persona.h"
 #include "persona/host_persona.h"
 #include "persona/xusb360_usb.h"
+#include "watchdog_telemetry.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
@@ -49,6 +50,13 @@ enum HidDebugKind : uint8_t {
 
 static uint32_t last_input_debug_us = 0;
 static uint8_t input_debug_burst_remaining = 0;
+
+#define RUN_MAIN_PHASE(phase_id, block) \
+    do { \
+        watchdog_telemetry_note_phase(phase_id); \
+        block \
+        watchdog_update(); \
+    } while (0)
 
 static void note_usb_input_report(uint8_t const *report, uint16_t len) {
 #if !DS5_AUDIO_DEBUG_ENABLED
@@ -553,6 +561,7 @@ int main() {
 #endif
 
     board_init();
+    watchdog_telemetry_boot_capture();
     firmware_log_init();
     usb_device_stack_init_disconnected();
 #if DS5_DEBUG_LOGS_ENABLED
@@ -571,6 +580,19 @@ int main() {
 
     if (watchdog_enable_caused_reboot()) {
         DS5_LOG("Rebooted by Watchdog!\n");
+        WatchdogTelemetrySnapshot watchdog_snapshot{};
+        watchdog_telemetry_snapshot(&watchdog_snapshot);
+        DS5_LOG(
+            "[Watchdog] retained phase=%s(%u) valid=%u sequence=%lu "
+            "enteredAtMs=%lu\n",
+            watchdog_telemetry_phase_name(watchdog_snapshot.prior_phase),
+            static_cast<unsigned int>(watchdog_snapshot.prior_phase),
+            watchdog_snapshot.prior_snapshot_valid ? 1u : 0u,
+            static_cast<unsigned long>(watchdog_snapshot.prior_sequence),
+            static_cast<unsigned long>(
+                watchdog_snapshot.prior_phase_entered_at_ms
+            )
+        );
     } else {
         DS5_LOG("Clean boot\n");
     }
@@ -593,38 +615,63 @@ int main() {
 
     while (1) {
         watchdog_update();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Cyw43);
         cyw43_arch_poll();
         watchdog_update();
-        tud_task();
-        firmware_log_flush_live();
-        watchdog_update();
-        interrupt_loop();
-        watchdog_update();
-        usb_pm_poll();
-        watchdog_update();
-        audio_loop();
-        watchdog_update();
-        if (!audio_recent()) {
-            button_check();
-        }
-        watchdog_update();
-        bt_lightbar_loop();
-        watchdog_update();
-        bt_signal_strength_loop();
-        watchdog_update();
-        bt_inquiry_loop();
-        watchdog_update();
-        bt_connection_recovery_loop();
-        watchdog_update();
-        bt_feature_prefetch_loop();
-        watchdog_update();
-        bt_output_retry_loop();
-        watchdog_update();
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::TinyUsb, {
+            tud_task();
+        });
+        RUN_MAIN_PHASE(
+            WatchdogMainLoopPhase::FirmwareLogFlush,
+            {
+                firmware_log_flush_live();
+            }
+        );
+        RUN_MAIN_PHASE(
+            WatchdogMainLoopPhase::InterruptBeforeAudio,
+            {
+                interrupt_loop();
+            }
+        );
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::UsbPower, {
+            usb_pm_poll();
+        });
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::Audio, {
+            audio_loop();
+        });
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::Button, {
+            if (!audio_recent()) {
+                button_check();
+            }
+        });
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::Lightbar, {
+            bt_lightbar_loop();
+        });
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::Rssi, {
+            bt_signal_strength_loop();
+        });
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::Inquiry, {
+            bt_inquiry_loop();
+        });
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::ConnectionRecovery, {
+            bt_connection_recovery_loop();
+        });
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::FeaturePrefetch, {
+            bt_feature_prefetch_loop();
+        });
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::OutputRetry, {
+            bt_output_retry_loop();
+        });
 #ifdef ENABLE_COMPANION
-        companion_loop();
-        watchdog_update();
+        RUN_MAIN_PHASE(WatchdogMainLoopPhase::Companion, {
+            companion_loop();
+        });
 #endif
-        interrupt_loop();
-        watchdog_update();
+        RUN_MAIN_PHASE(
+            WatchdogMainLoopPhase::InterruptAfterCompanion,
+            {
+                interrupt_loop();
+            }
+        );
     }
 }

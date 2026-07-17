@@ -39,6 +39,8 @@ int main() {
         const std::string utils = read_text(root / "src" / "utils.h");
         const std::string firmware_log =
             read_text(root / "src" / "firmware_log.cpp");
+        const std::string watchdog_telemetry =
+            read_text(root / "src" / "watchdog_telemetry.cpp");
 
         require_contains(
             cmake,
@@ -119,6 +121,41 @@ int main() {
             main,
             "firmware_log_flush_live();",
             "The main loop must service the nonblocking UART drain"
+        );
+        require_contains(
+            cmake,
+            "src/watchdog_telemetry.cpp",
+            "Watchdog phase telemetry must be linked"
+        );
+        require_contains(
+            main,
+            "watchdog_telemetry_boot_capture();",
+            "Prior watchdog phase must be captured before watchdog enable"
+        );
+        require_contains(
+            main,
+            "watchdog_telemetry_note_phase(phase_id);",
+            "Every guarded main-loop phase must publish a retained breadcrumb"
+        );
+        require_contains(
+            main,
+            "WatchdogMainLoopPhase::Cyw43",
+            "The Bluetooth poll phase must be identifiable after a reset"
+        );
+        require_contains(
+            main,
+            "[Watchdog] retained phase=%s(%u) valid=%u",
+            "The next boot must print the retained watchdog breadcrumb"
+        );
+        require_contains(
+            watchdog_telemetry,
+            "watchdog_hw->scratch[0] = 0;",
+            "Watchdog telemetry must invalidate scratch before updating it"
+        );
+        require_contains(
+            watchdog_telemetry,
+            "kScratchSignature | scratch_crc(word1, word2, word3);",
+            "Watchdog telemetry must publish a checksummed commit marker last"
         );
 
         std::cout << "Diagnostics configuration checks passed.\n";

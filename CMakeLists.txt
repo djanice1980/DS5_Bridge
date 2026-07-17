@@ -68,6 +68,7 @@ add_executable(ds5-bridge
         src/audio.cpp
         src/bt.cpp
         src/firmware_log.cpp
+        src/watchdog_telemetry.cpp
 )
 
 # Cockos WDLResampler
