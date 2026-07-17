@@ -79,8 +79,8 @@ adapter receives no bytes until diagnostic firmware is flashed.
 Install the per-user Windows collector and start it immediately:
 
 ```powershell
-.\tools\windows\pico-uart-logger.ps1 install
-.\tools\windows\pico-uart-logger.ps1 status
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\windows\pico-uart-logger.ps1 install
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\windows\pico-uart-logger.ps1 status
 ```
 
 The collector auto-detects the CH343 adapter, reconnects across Pico or adapter
@@ -95,9 +95,9 @@ The current file and last received-byte time are recorded in `status.json`.
 Use these commands to control the background collector:
 
 ```powershell
-.\tools\windows\pico-uart-logger.ps1 stop
-.\tools\windows\pico-uart-logger.ps1 start
-.\tools\windows\pico-uart-logger.ps1 uninstall
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\windows\pico-uart-logger.ps1 stop
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\windows\pico-uart-logger.ps1 start
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\windows\pico-uart-logger.ps1 uninstall
 ```
 
 Only one process can own a COM port. Stop the collector before opening the same
