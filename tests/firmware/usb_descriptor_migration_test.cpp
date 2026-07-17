@@ -700,6 +700,88 @@ void assert_mic_pass_through_defaults_to_enabled(std::filesystem::path const &ro
     }
 }
 
+void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &root) {
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const auto bt_h = read_text(root / "src" / "bt.h");
+
+    const std::string init_block = extract_between(
+        bt_cpp,
+        "int bt_init() {",
+        "\n}\n\nstatic void hci_packet_handler"
+    );
+    if (
+        init_block.find("gap_set_link_supervision_timeout(CLASSIC_LINK_SUPERVISION_TIMEOUT_SLOTS);")
+            == std::string::npos
+        || init_block.find("gap_ssp_set_auto_accept(false);") == std::string::npos
+        || init_block.find("hci_set_master_slave_policy(HCI_ROLE_MASTER);") == std::string::npos
+        || init_block.find("gap_register_classic_connection_filter(&classic_connection_filter);")
+            == std::string::npos
+    ) {
+        throw std::runtime_error("Bluetooth init must install the Kitsune reconnect timing, role, and ACL admission policy");
+    }
+
+    const std::string working_block = extract_between(
+        bt_cpp,
+        "case BTSTACK_EVENT_STATE:",
+        "\n        case HCI_EVENT_INQUIRY_RESULT:"
+    );
+    const auto page_activity = working_block.find("gap_set_page_scan_activity(0x0012, 0x0012);");
+    const auto page_type = working_block.find("gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);");
+    const auto stored_key = working_block.find("stored_link_key_present = bt_has_stored_link_key();");
+    const auto passive_scan = working_block.find("restore_passive_reconnect_scan();");
+    const auto first_pair = working_block.find("(void)bt_request_scan();");
+    if (
+        page_activity == std::string::npos
+        || page_type == std::string::npos
+        || stored_key == std::string::npos
+        || passive_scan == std::string::npos
+        || first_pair == std::string::npos
+        || page_activity > page_type
+        || page_type > stored_key
+    ) {
+        throw std::runtime_error("Bluetooth page-scan tuning must be applied after HCI reset before passive reconnect or first pairing");
+    }
+
+    const std::string inquiry_block = extract_between(
+        bt_cpp,
+        "static void start_inquiry_if_needed() {",
+        "\n}\n\nstatic void update_inquiry_led"
+    );
+    if (
+        inquiry_block.find("!pairing_window_active") == std::string::npos
+        || inquiry_block.find("gap_connectable_control(0);") == std::string::npos
+        || inquiry_block.find("gap_discoverable_control(0);") == std::string::npos
+        || inquiry_block.find("gap_set_bondable_mode(1);") == std::string::npos
+        || inquiry_block.find("gap_inquiry_start(PAIRING_INQUIRY_LENGTH_UNITS)")
+            == std::string::npos
+    ) {
+        throw std::runtime_error("Controller discovery must remain an explicit, outbound-only pairing window");
+    }
+
+    const std::string filter_block = extract_between(
+        bt_cpp,
+        "static bool classic_acl_connection_allowed",
+        "\n}\n\nstatic int classic_connection_filter"
+    );
+    if (
+        filter_block.find("gap_get_link_key_for_bd_addr") == std::string::npos
+        || filter_block.find("Rejecting unknown controller") == std::string::npos
+        || filter_block.find("Rejecting incoming page") == std::string::npos
+    ) {
+        throw std::runtime_error("Passive page scan must admit only a stored controller outside explicit pairing");
+    }
+
+    if (
+        bt_cpp.find("#define PAIRING_WINDOW_US 30000000u") == std::string::npos
+        || bt_cpp.find("#define PAIRING_INQUIRY_LENGTH_UNITS 24u") == std::string::npos
+        || bt_cpp.find("#define CLASSIC_LINK_SUPERVISION_TIMEOUT_SLOTS 3200u") == std::string::npos
+        || bt_cpp.find("HCI_SEND_CMD_LOGGED(&hci_accept_connection_request") != std::string::npos
+        || bt_h.find("bool bt_request_scan();") == std::string::npos
+    ) {
+        throw std::runtime_error("Bluetooth pairing window, link-loss timing, or BTstack-owned incoming ACL policy regressed");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -718,6 +800,7 @@ int main() {
         assert_mute_keyboard_chord_starter_is_deferred(source_root);
         assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(source_root);
         assert_mic_pass_through_defaults_to_enabled(source_root);
+        assert_bluetooth_pairing_and_reconnect_policy(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

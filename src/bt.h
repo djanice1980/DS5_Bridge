@@ -30,6 +30,7 @@ int8_t bt_get_signal_strength();
 bool bt_has_signal_strength();
 bool bt_disconnect();
 bool bt_power_off_controller();
+bool bt_request_scan();
 bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes);
 uint16_t bt_idle_disconnect_timeout_minutes();
 void bt_write(uint8_t* data,uint16_t len);

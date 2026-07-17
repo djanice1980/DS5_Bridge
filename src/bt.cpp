@@ -89,6 +89,7 @@
 #define CONTROL_SEND_HEADSET_AUDIO_IDLE_US 20000
 #define CYW43_POWER_CYCLE_HOLD_MS 750
 #define CONTROLLER_DISCONNECT_REBOOT_DELAY_MS 25
+#define CLASSIC_LINK_SUPERVISION_TIMEOUT_SLOTS 3200u
 #define DEFAULT_IDLE_DISCONNECT_TIMEOUT_MINUTES 15
 #define MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES 1
 #define MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES 120
@@ -114,6 +115,11 @@
 #define RSSI_POLL_INTERVAL_US 2000000u
 #define RSSI_REQUEST_TIMEOUT_US 1000000u
 #define INQUIRY_RETRY_DELAY_US 2000000u
+#define PAIRING_WINDOW_US 30000000u
+#define PAIRING_ACTIVE_ATTEMPT_EXTENSION_US 12000000u
+#define PAIRING_INQUIRY_LENGTH_UNITS 24u
+#define INQUIRY_LED_BLINK_INTERVAL_US 250000u
+#define AUTHENTICATION_PIN_OR_KEY_MISSING 0x06u
 #define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
 #define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
@@ -210,6 +216,7 @@ struct output_scheduler_counters {
 
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
+static int classic_connection_filter(bd_addr_t addr, hci_link_type_t link_type);
 static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet);
 static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason);
@@ -237,7 +244,13 @@ static bd_addr_t current_device_addr;
 static bool device_found = false; // Outbound inquiry target found; do not set for incoming ACL requests.
 static bool new_pair = false; // Only newly paired devices create channels; auto-reconnect uses the services.
 static bool inquiry_active = false;
+static bool inquiry_retry_scheduled = false;
 static uint32_t inquiry_retry_at_us = 0;
+static bool pairing_window_active = false;
+static uint32_t pairing_window_deadline_us = 0;
+static bool inquiry_led_on = false;
+static uint32_t inquiry_led_last_toggle_us = 0;
+static bool stored_link_key_present = false;
 static bool acl_connection_pending = false;
 static uint32_t acl_connection_pending_at_us = 0;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
@@ -371,13 +384,68 @@ static void clear_outbound_inquiry_target() {
     new_pair = false;
 }
 
+static bool bt_has_stored_link_key() {
+    btstack_link_key_iterator_t iterator;
+    if (!gap_link_key_iterator_init(&iterator)) {
+        return false;
+    }
+
+    bd_addr_t addr;
+    link_key_t key;
+    link_key_type_t type;
+    const bool has_key = gap_link_key_iterator_get_next(&iterator, addr, key, &type);
+    gap_link_key_iterator_done(&iterator);
+    return has_key;
+}
+
+static void restore_passive_reconnect_scan() {
+    const bool reconnect_allowed = stored_link_key_present
+        && !pairing_window_active
+        && !inquiry_active
+        && !acl_connection_pending
+        && acl_handle == HCI_CON_HANDLE_INVALID;
+    gap_connectable_control(reconnect_allowed ? 1 : 0);
+    gap_discoverable_control(0);
+    gap_set_bondable_mode(pairing_window_active ? 1 : 0);
+}
+
+static void stop_inquiry_led() {
+    if (inquiry_led_on) {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+    }
+    inquiry_led_on = false;
+    inquiry_led_last_toggle_us = 0;
+}
+
+static void close_pairing_window(bool stop_inquiry) {
+    pairing_window_active = false;
+    pairing_window_deadline_us = 0;
+    inquiry_retry_scheduled = false;
+    inquiry_retry_at_us = 0;
+    if (stop_inquiry && inquiry_active) {
+        gap_inquiry_stop();
+    }
+    inquiry_active = false;
+    stop_inquiry_led();
+    restore_passive_reconnect_scan();
+}
+
 static void schedule_inquiry_retry(uint32_t delay_us = INQUIRY_RETRY_DELAY_US) {
     inquiry_active = false;
+    if (!pairing_window_active) {
+        inquiry_retry_scheduled = false;
+        inquiry_retry_at_us = 0;
+        restore_passive_reconnect_scan();
+        return;
+    }
+    inquiry_retry_scheduled = true;
     inquiry_retry_at_us = time_us_32() + delay_us;
 }
 
 static void start_inquiry_if_needed() {
     if (
+        !pairing_window_active
+        ||
         inquiry_active
         || device_found
         || acl_connection_pending
@@ -387,10 +455,66 @@ static void start_inquiry_if_needed() {
     }
 
     DS5_LOG("[HCI] Start inquiry\n");
-    gap_connectable_control(1);
-    gap_discoverable_control(1);
-    gap_inquiry_start(30);
-    inquiry_active = true;
+    gap_connectable_control(0);
+    gap_discoverable_control(0);
+    gap_set_bondable_mode(1);
+    const int status = gap_inquiry_start(PAIRING_INQUIRY_LENGTH_UNITS);
+    if (status == ERROR_CODE_SUCCESS) {
+        inquiry_active = true;
+        inquiry_retry_scheduled = false;
+        inquiry_retry_at_us = 0;
+        return;
+    }
+    DS5_LOG("[HCI] Inquiry start deferred status=0x%02X\n", status);
+    schedule_inquiry_retry();
+}
+
+static void update_inquiry_led(uint32_t now) {
+    if (!pairing_window_active || !inquiry_active || mute[0]) {
+        stop_inquiry_led();
+        return;
+    }
+    if (
+        inquiry_led_last_toggle_us == 0
+        || bt_time_reached(now, inquiry_led_last_toggle_us + INQUIRY_LED_BLINK_INTERVAL_US)
+    ) {
+        inquiry_led_last_toggle_us = now;
+        inquiry_led_on = !inquiry_led_on;
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, inquiry_led_on);
+    }
+}
+
+static bool classic_acl_connection_allowed(bd_addr_t addr, bool log_reject) {
+    if (
+        acl_connection_pending
+        || acl_handle != HCI_CON_HANDLE_INVALID
+        || (device_found && bd_addr_cmp(addr, current_device_addr) != 0)
+    ) {
+        if (log_reject) {
+            DS5_LOG("[HCI] Rejecting controller %s while another Classic transaction owns the radio\n",
+                    bd_addr_to_str(addr));
+        }
+        return false;
+    }
+    if (pairing_window_active) {
+        if (log_reject) {
+            DS5_LOG("[HCI] Rejecting incoming page from %s while outbound pairing owns the radio\n",
+                    bd_addr_to_str(addr));
+        }
+        return false;
+    }
+
+    link_key_t key;
+    link_key_type_t type;
+    const bool known_controller = gap_get_link_key_for_bd_addr(addr, key, &type);
+    if (!known_controller && log_reject) {
+        DS5_LOG("[HCI] Rejecting unknown controller %s outside pairing window\n", bd_addr_to_str(addr));
+    }
+    return known_controller;
+}
+
+static int classic_connection_filter(bd_addr_t addr, hci_link_type_t link_type) {
+    return link_type == HCI_LINK_TYPE_ACL && classic_acl_connection_allowed(addr, true);
 }
 
 static uint8_t clamp_output_trace_u8(uint32_t value) {
@@ -1055,6 +1179,23 @@ bool bt_power_off_controller() {
     return true;
 }
 
+bool bt_request_scan() {
+    if (acl_handle != HCI_CON_HANDLE_INVALID || hid_interrupt_ready) {
+        return false;
+    }
+
+    const uint32_t now = time_us_32();
+    pairing_window_active = true;
+    pairing_window_deadline_us = now + PAIRING_WINDOW_US;
+    inquiry_retry_scheduled = true;
+    inquiry_retry_at_us = now;
+    gap_connectable_control(0);
+    gap_discoverable_control(0);
+    gap_set_bondable_mode(1);
+    DS5_LOG("[HCI] Controller pairing window requested\n");
+    return true;
+}
+
 bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes) {
     if (
         minutes < MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES
@@ -1143,6 +1284,24 @@ void bt_connection_recovery_loop() {
 void bt_inquiry_loop() {
     const uint32_t now = time_us_32();
     if (
+        pairing_window_active
+        && bt_time_reached(now, pairing_window_deadline_us)
+    ) {
+        if (
+            device_found
+            || acl_connection_pending
+            || acl_handle != HCI_CON_HANDLE_INVALID
+        ) {
+            pairing_window_deadline_us = now + PAIRING_ACTIVE_ATTEMPT_EXTENSION_US;
+            DS5_LOG("[HCI] Pairing discovery window elapsed; preserve active attempt\n");
+        } else {
+            DS5_LOG("[HCI] Pairing window elapsed\n");
+            close_pairing_window(true);
+            return;
+        }
+    }
+
+    if (
         acl_connection_pending
         && acl_handle == HCI_CON_HANDLE_INVALID
         && bt_time_reached(now, acl_connection_pending_at_us + ACL_CONNECTION_PENDING_TIMEOUT_US)
@@ -1150,7 +1309,11 @@ void bt_inquiry_loop() {
         DS5_LOG("[HCI] ACL connection pending timed out, restart inquiry\n");
         clear_outbound_inquiry_target();
         clear_acl_connection_pending();
-        schedule_inquiry_retry(0);
+        if (pairing_window_active) {
+            schedule_inquiry_retry(0);
+        } else {
+            restore_passive_reconnect_scan();
+        }
     }
 
     if (
@@ -1159,27 +1322,38 @@ void bt_inquiry_loop() {
         || acl_connection_pending
         || acl_handle != HCI_CON_HANDLE_INVALID
     ) {
+        update_inquiry_led(now);
         return;
     }
 
-    if (inquiry_retry_at_us == 0 || bt_time_reached(now, inquiry_retry_at_us)) {
+    if (
+        pairing_window_active
+        && inquiry_retry_scheduled
+        && bt_time_reached(now, inquiry_retry_at_us)
+    ) {
         start_inquiry_if_needed();
     }
+    update_inquiry_led(now);
 }
 
 int bt_init() {
     critical_section_init(&queue_lock);
 
     bt_l2cap_init();
+    gap_set_link_supervision_timeout(CLASSIC_LINK_SUPERVISION_TIMEOUT_SLOTS);
 
     // SSP (Secure Simple Pairing)
     gap_ssp_set_enable(true);
     gap_secure_connections_enable(true);
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_YES_NO);
     gap_ssp_set_authentication_requirement(SSP_IO_AUTHREQ_MITM_PROTECTION_NOT_REQUIRED_GENERAL_BONDING);
+    gap_ssp_set_auto_accept(false);
+    gap_set_bondable_mode(0);
 
-    gap_connectable_control(1);
-    gap_discoverable_control(1);
+    hci_set_master_slave_policy(HCI_ROLE_MASTER);
+    gap_connectable_control(0);
+    gap_discoverable_control(0);
+    gap_register_classic_connection_filter(&classic_connection_filter);
 
     hci_event_callback_registration.callback = &hci_packet_handler;
     hci_add_event_handler(&hci_event_callback_registration);
@@ -1199,8 +1373,18 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             DS5_LOG("[BT] State: %u\n", state);
             if (state == HCI_STATE_WORKING) {
                 DS5_LOG("[BT] Stack ready\n");
-                schedule_inquiry_retry(0);
-                start_inquiry_if_needed();
+                // HCI power-on rebuilds BTstack's pending Classic task mask.
+                // Apply fast interlaced page scan tuning after that reset.
+                gap_set_page_scan_activity(0x0012, 0x0012); // 11.25 ms
+                gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);
+                stored_link_key_present = bt_has_stored_link_key();
+                if (stored_link_key_present) {
+                    DS5_LOG("[BT] Stored controller found; staying in passive page scan\n");
+                    restore_passive_reconnect_scan();
+                } else {
+                    DS5_LOG("[BT] No stored controller; starting initial pairing window\n");
+                    (void)bt_request_scan();
+                }
             }
             break;
         }
@@ -1224,6 +1408,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
             if (
                 (cod & 0x000F00) == 0x000500
+                && pairing_window_active
                 && !acl_connection_pending
                 && acl_handle == HCI_CON_HANDLE_INVALID
             ) {
@@ -1240,14 +1425,22 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_INQUIRY_COMPLETE: {
             DS5_LOG("[HCI] Inquiry complete\n");
             inquiry_active = false;
+            stop_inquiry_led();
             if (device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
                 mark_acl_connection_pending();
                 HCI_SEND_CMD_LOGGED(&hci_create_connection, current_device_addr,
                              hci_usable_acl_packet_types(), 0, 0, 0, 1);
-            } else if (!device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
+            } else if (
+                pairing_window_active
+                && !device_found
+                && !acl_connection_pending
+                && acl_handle == HCI_CON_HANDLE_INVALID
+            ) {
                 schedule_inquiry_retry();
+            } else {
+                restore_passive_reconnect_scan();
             }
             break;
         }
@@ -1262,7 +1455,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
                 DS5_LOG("[HCI] ACL connection command rejected, restart inquiry\n");
-                schedule_inquiry_retry();
+                if (pairing_window_active) {
+                    schedule_inquiry_retry();
+                } else {
+                    restore_passive_reconnect_scan();
+                }
             }
             break;
         }
@@ -1286,6 +1483,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 clear_acl_connection_pending();
                 device_found = false;
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
+                gap_connectable_control(0);
+                gap_discoverable_control(0);
                 DS5_LOG("[HCI] ACL connected handle=0x%04X\n", handle);
                 DS5_LOG("[HCI] Request authentication on handle=0x%04X\n", handle);
                 HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
@@ -1293,7 +1492,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
                 DS5_LOG("[HCI] ACL connect failed status=0x%02X, restart inquiry\n", status);
-                schedule_inquiry_retry();
+                if (pairing_window_active) {
+                    schedule_inquiry_retry();
+                } else {
+                    restore_passive_reconnect_scan();
+                }
             }
             break;
         }
@@ -1318,16 +1521,44 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_USER_CONFIRMATION_REQUEST: {
             bd_addr_t addr;
             hci_event_user_confirmation_request_get_bd_addr(packet, addr);
-            DS5_LOG("[HCI] User confirmation request from %s, accept\n", bd_addr_to_str(addr));
-            HCI_SEND_CMD_LOGGED(&hci_user_confirmation_request_reply, addr);
+            const bool authorized = new_pair
+                && pairing_window_active
+                && bd_addr_cmp(addr, current_device_addr) == 0;
+            const int response = authorized
+                ? gap_ssp_confirmation_response(addr)
+                : gap_ssp_confirmation_negative(addr);
+            DS5_LOG("[HCI] User confirmation request from %s %s status=0x%02X\n",
+                    bd_addr_to_str(addr),
+                    authorized ? "accepted" : "rejected",
+                    response);
             break;
         }
 
         case HCI_EVENT_PIN_CODE_REQUEST: {
             bd_addr_t addr;
             hci_event_pin_code_request_get_bd_addr(packet, addr);
-            DS5_LOG("[HCI] Legacy pin request from %s, reply 0000\n", bd_addr_to_str(addr));
-            gap_pin_code_response(addr, "0000");
+            const bool authorized = new_pair
+                && pairing_window_active
+                && bd_addr_cmp(addr, current_device_addr) == 0;
+            const int response = authorized
+                ? gap_pin_code_response(addr, "0000")
+                : gap_pin_code_negative(addr);
+            DS5_LOG("[HCI] Legacy pin request from %s %s status=0x%02X\n",
+                    bd_addr_to_str(addr),
+                    authorized ? "accepted" : "rejected",
+                    response);
+            break;
+        }
+
+        case HCI_EVENT_LINK_KEY_NOTIFICATION: {
+            bd_addr_t addr;
+            hci_event_link_key_request_get_bd_addr(packet, addr);
+            if (bd_addr_cmp(addr, current_device_addr) == 0) {
+                stored_link_key_present = true;
+                gap_discoverable_control(0);
+                gap_set_bondable_mode(0);
+                DS5_LOG("[HCI] Link key stored for %s\n", bd_addr_to_str(addr));
+            }
             break;
         }
 
@@ -1336,11 +1567,17 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
             DS5_LOG("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
-                DS5_LOG("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
-                gap_drop_link_key_for_bd_addr(current_device_addr);
+                if (status == AUTHENTICATION_PIN_OR_KEY_MISSING) {
+                    DS5_LOG("[HCI] Remote reports missing key; drop stale key for %s\n",
+                            bd_addr_to_str(current_device_addr));
+                    gap_drop_link_key_for_bd_addr(current_device_addr);
+                    stored_link_key_present = bt_has_stored_link_key();
+                } else {
+                    DS5_LOG("[HCI] Transient authentication failure; preserve stored pairing\n");
+                }
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
-                schedule_inquiry_retry();
+                bt_disconnect();
             } else {
                 HCI_SEND_CMD_LOGGED(&hci_set_connection_encryption, handle, 1);
             }
@@ -1367,13 +1604,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hci_event_connection_request_get_bd_addr(packet, addr);
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
             DS5_LOG("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
-            if ((cod & 0x000F00) == 0x000500) {
+            if (classic_acl_connection_allowed(addr, false)) {
                 bd_addr_copy(current_device_addr, addr);
                 clear_outbound_inquiry_target();
                 mark_acl_connection_pending();
                 inquiry_active = false;
-                gap_inquiry_stop();
-                HCI_SEND_CMD_LOGGED(&hci_accept_connection_request, addr, 0x01);
             }
             break;
         }
@@ -1382,8 +1617,6 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const bool host_suspended = usb_host_suspended_active();
             usb_handle_controller_transport_disconnect();
             reset_controller_input_report_cache();
-            gap_connectable_control(1);
-            gap_discoverable_control(1);
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
             clear_outbound_inquiry_target();
             clear_acl_connection_pending();
@@ -1407,6 +1640,12 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             reset_controller_output_session_locked();
             critical_section_exit(&queue_lock);
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+            stored_link_key_present = bt_has_stored_link_key();
+            if (pairing_window_active) {
+                schedule_inquiry_retry();
+            } else {
+                restore_passive_reconnect_scan();
+            }
             if (host_suspended) {
                 DS5_LOG("[HCI] Disconnected reason=0x%02X while USB host suspended; keeping USB on bus\n", reason);
                 break;
@@ -1673,6 +1912,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     }
                     gap_connectable_control(0);
                     gap_discoverable_control(0);
+                    close_pairing_window(false);
                     inactive_time = time_us_32();
 
                     DS5_LOG("Init DualSense\n");
