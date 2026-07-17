@@ -1061,15 +1061,35 @@ button {
   z-index: 1;
   overflow: hidden;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 84px;
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 60px;
+  gap: 6px;
   align-items: center;
-  min-height: 96px;
-  padding: 12px;
+  min-height: 70px;
+  padding: 8px 10px;
   border: 1px solid var(--surface-divider);
   border-radius: var(--card-radius);
   background: var(--surface-hero-main);
   box-shadow: var(--shadow-panel);
+}
+
+.hero-main[role="button"] {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: filter 140ms ease, box-shadow 140ms ease;
+  -webkit-app-region: no-drag;
+}
+
+.hero-main[role="button"]:hover {
+  filter: brightness(1.06);
+}
+
+.hero-main[role="button"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .hero-main.device-status-good {
@@ -1085,25 +1105,24 @@ button {
 }
 
 .controller-art {
-  width: min(84px, 100%);
-  max-height: 52px;
+  width: min(60px, 100%);
+  max-height: 38px;
   object-fit: contain;
   opacity: 0.78;
   filter: none;
   justify-self: center;
-  align-self: end;
+  align-self: center;
   order: 2;
 }
 
 .status-copy {
   min-width: 0;
   display: grid;
-  gap: 7px;
+  gap: 4px;
 }
 
 .connection-row,
 .bridge-state,
-.battery-row,
 .health-label,
 .button-row button,
 .modifier-grid button,
@@ -1120,7 +1139,12 @@ button {
 }
 
 .connection-row strong {
+  min-width: 0;
+  overflow: hidden;
   font-weight: 650;
+  line-height: 1.22;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dot {
@@ -1149,34 +1173,32 @@ button {
   font-size: 11px;
 }
 
-.battery-row {
-  gap: 7px;
+.device-meta-row {
   min-width: 0;
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  color: var(--text-secondary);
-  font-size: 12px;
+  column-gap: 6px;
+  row-gap: 2px;
 }
 
-.compact-battery-row {
-  width: max-content;
-  max-width: 100%;
-  min-height: 22px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+.device-battery-meta {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.device-meta-separator {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  line-height: 1;
+}
+
+.device-battery-percentage {
   color: var(--text-muted);
   font-size: 11px;
-}
-
-.battery-row > span:last-child {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.battery-row strong {
-  color: var(--text-control);
-  font-weight: 650;
+  line-height: 1.2;
 }
 
 .device-power-indicator {
@@ -1185,89 +1207,6 @@ button {
   place-items: center;
   color: var(--success);
   line-height: 0;
-}
-
-.battery-icon {
-  --battery-color: var(--success);
-  position: relative;
-  width: 24px;
-  height: 13px;
-  border: 1px solid var(--battery-color);
-  border-radius: 2px;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1px;
-  padding: 2px;
-  color: var(--battery-color);
-}
-
-.battery-icon::after {
-  content: "";
-  position: absolute;
-  right: -4px;
-  top: 3px;
-  width: 3px;
-  height: 5px;
-  border-radius: 0 2px 2px 0;
-  background: var(--battery-color);
-}
-
-.battery-icon > span {
-  height: 100%;
-  border-radius: 1px;
-  background: transparent;
-  transition: background 180ms ease, opacity 180ms ease;
-}
-
-.battery-icon > span.active,
-.battery-icon > span.charging-segment {
-  background: var(--battery-color);
-}
-
-.battery-icon.healthy {
-  --battery-color: var(--success);
-}
-
-.battery-icon.warning {
-  --battery-color: #f3c846;
-}
-
-.battery-icon.low {
-  --battery-color: #ff5a70;
-}
-
-.battery-icon.unknown {
-  --battery-color: #8d9aae;
-}
-
-.compact-battery-row .battery-icon:not(.charging) {
-  --battery-color: var(--text-control);
-}
-
-.battery-icon > span.charging-segment {
-  animation: battery-segment-pulse 1.55s ease-in-out infinite;
-}
-
-.battery-icon > span.critical-segment {
-  animation: battery-critical-pulse 1.05s ease-in-out infinite;
-}
-
-@keyframes battery-segment-pulse {
-  0%, 100% {
-    opacity: 0.34;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-@keyframes battery-critical-pulse {
-  0%, 100% {
-    opacity: 0.2;
-  }
-  50% {
-    opacity: 1;
-  }
 }
 
 .battery-track {

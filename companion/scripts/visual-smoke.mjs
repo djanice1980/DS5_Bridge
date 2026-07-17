@@ -51,6 +51,8 @@ try {
   await page.waitForTimeout(300);
 
   const controlsNav = page.getByRole('tablist', { name: 'Controls' });
+  await page.getByRole('button', { name: 'Open Devices' }).click();
+  await page.locator('#control-panel-devices.active').waitFor();
 
   for (const tab of tabs) {
     if (tab === 'Chords') {

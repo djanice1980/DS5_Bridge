@@ -1753,14 +1753,7 @@ function lightbarBrightnessFromSnapshot(snapshot: BridgeSnapshot): number {
 
 function batteryLabel(snapshot: BridgeSnapshot | null | undefined): string {
   const battery = snapshot?.status?.batteryPercent;
-  return battery === null || battery === undefined ? '--' : `${battery}%`;
-}
-
-function batteryTone(percent: number | null | undefined): 'healthy' | 'warning' | 'low' | 'unknown' {
-  if (percent === null || percent === undefined) return 'unknown';
-  if (percent <= 20) return 'low';
-  if (percent <= 45) return 'warning';
-  return 'healthy';
+  return battery === null || battery === undefined ? '\u2014' : `${battery}%`;
 }
 
 function isChargingPowerState(rawPowerState: number | undefined): boolean {
@@ -3546,27 +3539,12 @@ export function App() {
     };
   }, [showCustomColorPicker]);
 
-  const batteryPercent = Math.max(0, Math.min(100, snapshot?.status?.batteryPercent ?? 0));
   const batteryPercentLabel = batteryLabel(snapshot);
-  const batteryLevelTone = batteryTone(snapshot?.status?.batteryPercent);
   const batteryCharging = isChargingPowerState(snapshot?.status?.rawPowerState);
   const batteryExternalPower = isExternalPowerState(snapshot?.status?.rawPowerState);
   const batteryPowerLabel = batteryExternalPower
     ? batteryCharging ? 'Charging' : 'Connected to power'
     : null;
-  const batterySegmentCount = connected
-    ? batteryPercent >= 67
-      ? 3
-      : batteryPercent >= 34
-        ? 2
-        : batteryPercent > 0
-          ? 1
-          : 0
-    : 0;
-  const batteryChargingSegment = connected && batteryCharging && batteryPercent < 100
-    ? Math.min(2, batterySegmentCount)
-    : -1;
-  const batteryCritical = connected && !batteryExternalPower && batteryPercent > 0 && batteryPercent <= 20;
   const statusTone = personaTransitionActive
     ? 'warn'
     : connected
@@ -3853,18 +3831,18 @@ export function App() {
   const activeAudioTestLocked = showMicrophoneControl ? micTestLocked : speakerTestLocked;
   const activeAudioTestStatusLabel = showMicrophoneControl ? micTestStatusLabel : speakerStatusLabel;
   const activeAudioTestStatusTone = showMicrophoneControl ? micTestStatusTone : speakerStatusTone;
+  const sidebarControllerCard = controllerDevicesModel.cards.find(
+    (device) => device.label === 'Current controller'
+  ) ?? controllerDevicesModel.cards[0] ?? null;
   const sidebarDeviceTitle = personaTransitionActive
     ? 'Switching Mode'
-    : connected && controllerConnected
-    ? controllerName(snapshot.status?.controllerType)
-    : 'Controller';
+    : sidebarControllerCard?.title
+      ?? (connected && controllerConnected ? controllerName(snapshot.status?.controllerType) : 'Controller');
   const sidebarDeviceStatus = personaTransitionActive
-    ? 'Please wait'
+    ? 'Switching'
     : connected && controllerConnected
     ? 'Connected'
-    : connected
-      ? 'Controller not connected'
-      : 'Bridge not detected';
+    : 'Disconnected';
   const sidebarDeviceTone = personaTransitionActive
     ? 'warn'
     : connected && controllerConnected
@@ -3875,10 +3853,10 @@ export function App() {
           ? 'bad'
           : 'idle';
   const sidebarBatteryLabel = personaTransitionActive
-    ? 'Reconnecting'
+    ? '\u2014'
     : connected && controllerConnected
-    ? `Battery ${batteryPercentLabel}`
-    : 'Battery unavailable';
+    ? batteryPercentLabel
+    : '\u2014';
   const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
     .replace(' / Real-time', '')
     ?? '--';
@@ -6455,43 +6433,40 @@ export function App() {
       <main className="app-content">
         <section className={`hero-card status-${statusTone}`}>
           <div className="sidebar-section-label">Device</div>
-          <div className={`hero-main device-status-${sidebarDeviceTone}`}>
+          <div
+            className={`hero-main device-status-${sidebarDeviceTone}`}
+            role="button"
+            tabIndex={0}
+            aria-label="Open Devices"
+            onClick={() => selectControlTab('devices')}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              selectControlTab('devices');
+            }}
+          >
             <img className="controller-art" src={controllerImage} alt="" />
             <div className="status-copy">
               <div className="connection-row">
                 <strong>{sidebarDeviceTitle}</strong>
               </div>
-              <div className="bridge-state compact-device-status">
-                <span>{sidebarDeviceStatus}</span>
-              </div>
-              <div className="battery-row compact-battery-row">
-                {connected && controllerConnected && (
-                  <span
-                    className={`battery-icon ${batteryLevelTone} ${batteryCharging ? 'charging' : ''}`}
-                    aria-hidden="true"
-                  >
-                    {[0, 1, 2].map((segment) => (
-                      <span
-                        key={segment}
-                        className={[
-                          segment < batterySegmentCount ? 'active' : '',
-                          segment === batteryChargingSegment ? 'charging-segment' : '',
-                          segment === 0 && batteryCritical ? 'critical-segment' : ''
-                        ].filter(Boolean).join(' ')}
-                      />
-                    ))}
-                  </span>
-                )}
-                <span>{sidebarBatteryLabel}</span>
-                {batteryPowerLabel && (
-                  <span
-                    className="device-power-indicator"
-                    title={batteryPowerLabel}
-                    aria-label={batteryPowerLabel}
-                  >
-                    <Zap size={13} stroke={2} aria-hidden="true" />
-                  </span>
-                )}
+              <div className="device-meta-row">
+                <div className="bridge-state compact-device-status">
+                  <span>{sidebarDeviceStatus}</span>
+                </div>
+                <div className="device-battery-meta">
+                  <span className="device-meta-separator" aria-hidden="true">·</span>
+                  <span className="device-battery-percentage">{sidebarBatteryLabel}</span>
+                  {batteryPowerLabel && (
+                    <span
+                      className="device-power-indicator"
+                      title={batteryPowerLabel}
+                      aria-label={batteryPowerLabel}
+                    >
+                      <Zap size={13} stroke={2} aria-hidden="true" />
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>

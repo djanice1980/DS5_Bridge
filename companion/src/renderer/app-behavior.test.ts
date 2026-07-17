@@ -179,8 +179,20 @@ describe('renderer behavior guards', () => {
     );
     expect(appSource).toContain("batteryCharging ? 'Charging' : 'Connected to power'");
     expect(appSource).toContain('className="device-power-indicator"');
-    expect(appSource).toContain('connected && !batteryExternalPower && batteryPercent > 0');
     expect(stylesSource).toContain('.device-power-indicator');
+  });
+
+  it('uses the compact Kitsune device card as a Devices shortcut', () => {
+    expect(appSource).toContain('const sidebarControllerCard = controllerDevicesModel.cards.find(');
+    expect(appSource).toContain('aria-label="Open Devices"');
+    expect(appSource).toContain("onClick={() => selectControlTab('devices')}");
+    expect(appSource).toContain('className="device-meta-row"');
+    expect(appSource).toContain('className="device-battery-percentage"');
+    expect(appSource).not.toContain('className={`battery-icon');
+    expect(stylesSource).toContain('grid-template-columns: minmax(0, 1fr) 60px;');
+    expect(stylesSource).toContain('min-height: 70px;');
+    expect(stylesSource).toContain('.hero-main[role="button"]:focus-visible');
+    expect(stylesSource).toContain('.device-battery-meta');
   });
 
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
