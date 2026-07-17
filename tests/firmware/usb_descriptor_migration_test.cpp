@@ -467,16 +467,17 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         "\n}\n\nvoid usb_handle_controller_transport_ready()"
     );
     if (
-        disconnect_block.find("USB_EXPECTED_DISCONNECT_GRACE_US") == std::string::npos
-        || disconnect_block.find("usb_controller_transport_disconnect_pending = true;")
+        disconnect_block.find("usb_controller_transport_ready = false;")
             == std::string::npos
-        || disconnect_block.find("usb_deinit_device_stack") != std::string::npos
-        || pm_poll.find("usb_controller_transport_disconnect_not_before_us")
+        || disconnect_block.find("USB_EXPECTED_DISCONNECT_GRACE_US")
             == std::string::npos
-        || pm_poll.find("usb_deinit_device_stack();") == std::string::npos
+        || disconnect_block.find("usb_controller_transport_transition_pending = true;")
+            == std::string::npos
+        || disconnect_block.find("tud_disconnect") != std::string::npos
+        || disconnect_block.find("tusb_deinit") != std::string::npos
     ) {
         throw std::runtime_error(
-            "Controller disconnect must be deferred out of the Bluetooth callback and grace intentional sleeps"
+            "Controller disconnect callbacks must only publish deferred USB desired state"
         );
     }
 
@@ -485,14 +486,41 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         "void usb_handle_controller_transport_ready() {",
         "\n}\n\nextern \"C\" void tud_mount_cb(void) {"
     );
-    const auto ready_suspend = ready_block.find("usb_bus_suspended()");
-    const auto ready_connect = ready_block.find("usb_connect_controller_transport");
     if (
-        ready_suspend == std::string::npos
-        || ready_connect == std::string::npos
-        || ready_connect < ready_suspend
+        ready_block.find("usb_controller_transport_ready = true;")
+            == std::string::npos
+        || ready_block.find("usb_controller_transport_transition_pending = true;")
+            == std::string::npos
+        || ready_block.find("tud_connect") != std::string::npos
+        || ready_block.find("tusb_init") != std::string::npos
     ) {
-        throw std::runtime_error("Controller reconnect must not re-enumerate USB while the host is suspended");
+        throw std::runtime_error(
+            "Controller ready callbacks must defer every TinyUSB lifecycle mutation"
+        );
+    }
+
+    const auto stack_init = usb_cpp.find("tusb_init(BOARD_TUD_RHPORT, &dev_init);");
+    const auto initial_detach = usb_cpp.find("tud_disconnect();", stack_init);
+    const auto initial_wait = usb_cpp.find("sleep_ms_with_watchdog(150);", stack_init);
+    if (
+        stack_init == std::string::npos
+        || initial_detach == std::string::npos
+        || initial_wait == std::string::npos
+        || !(stack_init < initial_detach && initial_detach < initial_wait)
+        || pm_poll.find("if (usb_controller_transport_transition_pending)")
+            == std::string::npos
+        || pm_poll.find("usb_controller_transport_disconnect_not_before_us")
+            == std::string::npos
+        || pm_poll.find("usb_connect_controller_transport(now);")
+            == std::string::npos
+        || pm_poll.find("usb_controller_transport_attached = false;")
+            == std::string::npos
+        || pm_poll.find("tud_disconnect();") == std::string::npos
+        || usb_cpp.find("tusb_deinit") != std::string::npos
+    ) {
+        throw std::runtime_error(
+            "USB PM poll must reconcile soft attach/detach without deinitializing TinyUSB"
+        );
     }
 
     if (usb_h.find("bool usb_host_suspended_active();") == std::string::npos) {
