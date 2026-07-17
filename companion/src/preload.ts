@@ -136,6 +136,11 @@ const api = {
     ipcRenderer.invoke('bridge:setHostPersonaMode', value)
   ),
   sleepController: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:sleepController'),
+  requestControllerScan: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:requestControllerScan'),
+  forgetControllerPairings: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:forgetControllerPairings'),
+  forgetControllerPairing: (bluetoothAddress: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:forgetControllerPairing', bluetoothAddress)
+  ),
   mountPicoBootloader: (): Promise<PicoFirmwareActionResult> => (
     ipcRenderer.invoke('bridge:mountPicoBootloader')
   ),

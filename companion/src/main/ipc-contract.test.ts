@@ -74,6 +74,22 @@ describe('IPC contract', () => {
     expect(bridgeServiceSource).toContain('COMMAND_ID.ENTER_BOOTLOADER');
   });
 
+  it('exposes controller scan and pairing deletion actions', () => {
+    expect(preloadSource).toContain("ipcRenderer.invoke('bridge:requestControllerScan')");
+    expect(preloadSource).toContain("ipcRenderer.invoke('bridge:forgetControllerPairings')");
+    expect(preloadSource).toContain(
+      "ipcRenderer.invoke('bridge:forgetControllerPairing', bluetoothAddress)"
+    );
+    expect(mainSource).toContain("ipcMain.handle('bridge:requestControllerScan'");
+    expect(mainSource).toContain("ipcMain.handle('bridge:forgetControllerPairings'");
+    expect(mainSource).toContain("ipcMain.handle('bridge:forgetControllerPairing'");
+    expect(bridgeServiceSource).toContain('async requestControllerScan(): Promise<BridgeSnapshot>');
+    expect(bridgeServiceSource).toContain('async forgetControllerPairings(): Promise<BridgeSnapshot>');
+    expect(bridgeServiceSource).toContain(
+      'async forgetControllerPairing(bluetoothAddress: string): Promise<BridgeSnapshot>'
+    );
+  });
+
   it('shows connected controller battery status in the tray tooltip', () => {
     expect(mainSource).toContain('function trayTooltipForSnapshot(snapshot: BridgeSnapshot): string');
     expect(mainSource).toContain('if (!snapshot.status?.controllerConnected)');

@@ -21,7 +21,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 16;
+constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
@@ -138,6 +138,9 @@ enum CommandId : uint8_t {
     CommandSetChordBindings = 0x23,
     CommandSetPlayerLedEnabled = 0x24,
     CommandSetClassicRumbleV1 = 0x25,
+    CommandRequestControllerScan = 0x27,
+    CommandForgetControllerPairings = 0x28,
+    CommandForgetControllerPairing = 0x2E,
     CommandSetSpeakerGain = 0x32,
     CommandEnterBootloader = 0x33,
 };
@@ -151,6 +154,7 @@ enum AckResult : uint8_t {
     AckUnknownCommand = 0x05,
     AckNotConnected = 0x06,
     AckBusy = 0x07,
+    AckPersistenceFailed = 0x08,
 };
 
 enum MuteButtonMode : uint8_t {
@@ -637,6 +641,17 @@ void write_magic_and_version(uint8_t *buffer) {
     memcpy(buffer, kMagic, sizeof(kMagic));
     buffer[4] = kProtocolMajor;
     buffer[5] = kProtocolMinor;
+}
+
+void write_ascii(uint8_t *buffer, size_t length, char const *value) {
+    if (buffer == nullptr || length == 0 || value == nullptr) {
+        return;
+    }
+    size_t value_length = 0;
+    while (value_length < length && value[value_length] != '\0') {
+        value_length++;
+    }
+    memcpy(buffer, value, value_length);
 }
 
 void set_ack(uint8_t command_id, uint8_t sequence, AckResult result, uint8_t detail = 0) {
@@ -1605,6 +1620,32 @@ uint16_t build_ack(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+    buffer[6] = 1; // Device identity schema version.
+
+    BtDeviceIdentitySnapshot identity{};
+    const bool has_identity = bt_get_device_identity(&identity);
+    buffer[7] =
+        (has_identity && identity.address_known ? 0x01 : 0x00)
+        | (has_identity && identity.link_key_known ? 0x02 : 0x00)
+        | (identity.controller_connected ? 0x04 : 0x00)
+        | (bt_pairing_active() ? 0x08 : 0x00);
+    buffer[8] = has_identity && identity.link_key_known ? identity.link_key_type : 0;
+    if (has_identity) {
+        write_ascii(buffer + 9, 18, identity.address);
+        write_ascii(buffer + 27, 24, identity.name);
+        write_u16(buffer + 51, identity.vendor_id);
+        write_u16(buffer + 53, identity.product_id);
+    }
+    return COMPANION_PAYLOAD_SIZE;
+}
+
 uint16_t build_shortcut_event(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
         return 0;
@@ -2262,6 +2303,54 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             set_ack(command_id, sequence, AckOk);
             return;
+
+        case CommandRequestControllerScan:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            set_ack(
+                command_id,
+                sequence,
+                bt_request_scan() ? AckOk : AckBusy
+            );
+            return;
+
+        case CommandForgetControllerPairings:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            set_ack(
+                command_id,
+                sequence,
+                bt_forget_pairings() ? AckOk : AckPersistenceFailed
+            );
+            return;
+
+        case CommandForgetControllerPairing:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            {
+                uint8_t address[6];
+                memcpy(address, buffer + 10, sizeof(address));
+                bool has_address_material = false;
+                for (uint8_t byte : address) {
+                    has_address_material = has_address_material || byte != 0;
+                }
+                if (!has_address_material) {
+                    set_ack(command_id, sequence, AckInvalidValue);
+                    return;
+                }
+                set_ack(
+                    command_id,
+                    sequence,
+                    bt_forget_pairing(address) ? AckOk : AckPersistenceFailed
+                );
+                return;
+            }
 
         case CommandTestHaptics:
             if (value != 0) {
@@ -3072,6 +3161,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
 #endif
         case COMPANION_REPORT_AUDIO_STATUS:
             return build_audio_status(buffer, reqlen);
+        case COMPANION_REPORT_DEVICE_IDENTITY:
+            return build_device_identity(buffer, reqlen);
 #if DS5_TRIGGER_TRACE_ENABLED
         case COMPANION_REPORT_TRIGGER_TRACE:
             return build_trigger_trace(buffer, reqlen);

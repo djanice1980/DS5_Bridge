@@ -1034,6 +1034,93 @@ void assert_bluetooth_device_management_policy(std::filesystem::path const &root
     }
 }
 
+void assert_companion_device_management_contract(std::filesystem::path const &root) {
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+    const auto companion_h = read_text(root / "src" / "companion.h");
+    const auto protocol_ts = read_text(root / "companion" / "src" / "shared" / "protocol.ts");
+
+    if (
+        companion_cpp.find("constexpr uint8_t kProtocolMinor = 17;")
+            == std::string::npos
+        || protocol_ts.find("export const PROTOCOL_MINOR = 17;")
+            == std::string::npos
+        || companion_h.find("#define COMPANION_REPORT_DEVICE_IDENTITY 0x0D")
+            == std::string::npos
+        || protocol_ts.find("DEVICE_IDENTITY: 0x0d")
+            == std::string::npos
+        || companion_cpp.find("CommandRequestControllerScan = 0x27")
+            == std::string::npos
+        || companion_cpp.find("CommandForgetControllerPairings = 0x28")
+            == std::string::npos
+        || companion_cpp.find("CommandForgetControllerPairing = 0x2E")
+            == std::string::npos
+        || protocol_ts.find("REQUEST_CONTROLLER_SCAN: 0x27")
+            == std::string::npos
+        || protocol_ts.find("FORGET_CONTROLLER_PAIRINGS: 0x28")
+            == std::string::npos
+        || protocol_ts.find("FORGET_CONTROLLER_PAIRING: 0x2e")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Firmware and companion controller-management protocol identifiers must remain in parity"
+        );
+    }
+
+    const std::string identity = extract_between(
+        companion_cpp,
+        "uint16_t build_device_identity",
+        "\n}\n\nuint16_t build_shortcut_event"
+    );
+    if (
+        identity.find("bt_get_device_identity(&identity)") == std::string::npos
+        || identity.find("bt_pairing_active() ? 0x08") == std::string::npos
+        || identity.find("write_ascii(buffer + 9, 18, identity.address);")
+            == std::string::npos
+        || identity.find("write_ascii(buffer + 27, 24, identity.name);")
+            == std::string::npos
+        || identity.find("write_u16(buffer + 51, identity.vendor_id);")
+            == std::string::npos
+        || identity.find("write_u16(buffer + 53, identity.product_id);")
+            == std::string::npos
+        || protocol_ts.find("export function parseDeviceIdentityReport")
+            == std::string::npos
+        || protocol_ts.find("const address = readAscii(report, 10, 18);")
+            == std::string::npos
+        || protocol_ts.find("const controllerName = readAscii(report, 28, 24);")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Device identity report layout must remain byte-for-byte aligned across firmware and TypeScript"
+        );
+    }
+
+    const std::string commands = extract_between(
+        companion_cpp,
+        "void handle_command",
+        "\n}\n\nbool shortcut_setting_enabled"
+    );
+    if (
+        commands.find("case CommandRequestControllerScan:")
+            == std::string::npos
+        || commands.find("bt_request_scan() ? AckOk : AckBusy")
+            == std::string::npos
+        || commands.find("case CommandForgetControllerPairings:")
+            == std::string::npos
+        || commands.find("bt_forget_pairings() ? AckOk : AckPersistenceFailed")
+            == std::string::npos
+        || commands.find("case CommandForgetControllerPairing:")
+            == std::string::npos
+        || commands.find("memcpy(address, buffer + 10, sizeof(address));")
+            == std::string::npos
+        || commands.find("bt_forget_pairing(address) ? AckOk : AckPersistenceFailed")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Companion controller-management commands must validate and report persistent mutation failures"
+        );
+    }
+}
+
 void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
 
@@ -1441,6 +1528,7 @@ int main() {
         assert_mic_pass_through_defaults_to_enabled(source_root);
         assert_bluetooth_pairing_and_reconnect_policy(source_root);
         assert_bluetooth_device_management_policy(source_root);
+        assert_companion_device_management_contract(source_root);
         assert_bluetooth_hid_recovery_and_encryption_watchdog(source_root);
         assert_dualsense_feature_startup_is_paced(source_root);
         assert_watchdog_and_bootsel_flash_safety(source_root);

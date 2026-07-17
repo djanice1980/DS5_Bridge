@@ -1098,6 +1098,11 @@ function registerIpc(service: BridgeService): void {
     service.setHostPersonaMode(value)
   ));
   ipcMain.handle('bridge:sleepController', () => service.sleepController());
+  ipcMain.handle('bridge:requestControllerScan', () => service.requestControllerScan());
+  ipcMain.handle('bridge:forgetControllerPairings', () => service.forgetControllerPairings());
+  ipcMain.handle('bridge:forgetControllerPairing', (_event, bluetoothAddress: string) => (
+    service.forgetControllerPairing(bluetoothAddress)
+  ));
   ipcMain.handle('bridge:mountPicoBootloader', () => runPicoFirmwareIpcAction(
     'mount',
     () => mountPicoBootloaderDrive(picoFirmwareOptions(service))

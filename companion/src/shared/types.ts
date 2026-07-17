@@ -7,6 +7,7 @@ import type {
   ButtonRemapMap,
   ButtonRemapProfile,
   ControllerProfile,
+  CompanionDeviceIdentityPayload,
   AudioStatusPayload,
   BridgePresetId,
   HostPersonaMode,
@@ -131,6 +132,7 @@ export interface BridgeDiagnostics {
   } | null;
   lastPollAt: number | null;
   rawDevices: HidDeviceSummary[];
+  deviceIdentity: CompanionDeviceIdentityPayload | null;
   audioDebugLogPath: string | null;
   audioDebugLogLines: string[];
   audioDebugDroppedCount: number;
