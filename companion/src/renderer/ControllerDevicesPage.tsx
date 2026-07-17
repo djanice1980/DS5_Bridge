@@ -79,7 +79,7 @@ export function ControllerDevicesPage({
           <span className="feature-icon devices-heading-icon">
             <IconBluetooth size={24} />
           </span>
-          <div>
+          <div className="devices-heading-copy">
             <h2>Devices</h2>
             <p>Current and last controllers.</p>
           </div>

@@ -2470,7 +2470,7 @@ button {
   overflow: hidden;
 }
 
-.devices-heading {
+.feature-heading.devices-heading {
   min-height: 70px;
   margin-bottom: 0;
   border: 1px solid var(--surface-border);
@@ -2481,6 +2481,12 @@ button {
   align-items: center;
   background: var(--surface-card);
   box-shadow: var(--shadow-panel);
+}
+
+.devices-heading-copy {
+  min-width: 0;
+  justify-self: start;
+  text-align: left;
 }
 
 .devices-heading-icon {

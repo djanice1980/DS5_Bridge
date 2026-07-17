@@ -28,12 +28,15 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('saveControllerDeviceCache(window.localStorage');
     expect(controllerDevicesPageSource).toContain('id="control-panel-devices"');
     expect(controllerDevicesPageSource).toContain('Current and last controllers.');
+    expect(controllerDevicesPageSource).toContain('className="devices-heading-copy"');
     expect(controllerDevicesPageSource).toContain('<IconScan size={16} />');
     expect(controllerDevicesPageSource).toContain('Forget Controllers');
     expect(controllerDevicesPageSource).toContain('className="trusted-device-menu"');
     expect(controllerDevicesPageSource).toContain('controller-forget-modal');
     expect(controllerDevicesPageSource).not.toContain('ControllerProfile');
     expect(stylesSource).toContain('.devices-page');
+    expect(stylesSource).toContain('.feature-heading.devices-heading');
+    expect(stylesSource).toContain('.devices-heading-copy');
     expect(stylesSource).toContain('.trusted-device-card.connected');
     expect(stylesSource).toContain('.controller-forget-modal');
   });
