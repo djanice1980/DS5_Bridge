@@ -10,6 +10,7 @@
 #include "controller_output_state.h"
 #include "dualsense_output.h"
 #include "haptics_test_signal.h"
+#include "usb_audio_render_gain.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
 #endif
@@ -1220,17 +1221,6 @@ static int16_t mix_i16(int16_t native_sample, int16_t derived_sample) {
     return soft_clip_i16_from_float(static_cast<float>(native_sample) + static_cast<float>(derived_sample));
 }
 
-static int16_t apply_host_render_gain(int16_t sample, float host_gain) {
-    const float scaled = static_cast<float>(sample) * host_gain;
-    return static_cast<int16_t>(
-        clamp(
-            static_cast<int32_t>(scaled),
-            static_cast<int32_t>(-32768),
-            static_cast<int32_t>(32767)
-        )
-    );
-}
-
 static void process_audio_reactive_haptic_frame(
     int16_t speaker_l,
     int16_t speaker_r,
@@ -1712,10 +1702,19 @@ static bool process_usb_audio_packet() {
     // Windows sends USB Audio volume controls for this endpoint instead of pre-scaling PCM.
     const float host_render_gain = clamp(usb_host_speaker_gain, 0.0f, 1.0f);
     for (int i = 0; i < frames; i++) {
-        const int16_t speaker_l = apply_host_render_gain(raw[i * INPUT_CHANNELS], host_render_gain);
-        const int16_t speaker_r = apply_host_render_gain(raw[i * INPUT_CHANNELS + 1], host_render_gain);
-        const int16_t haptic_l = apply_host_render_gain(raw[i * INPUT_CHANNELS + 2], host_render_gain);
-        const int16_t haptic_r = apply_host_render_gain(raw[i * INPUT_CHANNELS + 3], host_render_gain);
+        const auto rendered = ds5::usb_audio::apply_host_speaker_gain(
+            {
+                .speaker_left = raw[i * INPUT_CHANNELS],
+                .speaker_right = raw[i * INPUT_CHANNELS + 1],
+                .haptic_left = raw[i * INPUT_CHANNELS + 2],
+                .haptic_right = raw[i * INPUT_CHANNELS + 3],
+            },
+            host_render_gain
+        );
+        const int16_t speaker_l = rendered.speaker_left;
+        const int16_t speaker_r = rendered.speaker_right;
+        const int16_t haptic_l = rendered.haptic_left;
+        const int16_t haptic_r = rendered.haptic_right;
         audio_buf[audio_buf_pos++] = static_cast<float>(speaker_l) / 32768.0f * speaker_gain;
         audio_buf[audio_buf_pos++] = static_cast<float>(speaker_r) / 32768.0f * speaker_gain;
         if (audio_buf_pos == 512 * 2) {

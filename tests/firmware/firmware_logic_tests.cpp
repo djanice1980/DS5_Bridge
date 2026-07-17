@@ -16,6 +16,7 @@
 #include "dualsense_output.h"
 #include "haptics_test_signal.h"
 #include "output_scheduler.h"
+#include "usb_audio_render_gain.h"
 #include "persona/ds4_persona.h"
 #include "persona/dualsense_persona.h"
 #include "persona/host_persona.h"
@@ -259,6 +260,24 @@ void packet_compositor_initializes_bluetooth_report_and_wraps_sequence() {
     controller_packet_init_bt_output_report(report.data(), int_sequence);
     EXPECT_EQ(report[1], 0xe0);
     EXPECT_EQ(int_sequence, 0x0f);
+}
+
+void usb_host_speaker_gain_does_not_attenuate_native_haptics() {
+    const ds5::usb_audio::NativeRenderFrame input{
+        .speaker_left = 20000,
+        .speaker_right = -12000,
+        .haptic_left = 7000,
+        .haptic_right = -5000,
+    };
+    const auto full = ds5::usb_audio::apply_host_speaker_gain(input, 1.0f);
+    const auto quiet = ds5::usb_audio::apply_host_speaker_gain(input, 0.1f);
+
+    EXPECT_EQ(full.speaker_left, 20000);
+    EXPECT_EQ(full.speaker_right, -12000);
+    EXPECT_EQ(quiet.speaker_left, 2000);
+    EXPECT_EQ(quiet.speaker_right, -1200);
+    EXPECT_EQ(quiet.haptic_left, full.haptic_left);
+    EXPECT_EQ(quiet.haptic_right, full.haptic_right);
 }
 
 void classic_rumble_gain_clamps_rounds_and_touches_motor_payloads() {
@@ -991,7 +1010,7 @@ void xusb360_rumble_decodes_to_ds5_classic_rumble_payload() {
     EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
     EXPECT_FALSE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
     EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
-    EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+    EXPECT_FALSE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
     EXPECT_EQ(payload[kMotorLeftOffset], 0x90);
     EXPECT_EQ(payload[kMotorRightOffset], 0x30);
 }
@@ -1080,7 +1099,7 @@ void ds4_output_decodes_to_ds5_rumble_and_lightbar_payload() {
     EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
     EXPECT_FALSE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
     EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
-    EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+    EXPECT_FALSE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
     EXPECT_TRUE((payload[kValidFlag1Offset] & kFlag1LightbarControlEnable) != 0);
     EXPECT_EQ(payload[kMotorRightOffset], 0x12);
     EXPECT_EQ(payload[kMotorLeftOffset], 0xfe);
@@ -1187,6 +1206,7 @@ std::vector<TestCase> tests{
     {"scheduler sends coalesced state when audio is absent", scheduler_sends_coalesced_state_when_audio_is_absent},
     {"scheduler audio due on age backlog or fairness limit", scheduler_audio_due_on_age_backlog_or_fairness_limit},
     {"packet compositor initializes bluetooth report and wraps sequence", packet_compositor_initializes_bluetooth_report_and_wraps_sequence},
+    {"usb host speaker gain does not attenuate native haptics", usb_host_speaker_gain_does_not_attenuate_native_haptics},
     {"classic rumble gain clamps rounds and touches motor payloads", classic_rumble_gain_clamps_rounds_and_touches_motor_payloads},
     {"audio haptics replace tracks state without suppressing classic rumble", audio_haptics_replace_tracks_state_without_suppressing_classic_rumble},
     {"speaker sanitizer strips host amp flags and zeroes only controlled fields", speaker_sanitizer_strips_host_amp_flags_and_zeroes_only_controlled_fields},
