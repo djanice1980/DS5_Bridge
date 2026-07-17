@@ -5,6 +5,7 @@
 
 #include "tusb.h"
 #include "bsp/board_api.h"
+#include "hardware/watchdog.h"
 #include "pico/time.h"
 #include <algorithm>
 #include <cmath>
@@ -69,6 +70,16 @@ static constexpr UsbAudioVolumeRange kUsbAudioVolumeRanges[3] = {
 
 static bool time_reached(uint32_t now, uint32_t target) {
     return static_cast<int32_t>(now - target) >= 0;
+}
+
+static void sleep_ms_with_watchdog(uint32_t total_ms) {
+    while (total_ms > 0) {
+        watchdog_update();
+        const uint32_t chunk_ms = std::min<uint32_t>(total_ms, 10);
+        sleep_ms(chunk_ms);
+        total_ms -= chunk_ms;
+    }
+    watchdog_update();
 }
 
 static bool reconnect_grace_active(uint32_t now) {
@@ -145,7 +156,7 @@ void usb_device_stack_init_disconnected() {
     usb_mounted = false;
     usb_reset_audio_class_state();
     if (initialized_now) {
-        sleep_ms(150);
+        sleep_ms_with_watchdog(150);
     }
     tud_disconnect();
 }

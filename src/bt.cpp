@@ -87,6 +87,8 @@
 #define CONTROL_SEND_QUEUE_MAX_DEPTH 8
 #define CONTROL_SEND_HEADSET_AUDIO_SAFE_WINDOW_US 6000
 #define CONTROL_SEND_HEADSET_AUDIO_IDLE_US 20000
+#define FEATURE_PREFETCH_MAX_REQUESTS 16
+#define FEATURE_PREFETCH_SPACING_US 5000u
 #define CYW43_POWER_CYCLE_HOLD_MS 750
 #define CONTROLLER_DISCONNECT_REBOOT_DELAY_MS 25
 #define CLASSIC_LINK_SUPERVISION_TIMEOUT_SLOTS 3200u
@@ -220,6 +222,11 @@ struct control_packet {
     bool coalescible;
 };
 
+struct feature_prefetch_request {
+    uint8_t report_id;
+    uint16_t len;
+};
+
 struct output_scheduler_counters {
     uint32_t audio_queue_depth;
     uint32_t audio_queue_max_depth;
@@ -308,7 +315,10 @@ static bool bt_rssi_known = false;
 static bool bt_rssi_request_pending = false;
 static uint32_t bt_rssi_last_request_us = 0;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
-static bool feature_prefetch_active = false;
+static feature_prefetch_request feature_prefetch_queue[FEATURE_PREFETCH_MAX_REQUESTS]{};
+static uint8_t feature_prefetch_count = 0;
+static uint8_t feature_prefetch_index = 0;
+static uint32_t feature_prefetch_next_us = 0;
 static queue<output_packet> urgent_queue;
 static queue<output_packet> audio_queue;
 static vector<control_packet> control_queue;
@@ -406,6 +416,23 @@ static uint32_t packet_age_us(uint32_t now, uint32_t enqueue_time_us) {
 
 static bool bt_time_reached(uint32_t now, uint32_t target) {
     return static_cast<int32_t>(now - target) >= 0;
+}
+
+static void clear_feature_prefetch_queue() {
+    feature_prefetch_count = 0;
+    feature_prefetch_index = 0;
+    feature_prefetch_next_us = 0;
+}
+
+static void schedule_feature_prefetch(uint8_t report_id, uint16_t len) {
+    if (feature_prefetch_count >= FEATURE_PREFETCH_MAX_REQUESTS) {
+        DS5_LOG("[L2CAP] Feature prefetch queue full, dropping report 0x%02X\n", report_id);
+        return;
+    }
+    feature_prefetch_queue[feature_prefetch_count++] = feature_prefetch_request{
+        report_id,
+        len
+    };
 }
 
 static void clear_encryption_completion() {
@@ -1558,6 +1585,26 @@ void bt_connection_recovery_loop() {
     schedule_hid_channel_recovery();
 }
 
+void bt_feature_prefetch_loop() {
+    if (feature_prefetch_index >= feature_prefetch_count) {
+        clear_feature_prefetch_queue();
+        return;
+    }
+    if (hid_control_cid == 0 || connection_phase != BtConnectionPhase::Ready) {
+        clear_feature_prefetch_queue();
+        return;
+    }
+
+    const uint32_t now = time_us_32();
+    if (feature_prefetch_next_us != 0 && !bt_time_reached(now, feature_prefetch_next_us)) {
+        return;
+    }
+
+    const feature_prefetch_request request = feature_prefetch_queue[feature_prefetch_index++];
+    (void)get_feature_data(request.report_id, request.len);
+    feature_prefetch_next_us = time_us_32() + FEATURE_PREFETCH_SPACING_US;
+}
+
 void bt_inquiry_loop() {
     const uint32_t now = time_us_32();
     if (
@@ -2046,6 +2093,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hid_control_opened_at_us = 0;
             audio_handle_controller_disconnect();
             feature_data.clear();
+            clear_feature_prefetch_queue();
             controller_type = ControllerTypeUnknown;
             controller_type_check_pending = false;
             hid_channel_recovery_pending = false;
@@ -3676,12 +3724,12 @@ void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len) {
 
 void init_feature() {
     controller_type = ControllerTypeUnknown;
-    feature_prefetch_active = true;
-    get_feature_data(0x09, 20);
-    get_feature_data(0x20, 64);
-    get_feature_data(0x22, 64);
-    get_feature_data(0x05, 41);
+    clear_feature_prefetch_queue();
+    schedule_feature_prefetch(0x09, 20);
+    schedule_feature_prefetch(0x20, 64);
+    schedule_feature_prefetch(0x22, 64);
+    schedule_feature_prefetch(0x05, 41);
     controller_type_check_pending = true;
-    get_feature_data(0x70, 64);
-    feature_prefetch_active = false;
+    schedule_feature_prefetch(0x70, 64);
+    feature_prefetch_next_us = time_us_32();
 }

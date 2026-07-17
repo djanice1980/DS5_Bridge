@@ -102,6 +102,7 @@ void bt_lightbar_loop();
 void bt_signal_strength_loop();
 void bt_inquiry_loop();
 void bt_connection_recovery_loop();
+void bt_feature_prefetch_loop();
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
 void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len);

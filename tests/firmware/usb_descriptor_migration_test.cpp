@@ -853,6 +853,58 @@ void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path
     }
 }
 
+void assert_dualsense_feature_startup_is_paced(std::filesystem::path const &root) {
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const auto bt_h = read_text(root / "src" / "bt.h");
+    const auto main_cpp = read_text(root / "src" / "main.cpp");
+    const auto usb_cpp = read_text(root / "src" / "usb.cpp");
+
+    const std::string prefetch_loop = extract_between(
+        bt_cpp,
+        "void bt_feature_prefetch_loop() {",
+        "\n}\n\nvoid bt_inquiry_loop"
+    );
+    const std::string init_feature_block = extract_between(
+        bt_cpp,
+        "void init_feature() {",
+        "\n}"
+    );
+    if (
+        bt_cpp.find("#define FEATURE_PREFETCH_SPACING_US 5000u") == std::string::npos
+        || bt_h.find("void bt_feature_prefetch_loop();") == std::string::npos
+        || init_feature_block.find("schedule_feature_prefetch(0x09, 20);")
+            == std::string::npos
+        || init_feature_block.find("schedule_feature_prefetch(0x70, 64);")
+            == std::string::npos
+        || init_feature_block.find("get_feature_data(") != std::string::npos
+        || prefetch_loop.find("get_feature_data(request.report_id, request.len)")
+            == std::string::npos
+        || prefetch_loop.find("FEATURE_PREFETCH_SPACING_US") == std::string::npos
+        || main_cpp.find("bt_feature_prefetch_loop();") == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "DualSense startup feature requests must be paced from the main loop"
+        );
+    }
+
+    const std::string watchdog_sleep = extract_between(
+        usb_cpp,
+        "static void sleep_ms_with_watchdog",
+        "\n}\n\nstatic bool reconnect_grace_active"
+    );
+    if (
+        watchdog_sleep.find("watchdog_update();") == std::string::npos
+        || watchdog_sleep.find("std::min<uint32_t>(total_ms, 10)") == std::string::npos
+        || usb_cpp.find("sleep_ms_with_watchdog(150);") == std::string::npos
+        || main_cpp.find("bt_feature_prefetch_loop();\n        watchdog_update();")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Feature startup and USB initialization must remain watchdog-safe"
+        );
+    }
+}
+
 } // namespace
 
 int main() {
@@ -873,6 +925,7 @@ int main() {
         assert_mic_pass_through_defaults_to_enabled(source_root);
         assert_bluetooth_pairing_and_reconnect_policy(source_root);
         assert_bluetooth_hid_recovery_and_encryption_watchdog(source_root);
+        assert_dualsense_feature_startup_is_paced(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex
