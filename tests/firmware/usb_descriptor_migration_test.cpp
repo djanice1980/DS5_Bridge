@@ -1417,11 +1417,18 @@ void assert_watchdog_and_bootsel_flash_safety(std::filesystem::path const &root)
     const auto cmake = read_text(root / "CMakeLists.txt");
     const auto audio_cpp = read_text(root / "src" / "audio.cpp");
     const auto audio_h = read_text(root / "src" / "audio.h");
-    const auto flash_safety_cpp = read_text(root / "src" / "core1_flash_safety.cpp");
+    const auto ram_mem_c = read_text(root / "src" / "ram_mem.c");
+    const auto relocate_cmake = read_text(root / "cmake" / "relocate_to_ram.cmake");
+    const auto verify_cmake = read_text(root / "cmake" / "verify_core1_sram.cmake");
     const auto main_cpp = read_text(root / "src" / "main.cpp");
 
     if (
-        cmake.find("src/core1_flash_safety.cpp") == std::string::npos
+        cmake.find("src/ram_mem.c") == std::string::npos
+        || cmake.find(".text.queue_try_add=.time_critical.queue_try_add")
+            == std::string::npos
+        || cmake.find(".text.queue_try_remove=.time_critical.queue_try_remove")
+            == std::string::npos
+        || cmake.find("verify_core1_sram.cmake") == std::string::npos
         || cmake.find("PICO_BTSTACK_CYW43_MAX_HCI_PROCESS_LOOP_COUNT=4")
             == std::string::npos
         || cmake.find("PICO_FLASH_ASSUME_CORE1_SAFE=0") == std::string::npos
@@ -1444,20 +1451,28 @@ void assert_watchdog_and_bootsel_flash_safety(std::filesystem::path const &root)
         || audio_cpp.find("sem_acquire_timeout_ms(&core1_flash_init_done, 250)")
             == std::string::npos
         || audio_cpp.find("sem_release(&core1_flash_init_done);") == std::string::npos
-        || audio_cpp.find("core1_flash_safety_poll();") == std::string::npos
+        || audio_cpp.find("core1_flash_safety_poll();") != std::string::npos
+        || audio_cpp.find("#include \"core1_flash_safety.h\"") != std::string::npos
         || core1_entry == std::string::npos
         || decoder_ready == std::string::npos
         || flash_ready == std::string::npos
         || service_loop == std::string::npos
         || !(decoder_ready < flash_ready && flash_ready < service_loop)
-        || flash_safety_cpp.find(
-            "extern \"C\" flash_safety_helper_t *get_flash_safety_helper()"
-        ) == std::string::npos
-        || flash_safety_cpp.find("Core1FlashPauseRequested") == std::string::npos
-        || flash_safety_cpp.find("Core1FlashPausePaused") == std::string::npos
+        || ram_mem_c.find("__not_in_flash_func(memcpy)") == std::string::npos
+        || ram_mem_c.find("__not_in_flash_func(memset)") == std::string::npos
+        || ram_mem_c.find("__not_in_flash_func(memmove)") == std::string::npos
+        || relocate_cmake.find("--rename-section") == std::string::npos
+        || verify_cmake.find("\"_ZL11core1_entryv\"") == std::string::npos
+        || verify_cmake.find("\"queue_try_add\"") == std::string::npos
+        || verify_cmake.find("\"queue_try_remove\"") == std::string::npos
+        || verify_cmake.find("\"memcpy\"") == std::string::npos
+        || verify_cmake.find("\"memset\"") == std::string::npos
+        || verify_cmake.find("\"memmove\"") == std::string::npos
+        || verify_cmake.find("0x20000000") == std::string::npos
+        || verify_cmake.find("0x20082000") == std::string::npos
     ) {
         throw std::runtime_error(
-            "Core 1 must handshake and cooperatively park at a RAM-resident XIP-safe boundary"
+            "Core 1 must register the SDK lockout victim after its complete steady-state audio chain is SRAM-resident"
         );
     }
 
@@ -1506,14 +1521,19 @@ void assert_bootsel_gestures_and_intentional_disconnects(std::filesystem::path c
         "\n}\n\nvoid button_check"
     );
     if (
-        button_cpp.find("BUTTON_FLASH_SAFE_TIMEOUT_MS = 5") == std::string::npos
+        button_cpp.find("BUTTON_FLASH_SAFE_TIMEOUT_MS = 100") == std::string::npos
         || button_cpp.find("static kitsune::ButtonGesture button_gesture")
             == std::string::npos
         || button_cpp.find("10, // ~1000 ms allowed between clicks")
             == std::string::npos
         || button_cpp.find("button_gesture.update(pressed)") == std::string::npos
         || gesture_h.find("ReleaseAfterHold") == std::string::npos
-        || button_cpp.find("if (!button_read_bootsel(pressed))") == std::string::npos
+        || button_cpp.find(
+            "const bool sample_succeeded = button_read_bootsel(pressed)"
+        ) == std::string::npos
+        || button_cpp.find("if (!sample_succeeded)") == std::string::npos
+        || button_cpp.find("[BTN] sampler samples=%lu failures=%lu")
+            == std::string::npos
         || dispatch.find("bt_is_controller_connected()") == std::string::npos
         || dispatch.find(
             "bt_disconnect_with_intent(BtControllerDisconnectIntentSleep)"

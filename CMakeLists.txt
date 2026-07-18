@@ -77,7 +77,7 @@ add_executable(ds5-bridge
         src/controller_output_state.cpp
         src/haptics_test_signal.cpp
         src/output_scheduler.cpp
-        src/core1_flash_safety.cpp
+        src/ram_mem.c
         src/audio.cpp
         src/bt.cpp
         src/firmware_log.cpp
@@ -121,6 +121,37 @@ add_custom_command(TARGET wdl_resampler POST_BUILD
         COMMENT "Relocating WDL_Resampler hot path to .time_critical.*"
         VERBATIM
 )
+
+# DS5Dongle-style BOOTSEL safety: the SDK multicore lockout can interrupt core 1
+# promptly only when its steady-state audio dependencies are safe around the
+# QSPI/XIP pause. Move the inter-core queue operations used by the audio loop to
+# SRAM, alongside Opus and the WDL hot path above.
+function(relocate_to_ram _suffix _renames _comment)
+    add_custom_command(TARGET ds5-bridge PRE_LINK
+            COMMAND ${CMAKE_COMMAND}
+                    "-DOBJROOT=${CMAKE_BINARY_DIR}/CMakeFiles/ds5-bridge.dir"
+                    "-DOBJCOPY=${CMAKE_OBJCOPY}"
+                    "-DSUFFIX=${_suffix}"
+                    "-DRENAMES=${_renames}"
+                    -P "${CMAKE_SOURCE_DIR}/cmake/relocate_to_ram.cmake"
+            COMMENT "${_comment}"
+            VERBATIM
+    )
+endfunction()
+
+relocate_to_ram(
+        src/common/pico_util/queue.c.o
+        ".text.queue_try_add=.time_critical.queue_try_add@.text.queue_try_remove=.time_critical.queue_try_remove"
+        "Relocating core-1 queue operations to SRAM"
+)
+
+# These strong RAM-resident definitions replace newlib's flash-backed memory
+# operations. Prevent the compiler from lowering their loops back into recursive
+# calls to the functions being defined.
+set_source_files_properties(src/ram_mem.c PROPERTIES COMPILE_OPTIONS
+        "-fno-builtin;-fno-tree-loop-distribute-patterns"
+)
+
 target_compile_options(ds5-bridge PRIVATE -fsigned-char)
 target_compile_definitions(wdl_resampler PRIVATE
         WDL_RESAMPLE_TYPE=float
@@ -269,6 +300,15 @@ target_link_libraries(ds5-bridge
         tinyusb_board
         wdl_resampler
         opus
+)
+
+add_custom_command(TARGET ds5-bridge POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+                "-DNM=${CMAKE_NM}"
+                "-DELF=$<TARGET_FILE:ds5-bridge>"
+                -P "${CMAKE_SOURCE_DIR}/cmake/verify_core1_sram.cmake"
+        COMMENT "Verifying core-1 audio symbols are SRAM-resident"
+        VERBATIM
 )
 
 pico_add_extra_outputs(ds5-bridge)

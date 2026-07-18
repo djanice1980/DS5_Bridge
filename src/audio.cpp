@@ -5,7 +5,6 @@
 
 #include "audio.h"
 #include "bt.h"
-#include "core1_flash_safety.h"
 #include "controller_packet_compositor.h"
 #include "controller_output_policy.h"
 #include "controller_output_state.h"
@@ -2366,8 +2365,9 @@ static void __not_in_flash_func(core1_entry)() {
     uint32_t core1_speaker_us = 0;
     uint32_t core1_mic_us = 0;
 
-    // Publish readiness only after setup reaches the cooperative service loop.
-    // Core 0 must not request an XIP pause while core 1 is still initializing.
+    // Register core 1 as an SDK flash-lockout victim only after all flash-backed
+    // setup is complete. Core 0 waits for this acknowledgement before Bluetooth
+    // can persist pairing data or sample BOOTSEL.
     const bool flash_init_succeeded = flash_safe_execute_core_init();
     core1_flash_init_succeeded.store(flash_init_succeeded, std::memory_order_release);
     sem_release(&core1_flash_init_done);
@@ -2378,8 +2378,6 @@ static void __not_in_flash_func(core1_entry)() {
     }
 
     while (true) {
-        core1_flash_safety_poll();
-
         const uint32_t speaker_start_us = time_us_32();
         const bool did_speaker = core1_process_speaker();
         const uint32_t mic_start_us = time_us_32();

@@ -4,6 +4,7 @@
 
 #include "button_functions.h"
 
+#include <algorithm>
 #include <cstdint>
 
 #include "bt.h"
@@ -24,13 +25,23 @@
 
 // Gesture thresholds, in samples at the 100 ms poll cadence.
 static constexpr uint32_t BUTTON_POLL_INTERVAL_MS = 100;
-static constexpr uint32_t BUTTON_FLASH_SAFE_TIMEOUT_MS = 5;
+static constexpr uint32_t BUTTON_FLASH_SAFE_TIMEOUT_MS = 100;
+#if DS5_DEBUG_LOGS_ENABLED
+static constexpr uint32_t BUTTON_DIAGNOSTIC_INTERVAL_MS = 5000;
+#endif
 static kitsune::ButtonGesture button_gesture({
     5,  // ~500 ms max press for a click.
     10, // ~1000 ms allowed between clicks before a single click dispatches.
     15, // ~1500 ms hold threshold.
 });
 static uint32_t button_last_check_ms = 0;
+#if DS5_DEBUG_LOGS_ENABLED
+static uint32_t button_sample_count = 0;
+static uint32_t button_sample_failures = 0;
+static uint32_t button_sample_last_us = 0;
+static uint32_t button_sample_max_us = 0;
+static uint32_t button_diagnostic_last_ms = 0;
+#endif
 
 static void __no_inline_not_in_flash_func(button_read_cb)(void *param) {
     bool *pressed = static_cast<bool *>(param);
@@ -111,7 +122,33 @@ void button_check() {
     button_last_check_ms = now;
 
     bool pressed = false;
-    if (!button_read_bootsel(pressed)) {
+#if DS5_DEBUG_LOGS_ENABLED
+    const uint32_t sample_started_us = time_us_32();
+#endif
+    const bool sample_succeeded = button_read_bootsel(pressed);
+#if DS5_DEBUG_LOGS_ENABLED
+    button_sample_last_us = static_cast<uint32_t>(time_us_32() - sample_started_us);
+    button_sample_max_us = std::max(button_sample_max_us, button_sample_last_us);
+    button_sample_count++;
+    if (!sample_succeeded) {
+        button_sample_failures++;
+    }
+    if (
+        button_diagnostic_last_ms == 0
+        || static_cast<uint32_t>(now - button_diagnostic_last_ms)
+            >= BUTTON_DIAGNOSTIC_INTERVAL_MS
+    ) {
+        button_diagnostic_last_ms = now;
+        DS5_LOG(
+            "[BTN] sampler samples=%lu failures=%lu last_us=%lu max_us=%lu\n",
+            static_cast<unsigned long>(button_sample_count),
+            static_cast<unsigned long>(button_sample_failures),
+            static_cast<unsigned long>(button_sample_last_us),
+            static_cast<unsigned long>(button_sample_max_us)
+        );
+    }
+#endif
+    if (!sample_succeeded) {
         // Failure to park the other core is not a physical button release.
         // Preserve the gesture and retry on the next sample boundary.
         return;
