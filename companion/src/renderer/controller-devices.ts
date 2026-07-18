@@ -375,14 +375,16 @@ export function buildDevicesModel(input: {
     pairingAction: {
       label: pairingActive || pairingPending
         ? 'Pairing...'
-        : controllerConnected ? 'Disconnect & Pair' : 'Pair Controller',
+        : !input.bridgeConnected
+          ? 'Bridge Not Connected'
+          : controllerConnected ? 'Disconnect & Pair New' : 'Enter Pairing Mode',
       title: !input.bridgeConnected
-        ? 'Bridge offline'
+        ? 'Connect the bridge to manage controller pairing'
         : pairingActive
           ? 'Controller pairing is already active'
           : controllerConnected
-            ? 'Disconnect the current controller and start pairing'
-            : 'Start controller pairing',
+            ? 'Disconnect the current controller and enter pairing mode'
+            : 'Enter controller pairing mode',
       disabled: !input.bridgeConnected || pairingActive || input.pendingAction !== null,
       pending: pairingPending
     },
