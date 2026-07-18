@@ -164,6 +164,7 @@ describe('Devices model', () => {
     });
     const cached = [
       device('11:22:33:44:55:66', 5),
+      device('22:33:44:55:66:77', 3),
       { ...device('AA:BB:CC:DD:EE:FF', 4), customName: 'Primary' }
     ];
     const model = buildDevicesModel({
@@ -179,7 +180,8 @@ describe('Devices model', () => {
     expect(model.pairingAction.label).toBe('Disconnect & Pair New');
     expect(model.cards.map((card) => card.label)).toEqual([
       'Current controller',
-      'Last controller'
+      'Last controller',
+      'Previous controller'
     ]);
     expect(model.cards[0]?.title).toBe('Primary');
     expect(model.cards[0]?.infoRows).toContainEqual({
@@ -187,6 +189,24 @@ describe('Devices model', () => {
       label: 'Address',
       value: 'AA:BB:CC:DD:EE:FF'
     });
+  });
+
+  it('labels only the newest cached device as the last controller while offline', () => {
+    const model = buildDevicesModel({
+      bridgeConnected: false,
+      status: null,
+      identity: null,
+      cachedDevices: [
+        device('AA:BB:CC:DD:EE:FF', 20),
+        device('11:22:33:44:55:66', 10)
+      ],
+      pendingAction: null
+    });
+
+    expect(model.cards.map((card) => card.label)).toEqual([
+      'Last controller',
+      'Previous controller'
+    ]);
   });
 
   it('locks actions while firmware pairing is active', () => {

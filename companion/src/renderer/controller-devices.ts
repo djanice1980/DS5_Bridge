@@ -36,7 +36,7 @@ export interface DevicesInfoRow {
 export interface DevicesCardModel {
   key: string;
   controllerType: ControllerDeviceType;
-  label: 'Current controller' | 'Last controller';
+  label: 'Current controller' | 'Last controller' | 'Previous controller';
   title: string;
   status: 'Connected' | 'Not connected' | 'Bridge offline';
   bluetoothAddress: string | null;
@@ -346,10 +346,15 @@ export function buildDevicesModel(input: {
   ];
   const cards = devices.map((device, index): DevicesCardModel => {
     const live = resolvedLive !== null && index === 0;
+    const historyIndex = resolvedLive === null ? index : index - 1;
     return {
       key: device.key,
       controllerType: device.controllerType,
-      label: live ? 'Current controller' : 'Last controller',
+      label: live
+        ? 'Current controller'
+        : historyIndex === 0
+          ? 'Last controller'
+          : 'Previous controller',
       title: deviceTitle(device),
       status: live ? 'Connected' : input.bridgeConnected ? 'Not connected' : 'Bridge offline',
       bluetoothAddress: device.bluetoothAddress,
