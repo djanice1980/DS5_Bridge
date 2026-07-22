@@ -3110,6 +3110,19 @@ void companion_note_feedback_trace_report(
     uint8_t detail2,
     uint8_t detail3
 ) {
+    // DIAG BRANCH ONLY: healthy audio-stream traffic (~93 pkt/s of 0x36
+    // enqueue+send pairs) floods the 300-line trace ring and buries the rare
+    // host-report events under investigation. Suppress routine audio entries;
+    // keep AudioDrop (that IS a signal) and every non-audio stage.
+    const bool routine_audio =
+        (stage == CompanionFeedbackTraceAudioEnqueue)
+        || (len > 0 && report != nullptr && report[0] == 0x36
+            && stage != CompanionFeedbackTraceAudioDrop
+            && stage != CompanionFeedbackTraceDrop);
+    if (routine_audio) {
+        return;
+    }
+
     FeedbackTraceEvent event{};
     const bool force_trace = (
         stage == CompanionFeedbackTraceBridgeOut
