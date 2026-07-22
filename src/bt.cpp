@@ -227,7 +227,6 @@ static bool select_next_control_packet_locked(control_packet &packet, uint32_t n
 static void request_can_send_if_needed(bool should_request_send);
 static void request_control_can_send_if_needed(bool should_request_send);
 static bool headset_audio_send_window_closed_locked(uint32_t now);
-static bool state_send_blocked_by_audio_locked(uint32_t now);
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control);
 static void init_state_report(uint8_t *report);
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
@@ -1937,18 +1936,6 @@ static bool headset_audio_send_window_closed_locked(uint32_t now) {
         && elapsed_us < CONTROL_SEND_HEADSET_AUDIO_IDLE_US;
 }
 
-static bool state_send_blocked_by_audio_locked(uint32_t now) {
-    if (!speaker_output_enabled || !audio_queue.empty()) {
-        return false;
-    }
-    if (last_audio_0x36_send_us == 0) {
-        return false;
-    }
-
-    const uint32_t elapsed_us = packet_age_us(now, last_audio_0x36_send_us);
-    return elapsed_us < CONTROL_SEND_HEADSET_AUDIO_IDLE_US;
-}
-
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control) {
     should_request_control = control_pending_locked() && !headset_audio_send_window_closed_locked(now);
 }
@@ -2734,13 +2721,22 @@ static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
         return false;
     }
     const uint32_t now = time_us_32();
-    bool should_request_send = false;
     critical_section_enter_blocking(&queue_lock);
     merge_state_output_locked(data, len, now, reason);
-    should_request_send = !state_send_blocked_by_audio_locked(now);
     update_queue_depth_counters_locked();
     critical_section_exit(&queue_lock);
-    request_can_send_if_needed(should_request_send);
+    // Always arm the send loop once state is pending. The old
+    // state_send_blocked_by_audio_locked() gate skipped this request when the
+    // audio queue was momentarily empty mid-stream ("audio recent"), which
+    // stranded state_pending with no CAN_SEND_NOW armed. The audio enqueue
+    // path's edge trigger (!output_pending_locked()) then saw pending work and
+    // never requested either, deadlocking ALL interrupt sends -- speaker audio
+    // was enqueued and dropped 4-deep at ~42ms -- until the next host report
+    // arrived after the audio-recent window expired (observed in games as
+    // intermittent, self-healing speaker dropouts at trigger burst edges).
+    // The interleave scheduler already arbitrates audio-vs-state per slot;
+    // there is nothing for this request to veto.
+    request_can_send_if_needed(true);
     return true;
 }
 
@@ -2848,7 +2844,12 @@ bool bt_write_audio_stream(uint8_t *data, uint16_t len) {
     uint8_t trace_audio_depth = 0;
     uint8_t trace_route_flags = 0;
     critical_section_enter_blocking(&queue_lock);
-    should_request_send = !output_pending_locked();
+    // Always arm the send loop. The previous edge trigger
+    // (!output_pending_locked()) assumed pending work implied an armed send
+    // cycle; a stranded state_pending violated that assumption and starved
+    // audio alongside it (see enqueue_state_output). request_can_send_if_needed
+    // dedups through its latch, so an already-armed cycle makes this a no-op.
+    should_request_send = true;
     while (audio_queue.size() >= AUDIO_SEND_QUEUE_MAX_DEPTH) {
 #ifdef ENABLE_COMPANION
         if (!audio_queue.front().data.empty()) {
