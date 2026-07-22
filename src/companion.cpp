@@ -617,7 +617,9 @@ bool decode_feedback_trace_report(
             || event.motor_left != 0;
     }
 
-    const bool has_rumble = (event.flag0 & 0x03) != 0 || (event.flag2 & 0x04) != 0;
+    // DIAG BRANCH: also pass trigger-effect-only reports (flag0 0x04/0x08) so
+    // BT-stage sends of the coalesced trigger state are visible in the trace.
+    const bool has_rumble = (event.flag0 & 0x0f) != 0 || (event.flag2 & 0x04) != 0;
     if (!force && !has_rumble && event.motor_right == 0 && event.motor_left == 0) {
         return false;
     }

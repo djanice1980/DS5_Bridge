@@ -4008,7 +4008,33 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             const uint32_t now = time_us_32();
             critical_section_enter_blocking(&queue_lock);
             if (!select_next_output_packet_locked(next_packet, now)) {
+#ifdef ENABLE_COMPANION
+                // DIAG BRANCH: log empty selections that leave work queued -
+                // this is the suspected stall signature. Fake 0x31 header with
+                // rumble bits set so the decode filter passes it; decision
+                // 0x77 marks these synthetic events.
+                const bool work_left = output_pending_locked();
+                uint8_t diag_report[6] = {0x31, 0x00, 0x03, 0x00, 0x00, 0x00};
+                uint8_t diag_c = 0;
+                uint8_t diag_a = 0;
+                uint8_t diag_flags = 0;
+                output_trace_queue_details_locked(diag_c, diag_a, diag_flags);
                 critical_section_exit(&queue_lock);
+                if (work_left) {
+                    companion_note_feedback_trace_report(
+                        CompanionFeedbackTraceDrop,
+                        diag_report,
+                        sizeof(diag_report),
+                        0x77,
+                        diag_c,
+                        diag_a,
+                        diag_flags,
+                        0x7f
+                    );
+                }
+#else
+                critical_section_exit(&queue_lock);
+#endif
                 break;
             }
             bool has_more = output_pending_locked();
@@ -4019,6 +4045,21 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             uint8_t status = l2cap_send(hid_interrupt_cid, next_packet.data.data(), next_packet.data.size());
             if (status != 0) {
                 DS5_LOG("[L2CAP] Interrupt Error, Status: 0x%02X\n", status);
+#ifdef ENABLE_COMPANION
+                // DIAG BRANCH: surface interrupt-channel send failures in the
+                // feedback trace (decision 0x78, detail3 = l2cap status;
+                // nonzero status forces the Drop-stage event past the filter).
+                companion_note_feedback_trace_report(
+                    CompanionFeedbackTraceDrop,
+                    next_packet.data.empty() ? nullptr : next_packet.data.data() + 1,
+                    next_packet.data.empty() ? 0 : static_cast<uint16_t>(next_packet.data.size() - 1),
+                    0x78,
+                    next_packet.trace_detail0,
+                    next_packet.trace_detail1,
+                    next_packet.trace_detail2,
+                    status
+                );
+#endif
                 if (requeue_managed_rumble_on_send_failure(std::move(next_packet), now)) {
                     // The failed transition remains at the head until its
                     // bounded backoff expires. Audio may continue meanwhile.
