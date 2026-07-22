@@ -80,7 +80,8 @@ jobs:
           cmake -S . -B build/companion -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
-            -DENABLE_COMPANION=ON
+            -DENABLE_COMPANION=ON \
+            -DDS5_DIAGNOSTICS_PRESET=traces
           cmake --build build/companion --target ds5-bridge
           mkdir -p artifacts
           cp build/companion/ds5-bridge.uf2 artifacts/ds5-bridge-companion.uf2
