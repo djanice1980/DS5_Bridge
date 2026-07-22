@@ -6,7 +6,12 @@
 #ifndef DS5_BRIDGE_USB_H
 #define DS5_BRIDGE_USB_H
 
-#define DEFAULT_COMPANION_SPEAKER_GAIN 0.30f
+// Boot/no-companion default for the companion speaker volume scale (0-1).
+// Must be 1.0: when no companion app ever connects (e.g. Windows hosts running
+// the firmware standalone), this default is permanent -- the old 0.30 left the
+// speaker at 30% volume with no way to raise it. Hosts and the controller
+// already have their own volume controls; the firmware should not pre-attenuate.
+#define DEFAULT_COMPANION_SPEAKER_GAIN 1.0f
 
 extern uint8_t mute[2]; // 0: speaker/LED fallback, 1: mic/idle-disconnect fallback
 extern float volume[2]; // 0: companion speaker gain, 1: haptics gain
