@@ -1036,15 +1036,23 @@ button {
   min-height: 0;
   height: 100%;
   padding: 20px 16px 18px;
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
-  align-content: start;
+  /* Column flex (not a fixed grid template): the sidebar's child count is
+     variable now (the Devices census only renders with >1 bridge or a
+     USB-direct controller), and a rigid row template overlapped the Controls
+     label whenever extra children shifted the rows. */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 10px;
   border: 0;
   border-right: 1px solid var(--sidebar-border);
   border-radius: 0;
   background: var(--sidebar-bg);
   box-shadow: none;
+}
+
+.hero-card > .sidebar-actions {
+  margin-top: auto;
 }
 
 .hero-card::before {
