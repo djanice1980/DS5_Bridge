@@ -26,7 +26,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 20;
+constexpr uint8_t kFirmwarePatch = 21;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1626,6 +1626,11 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
         buffer[15] = 1;
         memcpy(buffer + 16, controller_addr, 6);
     }
+    // Pairing breadcrumbs: [22] = event count, then {stage, status} pairs.
+    // Stages: 1 inquiry-found, 3 conn-complete, 4 link-key-req (1=stored/
+    // 0=negative), 5 ssp-confirm, 6 legacy-pin, 7 auth-complete, 8 encryption
+    // (0xEE = disabled), 9 disconnect (reason), 10 l2cap-open.
+    buffer[22] = bt_copy_pairing_events(buffer + 23, 10);
     return COMPANION_PAYLOAD_SIZE;
 }
 

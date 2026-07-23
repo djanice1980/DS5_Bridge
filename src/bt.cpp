@@ -477,6 +477,35 @@ void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
 }
 
+// Pairing-event breadcrumbs: last N {stage, status} pairs of the BT
+// connection/pairing handshake, readable via the companion DEVICE_IDENTITY
+// report so pairing failures are diagnosable without a UART hookup.
+#define PAIRING_EVENT_RING 10
+static uint8_t pairing_events[PAIRING_EVENT_RING][2];
+static uint8_t pairing_event_count = 0;
+static uint8_t pairing_event_head = 0;
+
+static void bt_note_pairing_event(uint8_t stage, uint8_t status) {
+    pairing_events[pairing_event_head][0] = stage;
+    pairing_events[pairing_event_head][1] = status;
+    pairing_event_head = (pairing_event_head + 1) % PAIRING_EVENT_RING;
+    if (pairing_event_count < PAIRING_EVENT_RING) {
+        pairing_event_count++;
+    }
+}
+
+uint8_t bt_copy_pairing_events(uint8_t *out, uint8_t max_events) {
+    const uint8_t count = pairing_event_count < max_events ? pairing_event_count : max_events;
+    // Oldest first.
+    uint8_t index = (uint8_t)((pairing_event_head + PAIRING_EVENT_RING - pairing_event_count) % PAIRING_EVENT_RING);
+    for (uint8_t i = 0; i < count; i++) {
+        out[i * 2] = pairing_events[index][0];
+        out[i * 2 + 1] = pairing_events[index][1];
+        index = (index + 1) % PAIRING_EVENT_RING;
+    }
+    return count;
+}
+
 bool bt_is_controller_connected() {
     return hid_interrupt_ready;
 }
@@ -1316,6 +1345,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             inquiry_active = false;
             if (device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
+                bt_note_pairing_event(1, 0); // inquiry-found -> connecting
                 new_pair = true;
                 // A controller found via inquiry is in pairing mode and wants a fresh bond, so any
                 // stored link key for it is stale (it forgot us after pairing to another host). Drop it
@@ -1356,6 +1386,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 
         case HCI_EVENT_CONNECTION_COMPLETE: {
             const uint8_t status = hci_event_connection_complete_get_status(packet);
+            bt_note_pairing_event(3, status);
             if (status == 0) {
                 const hci_con_handle_t handle = hci_event_connection_complete_get_connection_handle(packet);
                 acl_handle = handle;
@@ -1387,6 +1418,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             link_key_t link_key;
             link_key_type_t link_key_type;
             bool link = gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
+            bt_note_pairing_event(4, link ? 1 : 0); // link-key request: 1=stored key replied, 0=negative (fresh SSP)
             if (link) {
                 DS5_LOG("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr),
                        (unsigned int) link_key_type);
@@ -1401,6 +1433,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_USER_CONFIRMATION_REQUEST: {
             bd_addr_t addr;
             hci_event_user_confirmation_request_get_bd_addr(packet, addr);
+            bt_note_pairing_event(5, 0); // SSP user confirmation -> accepted
             DS5_LOG("[HCI] User confirmation request from %s, accept\n", bd_addr_to_str(addr));
             HCI_SEND_CMD_LOGGED(&hci_user_confirmation_request_reply, addr);
             break;
@@ -1409,6 +1442,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_PIN_CODE_REQUEST: {
             bd_addr_t addr;
             hci_event_pin_code_request_get_bd_addr(packet, addr);
+            bt_note_pairing_event(6, 0); // legacy PIN requested
             DS5_LOG("[HCI] Legacy pin request from %s, reply 0000\n", bd_addr_to_str(addr));
             gap_pin_code_response(addr, "0000");
             break;
@@ -1417,6 +1451,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_AUTHENTICATION_COMPLETE: {
             const uint8_t status = hci_event_authentication_complete_get_status(packet);
             const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
+            bt_note_pairing_event(7, status);
             DS5_LOG("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
                 DS5_LOG("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
@@ -1434,6 +1469,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t status = hci_event_encryption_change_get_status(packet);
             const hci_con_handle_t handle = hci_event_encryption_change_get_connection_handle(packet);
             const uint8_t enabled = hci_event_encryption_change_get_encryption_enabled(packet);
+            bt_note_pairing_event(8, status != ERROR_CODE_SUCCESS ? status : (enabled ? 0 : 0xEE));
             DS5_LOG("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
             if (status == ERROR_CODE_SUCCESS && enabled) {
                 DS5_LOG("[L2CAP] Open HID channels\n");
@@ -1468,6 +1504,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             gap_connectable_control(1);
             gap_discoverable_control(0); // Stay reconnectable; new pairing needs a button-armed window.
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
+            bt_note_pairing_event(9, reason);
             clear_outbound_inquiry_target();
             clear_acl_connection_pending();
             inquiry_active = false;
@@ -1736,6 +1773,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
         case L2CAP_EVENT_CHANNEL_OPENED: {
             const uint8_t status = l2cap_event_channel_opened_get_status(packet);
             const uint16_t local_cid = l2cap_event_channel_opened_get_local_cid(packet);
+            bt_note_pairing_event(10, status);
             if (status == 0) {
                 const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
                 if (psm == PSM_HID_CONTROL) {
