@@ -2821,6 +2821,7 @@ export function App() {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   const [startupVisible, setStartupVisible] = useState(true);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [bridgeRenameDraft, setBridgeRenameDraft] = useState<string | null>(null);
   const [activeControlTab, setActiveControlTab] = useState<ControlTab>('overview');
   const [hapticsValue, setHapticsValue] = useState(100);
   const [classicRumbleValue, setClassicRumbleValue] = useState(100);
@@ -3883,12 +3884,13 @@ export function App() {
   // or a directly-attached controller worth flagging).
   const bridgeDevices = snapshot?.bridgeDevices ?? null;
   const bridgeSelectOptions: Array<[string, string]> = (bridgeDevices?.bridges ?? []).map((bridge, index) => [
-    `Bridge ${index + 1}${bridge.connected ? ' (active)' : ''}`,
+    `${bridge.name ?? `Bridge ${index + 1}`}${bridge.connected ? ' (active)' : ''}`,
     bridge.path
   ]);
   const activeBridgeSelectValue = bridgeDevices?.bridges.find((bridge) => bridge.selected)?.path
     ?? bridgeDevices?.bridges.find((bridge) => bridge.connected)?.path
     ?? '';
+  const activeBridgeInfo = bridgeDevices?.bridges.find((bridge) => bridge.connected) ?? null;
   const directControllers = bridgeDevices?.directControllers ?? [];
   const showBridgeDevices = (bridgeDevices?.bridges.length ?? 0) > 1 || directControllers.length > 0;
   const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
@@ -6416,6 +6418,42 @@ export function App() {
                     className="bridge-device-select"
                     closeOnSelect={true}
                     disabled={pendingAction !== null}
+                  />
+                )}
+                {activeBridgeInfo?.uniqueId && bridgeRenameDraft === null && (
+                  <button
+                    type="button"
+                    className="bridge-rename-toggle"
+                    onClick={() => setBridgeRenameDraft(activeBridgeInfo.name ?? '')}
+                  >
+                    Rename this bridge
+                  </button>
+                )}
+                {activeBridgeInfo?.uniqueId && bridgeRenameDraft !== null && (
+                  <input
+                    className="bridge-rename-input"
+                    type="text"
+                    autoFocus
+                    maxLength={32}
+                    placeholder="Bridge name"
+                    value={bridgeRenameDraft}
+                    onChange={(event) => setBridgeRenameDraft(event.target.value)}
+                    onBlur={() => {
+                      const uniqueId = activeBridgeInfo.uniqueId;
+                      const value = bridgeRenameDraft;
+                      setBridgeRenameDraft(null);
+                      if (uniqueId !== null && value !== null) {
+                        void runQuietAction(() =>
+                          window.bridge.setBridgeLabel(uniqueId, value.trim() || null));
+                      }
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        (event.target as HTMLInputElement).blur();
+                      } else if (event.key === 'Escape') {
+                        setBridgeRenameDraft(null);
+                      }
+                    }}
                   />
                 )}
                 {directControllers.map((controller) => (

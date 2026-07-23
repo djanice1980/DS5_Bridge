@@ -166,6 +166,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   // so a given gain level sounds the same on Linux as on Windows.
   speakerGainLevel: 4,
   selectedBridgePath: null,
+  bridgeIdentities: {},
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
   audioReactiveHapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,
@@ -936,6 +937,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     selectedBridgePath: typeof value?.selectedBridgePath === 'string' && value.selectedBridgePath.length > 0
       ? value.selectedBridgePath
       : null,
+    bridgeIdentities: normalizeBridgeIdentities(value?.bridgeIdentities),
     micVolumePercent: Number.isFinite(value?.micVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))
       : DEFAULT_SETTINGS.micVolumePercent,
@@ -1330,4 +1332,26 @@ export class SettingsStore {
       customProfile: this.customSettings
     }, null, 2)}\n`, 'utf8');
   }
+}
+
+function normalizeBridgeIdentities(value: unknown): Record<string, { label: string | null; containerId: string | null }> {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+  const result: Record<string, { label: string | null; containerId: string | null }> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^[0-9a-f]{2,32}$/.test(key) || !raw || typeof raw !== 'object') {
+      continue;
+    }
+    const entry = raw as { label?: unknown; containerId?: unknown };
+    result[key] = {
+      label: typeof entry.label === 'string' && entry.label.trim().length > 0
+        ? entry.label.trim().slice(0, 32)
+        : null,
+      containerId: typeof entry.containerId === 'string' && entry.containerId.length > 0
+        ? entry.containerId
+        : null
+    };
+  }
+  return result;
 }

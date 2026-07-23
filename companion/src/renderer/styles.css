@@ -7757,3 +7757,29 @@ input[type="color"]::-webkit-color-swatch {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+.bridge-rename-toggle {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0 4px;
+  font-size: 11px;
+  color: var(--text-muted, #8a8f98);
+  cursor: pointer;
+}
+
+.bridge-rename-toggle:hover {
+  color: var(--text, #d7dae0);
+  text-decoration: underline;
+}
+
+.bridge-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--surface-border-strong, #3a3f4a);
+  background: var(--surface-raised, #1a1e26);
+  color: inherit;
+}

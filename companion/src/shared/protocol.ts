@@ -15,7 +15,8 @@ export const REPORT_ID = {
   AUDIO_STATS: 0x06,
   AUDIO_STATUS: 0x08,
   TRIGGER_TRACE: 0x09,
-  FEEDBACK_TRACE: 0x0a
+  FEEDBACK_TRACE: 0x0a,
+  DEVICE_IDENTITY: 0x0d
 } as const;
 
 export const SHORTCUT_EVENT = {
@@ -1072,4 +1073,21 @@ export function ackUserMessage(result: number): string {
     default:
       return ackResultName(result).replace(/^ERR_/, '').replaceAll('_', ' ').toLowerCase();
   }
+}
+
+// Firmware 1.6.19+: stable physical identity (RP2350 unique board ID).
+// Returns the id as lowercase hex, or null when the firmware predates the
+// report (transport read fails) or returns an empty id.
+export function parseDeviceIdentityReport(report: ArrayLike<number>): string | null {
+  assertReport(report, REPORT_ID.DEVICE_IDENTITY);
+  assertCurrentOrOlderVersion(report);
+  const length = report[7];
+  if (!length || length > 16) {
+    return null;
+  }
+  let hex = '';
+  for (let index = 0; index < length; index += 1) {
+    hex += report[8 + index].toString(16).padStart(2, '0');
+  }
+  return /^0+$/.test(hex) ? null : hex;
 }

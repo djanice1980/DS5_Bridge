@@ -27,6 +27,7 @@ import {
   parseAudioStatusReport,
   parseTriggerTraceReport,
   parseFeedbackTraceReport,
+  parseDeviceIdentityReport,
   parseStatusReport,
   readReportProtocolVersion,
   SHORTCUT_EVENT,
@@ -116,7 +117,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.18';
+const BUNDLED_FIRMWARE_VERSION = '1.6.19';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -1221,6 +1222,8 @@ export class BridgeService extends EventEmitter {
   // Multi-bridge: latest device census and its refresh clock.
   private bridgeCensus: BridgeCensus | null = null;
   private lastBridgeCensusAt = 0;
+  // Stable identity of the currently connected bridge (firmware 1.6.19+).
+  private connectedBridgeUniqueId: string | null = null;
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hostPersonaTransitionPollTimer: NodeJS.Timeout | null = null;
@@ -3632,6 +3635,7 @@ export class BridgeService extends EventEmitter {
             retryTimeoutMs: this.isHostPersonaTransitionActive() ? HOST_PERSONA_TRANSITION_OPEN_RETRY_MS : 0
           });
         }
+        await this.readBridgeIdentity();
         this.syncAudioHelperBridgeTarget();
         const openedDevice = this.device;
         this.device.on('error', (error: Error) => this.publishError(error));
@@ -3952,6 +3956,7 @@ export class BridgeService extends EventEmitter {
     } catch {
       // Census is best-effort; keep the previous one.
     }
+    this.recordBridgeIdentityAssociation();
     this.syncAudioHelperBridgeTarget();
   }
 
@@ -3973,21 +3978,92 @@ export class BridgeService extends EventEmitter {
     });
   }
 
+  private async readBridgeIdentity(): Promise<void> {
+    this.connectedBridgeUniqueId = null;
+    if (!this.device) {
+      return;
+    }
+    try {
+      const report = await this.device.getFeatureReport(REPORT_ID.DEVICE_IDENTITY, REPORT_LENGTH);
+      this.connectedBridgeUniqueId = parseDeviceIdentityReport(report);
+    } catch {
+      // Firmware predates the identity report; the bridge stays unnamed.
+    }
+    this.recordBridgeIdentityAssociation();
+  }
+
+  // Remember which physical container the connected bridge's stable id lives
+  // in, so unconnected bridges can still be shown by name in the selector.
+  private recordBridgeIdentityAssociation(): void {
+    const uniqueId = this.connectedBridgeUniqueId;
+    if (!uniqueId || !this.device) {
+      return;
+    }
+    const container = this.bridgeCensus?.bridges.find((bridge) =>
+      BridgeService.bridgePathsEqual(bridge.path, this.device?.path ?? null))?.containerId ?? null;
+    if (!container) {
+      return;
+    }
+    const identities = this.settingsStore.get().bridgeIdentities;
+    const existing = identities[uniqueId];
+    if (existing?.containerId === container) {
+      return;
+    }
+    this.snapshot.settings = this.settingsStore.update({
+      bridgeIdentities: {
+        ...identities,
+        [uniqueId]: { label: existing?.label ?? null, containerId: container }
+      }
+    });
+  }
+
+  async setBridgeLabel(uniqueId: string, label: string | null): Promise<BridgeSnapshot> {
+    const identities = this.settingsStore.get().bridgeIdentities;
+    const trimmed = label?.trim().slice(0, 32) ?? null;
+    this.snapshot.settings = this.settingsStore.update({
+      bridgeIdentities: {
+        ...identities,
+        [uniqueId]: {
+          label: trimmed && trimmed.length > 0 ? trimmed : null,
+          containerId: identities[uniqueId]?.containerId ?? null
+        }
+      }
+    });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   private bridgeDevicesSnapshot(): BridgeDeviceCensus | null {
     if (!this.bridgeCensus) {
       return null;
     }
     const selectedPath = this.settingsStore.get().selectedBridgePath;
     const activePath = this.device?.path ?? null;
+    const identities = this.settingsStore.get().bridgeIdentities;
+    const uniqueIdForBridge = (bridgePath: string, containerId: string | null): string | null => {
+      if (BridgeService.bridgePathsEqual(bridgePath, activePath) && this.connectedBridgeUniqueId) {
+        return this.connectedBridgeUniqueId;
+      }
+      if (!containerId) {
+        return null;
+      }
+      return Object.entries(identities)
+        .find(([, record]) => record.containerId === containerId)?.[0] ?? null;
+    };
     return {
-      bridges: this.bridgeCensus.bridges.map((bridge) => ({
-        path: bridge.path,
-        containerId: bridge.containerId,
-        selected: selectedPath
-          ? BridgeService.bridgePathsEqual(bridge.path, selectedPath)
-          : BridgeService.bridgePathsEqual(bridge.path, activePath),
-        connected: BridgeService.bridgePathsEqual(bridge.path, activePath)
-      })),
+      bridges: this.bridgeCensus.bridges.map((bridge) => {
+        const uniqueId = uniqueIdForBridge(bridge.path, bridge.containerId);
+        return {
+          path: bridge.path,
+          containerId: bridge.containerId,
+          selected: selectedPath
+            ? BridgeService.bridgePathsEqual(bridge.path, selectedPath)
+            : BridgeService.bridgePathsEqual(bridge.path, activePath),
+          connected: BridgeService.bridgePathsEqual(bridge.path, activePath),
+          uniqueId,
+          name: uniqueId ? identities[uniqueId]?.label ?? null : null
+        };
+      }),
       directControllers: this.bridgeCensus.hidDevices
         .filter((device) => !device.isBridge)
         .map((device) => ({
@@ -4023,6 +4099,7 @@ export class BridgeService extends EventEmitter {
   private closeDevice(): void {
     const device = this.device;
     this.device = null;
+    this.connectedBridgeUniqueId = null;
     this.syncAudioHelperBridgeTarget();
     if (device) {
       try {

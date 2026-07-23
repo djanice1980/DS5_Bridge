@@ -50,6 +50,8 @@ export interface CompanionSettings {
   // Multi-bridge: companion interface path of the bridge this app manages;
   // null = first available.
   selectedBridgePath: string | null;
+  // Stable bridge identities: unique board id -> label + last-seen container.
+  bridgeIdentities: Record<string, BridgeIdentityRecord>;
   micVolumePercent: number;
   micMuted: boolean;
   audioReactiveHapticsEnabled: boolean;
@@ -167,12 +169,21 @@ export interface BridgeDeviceInfo {
   containerId: string | null;
   selected: boolean;
   connected: boolean;
+  // Stable identity (firmware 1.6.19+) and its user-assigned name, resolved
+  // via the cached uniqueId<->container association.
+  uniqueId: string | null;
+  name: string | null;
 }
 
 export interface DirectControllerInfo {
   path: string;
   product: string | null;
   productId: number;
+}
+
+export interface BridgeIdentityRecord {
+  label: string | null;
+  containerId: string | null;
 }
 
 export interface BridgeDeviceCensus {
