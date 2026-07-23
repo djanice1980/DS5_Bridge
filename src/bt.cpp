@@ -1490,6 +1490,19 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 bd_addr_copy(current_device_addr, addr);
                 clear_outbound_inquiry_target();
                 mark_acl_connection_pending();
+                // A controller that connects INBOUND while a button-armed
+                // pairing window is open is re-pairing (it forgot us after
+                // bonding elsewhere and wants fresh SSP). Any stored link key
+                // for it is stale -- drop it so LINK_KEY_REQUEST forces fresh
+                // SSP instead of offering a dead key (dead-key auth fails,
+                // disconnects, and reboots before the drop can persist -- the
+                // exact "can't re-pair to the original Pico" failure). This
+                // mirrors the outbound inquiry-found drop; the pairing-window
+                // gate keeps normal bonded reconnects using their valid key.
+                if (pairing_window_active(time_us_32())) {
+                    bt_note_pairing_event(2, 0); // inbound during pairing window -> drop stale key
+                    gap_drop_link_key_for_bd_addr(addr);
+                }
                 inquiry_active = false;
                 gap_inquiry_stop();
                 HCI_SEND_CMD_LOGGED(&hci_accept_connection_request, addr, 0x01);
@@ -1531,9 +1544,13 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 DS5_LOG("[HCI] Disconnected reason=0x%02X while USB host suspended; keeping USB on bus\n", reason);
                 break;
             }
+#ifdef DS5_PAIRING_DIAG
+            DS5_LOG("[HCI] DIAG: disconnect reason=0x%02X, NOT rebooting (preserve pairing breadcrumbs)\n", reason);
+#else
             DS5_LOG("[HCI] Disconnected reason=0x%02X, power-cycle CYW43 then reboot Pico\n", reason);
             power_down_cyw43_for_reboot();
             watchdog_reboot(0, 0, CONTROLLER_DISCONNECT_REBOOT_DELAY_MS);
+#endif
             break;
         }
 

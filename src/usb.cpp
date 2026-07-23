@@ -161,6 +161,15 @@ static void usb_connect_controller_transport(uint32_t now) {
     tud_connect();
 }
 
+#ifdef DS5_PAIRING_DIAG
+// Diagnostic-only: attach USB at boot regardless of controller state so the
+// companion interface (and DEVICE_IDENTITY pairing breadcrumbs) can be read
+// even when no controller is paired.
+void usb_diag_force_connect() {
+    usb_connect_controller_transport(time_us_32());
+}
+#endif
+
 uint8_t usb_hid_polling_rate_mode() {
     return usb_hid_polling_rate;
 }

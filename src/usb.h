@@ -21,6 +21,9 @@ extern uint32_t usb_host_volume_set_count[3];
 extern float usb_host_speaker_gain; // Host UAC speaker volume as linear gain.
 
 void usb_device_stack_init_disconnected();
+#ifdef DS5_PAIRING_DIAG
+void usb_diag_force_connect();
+#endif
 uint8_t usb_hid_polling_rate_mode();
 bool usb_set_hid_polling_rate_mode(uint8_t mode);
 void usb_request_reconnect();

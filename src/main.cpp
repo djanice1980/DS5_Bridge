@@ -583,6 +583,10 @@ int main() {
 
     audio_init();
 
+#ifdef DS5_PAIRING_DIAG
+    usb_diag_force_connect();
+#endif
+
     watchdog_enable(1000, true);
 
     while (1) {

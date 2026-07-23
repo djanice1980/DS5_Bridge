@@ -217,8 +217,17 @@ if(DS5_ENABLE_FEEDBACK_TRACE_REPORTS)
     )
 endif()
 
+# Pairing diagnostics build: attach USB from boot (so the companion interface
+# and DEVICE_IDENTITY breadcrumbs are readable even with no controller paired)
+# and skip the reboot-on-disconnect (so the in-RAM pairing-event ring survives
+# a failed pairing for readout). Never ship this.
+option(DS5_PAIRING_DIAG "Diagnostic build for pairing failures (USB up at boot, no reboot on disconnect)" OFF)
+if(DS5_PAIRING_DIAG)
+    target_compile_definitions(ds5-bridge PRIVATE DS5_PAIRING_DIAG=1)
+endif()
+
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "1.6.21")
+pico_set_program_version(ds5-bridge "1.6.22")
 
 if(DS5_ENABLE_FIRMWARE_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)
