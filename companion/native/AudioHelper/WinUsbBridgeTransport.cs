@@ -13,6 +13,14 @@ sealed class WinUsbBridgeTransport : IDisposable
     private static readonly Guid DeviceInterfaceGuid = new("E4C8B2A9-87F5-4C4C-9E52-2B4C1B8B4F62");
     private static readonly Guid LegacySharedDeviceInterfaceGuid = new("D5B7C5F4-8A68-4A86-9E31-1E5FA7B1D5B0");
 
+    // Exposed so BridgeDeviceIdentity can resolve the physical bridge's
+    // container ID without opening the (possibly busy) interface.
+    internal static readonly Guid[] BridgeDeviceInterfaceGuids =
+    [
+        new("E4C8B2A9-87F5-4C4C-9E52-2B4C1B8B4F62"),
+        new("D5B7C5F4-8A68-4A86-9E31-1E5FA7B1D5B0")
+    ];
+
     private readonly SafeFileHandle deviceHandle;
     private readonly IntPtr winUsbHandle;
     private readonly byte outPipeId;

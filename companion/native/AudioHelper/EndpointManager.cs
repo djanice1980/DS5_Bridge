@@ -168,9 +168,17 @@ sealed class EndpointManager
 
     public static MMDevice? FindKnownBridgeEndpoint(IEnumerable<MMDevice> devices)
     {
+        var deviceArray = devices as MMDevice[] ?? devices.ToArray();
+
+        var byContainer = FindBridgeEndpointByContainerId(deviceArray);
+        if (byContainer is not null)
+        {
+            return byContainer;
+        }
+
         foreach (var name in BridgeEndpointAliases)
         {
-            var match = devices.FirstOrDefault(device =>
+            var match = deviceArray.FirstOrDefault(device =>
                 EndpointNameMatchesAlias(device.FriendlyName, name));
             if (match is not null)
             {
@@ -181,17 +189,91 @@ sealed class EndpointManager
         return null;
     }
 
+    // Container-ID matching: the audio endpoint of the PHYSICAL bridge device
+    // shares its container ID with the bridge's companion WinUSB interface --
+    // the one interface a real DualSense does not have. This disambiguates the
+    // bridge from an identically-named controller plugged straight into the PC
+    // (name-alias selection picked whichever twin enumerated first; observed as
+    // the Haptic test firing on a USB-connected DualSense instead of the
+    // bridge). Falls back to name aliases when no container match is found
+    // (bridge absent, or property queries unavailable).
+    private static MMDevice? FindBridgeEndpointByContainerId(MMDevice[] devices)
+    {
+        HashSet<Guid> bridgeContainers;
+        try
+        {
+            bridgeContainers = BridgeDeviceIdentity.GetBridgeContainerIds();
+        }
+        catch
+        {
+            return null;
+        }
+        if (bridgeContainers.Count == 0)
+        {
+            return null;
+        }
+
+        foreach (var device in devices)
+        {
+            try
+            {
+                if (BridgeDeviceIdentity.TryGetEndpointContainerId(device, out var container)
+                    && bridgeContainers.Contains(container))
+                {
+                    Console.Error.WriteLine(
+                        $"status: bridge-endpoint-matched-by-container '{device.FriendlyName}'");
+                    return device;
+                }
+            }
+            catch
+            {
+                // Ignore per-endpoint property failures; other endpoints and
+                // the alias fallback still apply.
+            }
+        }
+
+        return null;
+    }
+
     public static void ListDevices()
     {
+        HashSet<Guid> bridgeContainers = [];
+        try
+        {
+            bridgeContainers = BridgeDeviceIdentity.GetBridgeContainerIds();
+        }
+        catch
+        {
+            // Diagnostics only; listing continues without container data.
+        }
+        Console.Error.WriteLine(
+            $"bridge-containers: {(bridgeContainers.Count == 0 ? "(none found)" : string.Join(", ", bridgeContainers))}");
+
         using var enumerator = new MMDeviceEnumerator();
         foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
         {
-            Console.Error.WriteLine($"render-device: {device.FriendlyName}");
+            Console.Error.WriteLine($"render-device: {device.FriendlyName}{DescribeEndpointContainer(device, bridgeContainers)}");
         }
         foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
         {
-            Console.Error.WriteLine($"capture-device: {device.FriendlyName}");
+            Console.Error.WriteLine($"capture-device: {device.FriendlyName}{DescribeEndpointContainer(device, bridgeContainers)}");
         }
+    }
+
+    private static string DescribeEndpointContainer(MMDevice device, HashSet<Guid> bridgeContainers)
+    {
+        try
+        {
+            if (BridgeDeviceIdentity.TryGetEndpointContainerId(device, out var container))
+            {
+                var isBridge = bridgeContainers.Contains(container) ? " [BRIDGE]" : "";
+                return $" container={container}{isBridge}";
+            }
+        }
+        catch
+        {
+        }
+        return " container=?";
     }
 
     private static MMDevice SelectNamedEndpoint(MMDevice[] devices, string deviceName, string role)
@@ -314,6 +396,14 @@ sealed class EndpointManager
 
     private static MMDevice? FindKnownBridgeEndpointForPersona(MMDevice[] devices, string? hostPersonaMode)
     {
+        // The physical-device (container ID) match supersedes name aliases:
+        // whatever persona the bridge is presenting, the bridge is the bridge.
+        var byContainer = FindBridgeEndpointByContainerId(devices);
+        if (byContainer is not null)
+        {
+            return byContainer;
+        }
+
         foreach (var name in BridgeEndpointAliasesForPersona(hostPersonaMode))
         {
             var match = devices.FirstOrDefault(device =>
