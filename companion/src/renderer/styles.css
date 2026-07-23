@@ -7719,8 +7719,14 @@ input[type="color"]::-webkit-color-swatch {
 .bridge-device-census {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 2px 2px 6px;
+  gap: 8px;
+  padding: 6px 2px 4px;
+  margin-bottom: 16px;
+}
+
+/* Breathing room between the device box / census and the Controls label. */
+.bridge-device-census + .sidebar-section-label {
+  margin-top: 4px;
 }
 
 .bridge-device-select {
