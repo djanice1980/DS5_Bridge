@@ -56,7 +56,8 @@ const winUsbTransportMock = vi.hoisted(() => ({
 
 const audioHelperMock = vi.hoisted(() => ({
   playBridgeHapticsTestPattern: vi.fn(async () => undefined),
-  playBridgeSpeakerTestTone: vi.fn(async () => undefined)
+  playBridgeSpeakerTestTone: vi.fn(async () => undefined),
+  listBridges: vi.fn(async () => ({ bridges: [], hidDevices: [] }))
 }));
 
 vi.mock('node-hid', () => ({
@@ -77,7 +78,8 @@ vi.mock('./audio-helper', async (importOriginal) => {
   return {
     ...actual,
     playBridgeHapticsTestPattern: audioHelperMock.playBridgeHapticsTestPattern,
-    playBridgeSpeakerTestTone: audioHelperMock.playBridgeSpeakerTestTone
+    playBridgeSpeakerTestTone: audioHelperMock.playBridgeSpeakerTestTone,
+    listBridges: audioHelperMock.listBridges
   };
 });
 
@@ -695,6 +697,31 @@ describe('BridgeService', () => {
       currentVersion: '1.6.2',
       availableVersion: '1.6.18'
     });
+  });
+
+  it('persists the selected bridge path and reports the device census', async () => {
+    const service = serviceFixture();
+    const bridgePath = String.raw`\\?\usb#vid_054c&pid_0ce6&mi_05#7&aaaa&1&0005#{e4c8b2a9-87f5-4c4c-9e52-2b4c1b8b4f62}`;
+    audioHelperMock.listBridges.mockResolvedValueOnce({
+      bridges: [{ path: bridgePath, containerId: '11111111-2222-3333-4444-555555555555' }],
+      hidDevices: [
+        {
+          path: String.raw`\\?\hid#direct`,
+          productId: 0x0ce6,
+          product: 'DualSense Wireless Controller',
+          containerId: '99999999-8888-7777-6666-555555555555',
+          isBridge: false
+        }
+      ]
+    });
+
+    const snapshot = await service.selectBridge(bridgePath);
+
+    expect(snapshot.settings.selectedBridgePath).toBe(bridgePath);
+    expect(snapshot.bridgeDevices?.selectedBridgePath).toBe(bridgePath);
+    expect(snapshot.bridgeDevices?.bridges[0]?.selected).toBe(true);
+    expect(snapshot.bridgeDevices?.directControllers).toHaveLength(1);
+    expect(snapshot.bridgeDevices?.directControllers[0]?.product).toBe('DualSense Wireless Controller');
   });
 
   it('does not surface an available update for the bundled bridge firmware', async () => {

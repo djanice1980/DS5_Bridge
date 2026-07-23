@@ -3879,6 +3879,18 @@ export function App() {
     : connected && controllerConnected
     ? `Battery ${batteryPercentLabel}`
     : 'Battery unavailable';
+  // Multi-bridge census (selector shown only when there is a choice to make
+  // or a directly-attached controller worth flagging).
+  const bridgeDevices = snapshot?.bridgeDevices ?? null;
+  const bridgeSelectOptions: Array<[string, string]> = (bridgeDevices?.bridges ?? []).map((bridge, index) => [
+    `Bridge ${index + 1}${bridge.connected ? ' (active)' : ''}`,
+    bridge.path
+  ]);
+  const activeBridgeSelectValue = bridgeDevices?.bridges.find((bridge) => bridge.selected)?.path
+    ?? bridgeDevices?.bridges.find((bridge) => bridge.connected)?.path
+    ?? '';
+  const directControllers = bridgeDevices?.directControllers ?? [];
+  const showBridgeDevices = (bridgeDevices?.bridges.length ?? 0) > 1 || directControllers.length > 0;
   const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
     .replace(' / Real-time', '')
     ?? '--';
@@ -6389,6 +6401,31 @@ export function App() {
               </div>
             </div>
           </div>
+          {showBridgeDevices && (
+            <>
+              <div className="sidebar-section-label">Devices</div>
+              <div className="bridge-device-census">
+                {bridgeSelectOptions.length > 1 && (
+                  <CustomSelect
+                    value={activeBridgeSelectValue}
+                    options={bridgeSelectOptions}
+                    onChange={(path) => {
+                      void runQuietAction(() => window.bridge.selectBridge(String(path)));
+                    }}
+                    ariaLabel="Managed bridge"
+                    className="bridge-device-select"
+                    closeOnSelect={true}
+                    disabled={pendingAction !== null}
+                  />
+                )}
+                {directControllers.map((controller) => (
+                  <div key={controller.path} className="bridge-direct-controller" title={controller.path}>
+                    {(controller.product ?? 'DualSense')} — USB direct
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           <div className="sidebar-section-label">Controls</div>
           <div className="sidebar-controls">
             <div className="control-tabs" role="tablist" aria-label="Controls">

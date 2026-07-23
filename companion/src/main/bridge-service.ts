@@ -74,7 +74,8 @@ import type {
   HidDeviceSummary,
   UiScalePercent,
   UiThemePreset,
-  WindowsDeviceCleanupResult
+  WindowsDeviceCleanupResult,
+  BridgeDeviceCensus
 } from '../shared/types';
 import {
   AudioHapticsSessionMonitor,
@@ -89,7 +90,10 @@ import {
   stopVirtualKeyboardEngine,
   virtualKeyboardEngine,
   type DefaultRenderEndpointStatus,
-  type SystemAudioHapticsConfig
+  type SystemAudioHapticsConfig,
+  listBridges,
+  setAudioHelperBridgeTarget,
+  type BridgeCensus
 } from './audio-helper';
 import { CompanionDebugConfig } from './debug-config';
 import { HidDiscoveryClient } from './hid-discovery-client';
@@ -103,6 +107,7 @@ const AUDIO_STATUS_READ_INTERVAL_MS = 500;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
 const TRIGGER_TRACE_READ_INTERVAL_MS = 250;
 const FEEDBACK_TRACE_READ_INTERVAL_MS = 250;
+const BRIDGE_CENSUS_INTERVAL_MS = 10000;
 const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = CompanionDebugConfig.audioDebugDiagnosticsEnabled;
 const TRIGGER_TRACE_DIAGNOSTICS_ENABLED = CompanionDebugConfig.triggerTraceDiagnosticsEnabled;
 const FEEDBACK_TRACE_DIAGNOSTICS_ENABLED = CompanionDebugConfig.feedbackTraceDiagnosticsEnabled;
@@ -1213,6 +1218,9 @@ async function runElevatedWindowsDeviceCleanup(scriptPath: string, logPath: stri
 
 export class BridgeService extends EventEmitter {
   private device: WinUsbCompanionTransport | null = null;
+  // Multi-bridge: latest device census and its refresh clock.
+  private bridgeCensus: BridgeCensus | null = null;
+  private lastBridgeCensusAt = 0;
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hostPersonaTransitionPollTimer: NodeJS.Timeout | null = null;
@@ -1288,7 +1296,8 @@ export class BridgeService extends EventEmitter {
       status: null,
       settings: this.settingsStore.get(),
       diagnostics: this.withAudioDebugDiagnostics(emptyDiagnostics([])),
-      personaTransition: null
+      personaTransition: null,
+      bridgeDevices: null
     };
     this.systemAudioHapticsEngine.on('error', (error: Error) => {
       this.appendAudioDebugLines([`[SystemHaptics] error: ${error.message}`]);
@@ -3432,6 +3441,7 @@ export class BridgeService extends EventEmitter {
     if (now < this.pollPausedUntil) {
       return;
     }
+    await this.refreshBridgeCensusIfDue();
     const currentSettings = this.settingsStore.get();
 
     const rawDevices = await this.hidDiscovery.listDevices();
@@ -3606,9 +3616,23 @@ export class BridgeService extends EventEmitter {
   private async openAndReadStatus() {
     try {
       if (!this.device) {
-        this.device = await WinUsbCompanionTransport.open({
-          retryTimeoutMs: this.isHostPersonaTransitionActive() ? HOST_PERSONA_TRANSITION_OPEN_RETRY_MS : 0
-        });
+        const preferredPath = this.settingsStore.get().selectedBridgePath ?? undefined;
+        try {
+          this.device = await WinUsbCompanionTransport.open({
+            retryTimeoutMs: this.isHostPersonaTransitionActive() ? HOST_PERSONA_TRANSITION_OPEN_RETRY_MS : 0,
+            devicePath: preferredPath
+          });
+        } catch (error) {
+          if (!preferredPath) {
+            throw error;
+          }
+          // Preferred bridge unavailable (unplugged / moved): fall back to any
+          // present bridge. The preference persists for when it returns.
+          this.device = await WinUsbCompanionTransport.open({
+            retryTimeoutMs: this.isHostPersonaTransitionActive() ? HOST_PERSONA_TRANSITION_OPEN_RETRY_MS : 0
+          });
+        }
+        this.syncAudioHelperBridgeTarget();
         const openedDevice = this.device;
         this.device.on('error', (error: Error) => this.publishError(error));
         this.device.on('close', () => {
@@ -3907,9 +3931,99 @@ export class BridgeService extends EventEmitter {
     this.emitSnapshot();
   }
 
+  // ---- Multi-bridge device census & selection -------------------------------
+
+  private static bridgePathsEqual(a: string | null | undefined, b: string | null | undefined): boolean {
+    return !!a && !!b && a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0;
+  }
+
+  private async refreshBridgeCensusIfDue(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastBridgeCensusAt < BRIDGE_CENSUS_INTERVAL_MS) {
+      return;
+    }
+    await this.refreshBridgeCensus();
+  }
+
+  private async refreshBridgeCensus(): Promise<void> {
+    this.lastBridgeCensusAt = Date.now();
+    try {
+      this.bridgeCensus = await listBridges();
+    } catch {
+      // Census is best-effort; keep the previous one.
+    }
+    this.syncAudioHelperBridgeTarget();
+  }
+
+  // The bridge the app is (or will be) acting on: the open transport's path,
+  // else the persisted preference.
+  private activeBridgePath(): string | null {
+    return this.device?.path ?? this.settingsStore.get().selectedBridgePath ?? null;
+  }
+
+  private syncAudioHelperBridgeTarget(): void {
+    const activePath = this.activeBridgePath();
+    const container = activePath
+      ? this.bridgeCensus?.bridges.find((bridge) =>
+          BridgeService.bridgePathsEqual(bridge.path, activePath))?.containerId ?? undefined
+      : undefined;
+    setAudioHelperBridgeTarget({
+      devicePath: activePath ?? undefined,
+      containerId: container
+    });
+  }
+
+  private bridgeDevicesSnapshot(): BridgeDeviceCensus | null {
+    if (!this.bridgeCensus) {
+      return null;
+    }
+    const selectedPath = this.settingsStore.get().selectedBridgePath;
+    const activePath = this.device?.path ?? null;
+    return {
+      bridges: this.bridgeCensus.bridges.map((bridge) => ({
+        path: bridge.path,
+        containerId: bridge.containerId,
+        selected: selectedPath
+          ? BridgeService.bridgePathsEqual(bridge.path, selectedPath)
+          : BridgeService.bridgePathsEqual(bridge.path, activePath),
+        connected: BridgeService.bridgePathsEqual(bridge.path, activePath)
+      })),
+      directControllers: this.bridgeCensus.hidDevices
+        .filter((device) => !device.isBridge)
+        .map((device) => ({
+          path: device.path,
+          product: device.product,
+          productId: device.productId
+        })),
+      selectedBridgePath: selectedPath ?? null
+    };
+  }
+
+  async selectBridge(devicePath: string | null): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.update({
+      selectedBridgePath: devicePath
+    });
+    if (this.device && devicePath
+        && !BridgeService.bridgePathsEqual(this.device.path, devicePath)) {
+      // Switch: drop the current transport; the next poll reconnects to the
+      // newly selected bridge.
+      this.closeDevice();
+    }
+    await this.refreshBridgeCensus();
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async refreshBridgeDevices(): Promise<BridgeSnapshot> {
+    await this.refreshBridgeCensus();
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   private closeDevice(): void {
     const device = this.device;
     this.device = null;
+    this.syncAudioHelperBridgeTarget();
     if (device) {
       try {
         device.removeAllListeners();
@@ -3958,7 +4072,8 @@ export class BridgeService extends EventEmitter {
       : this.hostPersonaTransitionSnapshot();
     this.snapshot = {
       ...this.snapshot,
-      personaTransition
+      personaTransition,
+      bridgeDevices: this.bridgeDevicesSnapshot()
     };
     const signature = JSON.stringify({
       state: this.snapshot.state,

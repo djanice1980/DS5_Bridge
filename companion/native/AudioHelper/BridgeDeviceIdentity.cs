@@ -47,6 +47,37 @@ static class BridgeDeviceIdentity
         return containers;
     }
 
+    public sealed record BridgeInfo(string DevicePath, Guid ContainerId);
+
+    // Enumerates every present bridge's companion interface with its physical
+    // container ID. Does not open any device.
+    public static List<BridgeInfo> ListBridges()
+    {
+        var bridges = new List<BridgeInfo>();
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var interfaceGuid in WinUsbBridgeTransport.BridgeDeviceInterfaceGuids)
+        {
+            foreach (var path in NativeMethods.EnumerateDeviceInterfacePaths(interfaceGuid))
+            {
+                if (!path.Contains("mi_05", StringComparison.OrdinalIgnoreCase)
+                    || !seenPaths.Add(path))
+                {
+                    continue;
+                }
+                TryGetInterfaceContainerId(path, out var container);
+                bridges.Add(new BridgeInfo(path, container));
+            }
+        }
+        return bridges;
+    }
+
+    // Container ID for an arbitrary device interface path (e.g. a HID
+    // interface of a directly-attached DualSense).
+    public static bool TryGetContainerIdForInterfacePath(string interfacePath, out Guid containerId)
+    {
+        return TryGetInterfaceContainerId(interfacePath, out containerId);
+    }
+
     public static bool TryGetEndpointContainerId(MMDevice device, out Guid containerId)
     {
         // Audio endpoints are software devnodes under SWD\MMDEVAPI whose

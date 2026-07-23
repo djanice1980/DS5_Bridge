@@ -47,6 +47,9 @@ export interface CompanionSettings {
   speakerEnabled: boolean;
   speakerVolumePercent: number;
   speakerGainLevel: number;
+  // Multi-bridge: companion interface path of the bridge this app manages;
+  // null = first available.
+  selectedBridgePath: string | null;
   micVolumePercent: number;
   micMuted: boolean;
   audioReactiveHapticsEnabled: boolean;
@@ -154,6 +157,28 @@ export interface BridgeSnapshot {
   settings: CompanionSettings;
   diagnostics: BridgeDiagnostics;
   personaTransition?: HostPersonaTransition | null;
+  bridgeDevices?: BridgeDeviceCensus | null;
+}
+
+// Multi-bridge device census: every present bridge plus DualSense-family
+// controllers attached directly to the PC (shown read-only in the UI).
+export interface BridgeDeviceInfo {
+  path: string;
+  containerId: string | null;
+  selected: boolean;
+  connected: boolean;
+}
+
+export interface DirectControllerInfo {
+  path: string;
+  product: string | null;
+  productId: number;
+}
+
+export interface BridgeDeviceCensus {
+  bridges: BridgeDeviceInfo[];
+  directControllers: DirectControllerInfo[];
+  selectedBridgePath: string | null;
 }
 
 export interface HostPersonaTransition {

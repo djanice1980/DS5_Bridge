@@ -7714,3 +7714,24 @@ input[type="color"]::-webkit-color-swatch {
   color: var(--danger);
 }
 
+
+/* Multi-bridge device census (sidebar) */
+.bridge-device-census {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 2px 6px;
+}
+
+.bridge-device-select {
+  width: 100%;
+}
+
+.bridge-direct-controller {
+  font-size: 12px;
+  color: var(--text-muted, #8a8f98);
+  padding: 2px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

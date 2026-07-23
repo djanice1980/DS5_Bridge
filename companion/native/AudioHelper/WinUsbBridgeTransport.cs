@@ -36,7 +36,11 @@ sealed class WinUsbBridgeTransport : IDisposable
 
     public string DevicePath { get; }
 
-    public static WinUsbBridgeTransport Open()
+    public static WinUsbBridgeTransport Open() => Open(null);
+
+    // devicePath: open that specific bridge interface (multi-bridge selection);
+    // null keeps the legacy first-found behavior.
+    public static WinUsbBridgeTransport Open(string? devicePath)
     {
         Exception? lastError = null;
         foreach (var deviceInterfaceGuid in new[] { DeviceInterfaceGuid, LegacySharedDeviceInterfaceGuid })
@@ -44,6 +48,11 @@ sealed class WinUsbBridgeTransport : IDisposable
             foreach (var path in NativeMethods.EnumerateDeviceInterfacePaths(deviceInterfaceGuid))
             {
                 if (!IsBridgeInterfacePath(path))
+                {
+                    continue;
+                }
+                if (devicePath is not null
+                    && !string.Equals(path, devicePath, StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -108,11 +117,13 @@ sealed class WinUsbBridgeTransport : IDisposable
                 : $"DS5 Bridge WinUSB interface could not be opened: {lastError.Message}");
     }
 
-    public static WinUsbBridgeTransport? TryOpen()
+    public static WinUsbBridgeTransport? TryOpen() => TryOpen(null);
+
+    public static WinUsbBridgeTransport? TryOpen(string? devicePath)
     {
         try
         {
-            return Open();
+            return Open(devicePath);
         }
         catch
         {

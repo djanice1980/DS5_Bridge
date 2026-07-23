@@ -165,6 +165,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   // compensated in the software mixer instead (see applyLinuxSpeakerCompensation),
   // so a given gain level sounds the same on Linux as on Windows.
   speakerGainLevel: 4,
+  selectedBridgePath: null,
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
   audioReactiveHapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,
@@ -932,6 +933,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     speakerGainLevel: Number.isFinite(value?.speakerGainLevel)
       ? Math.max(1, Math.min(7, Math.round(value!.speakerGainLevel!)))
       : DEFAULT_SETTINGS.speakerGainLevel,
+    selectedBridgePath: typeof value?.selectedBridgePath === 'string' && value.selectedBridgePath.length > 0
+      ? value.selectedBridgePath
+      : null,
     micVolumePercent: Number.isFinite(value?.micVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))
       : DEFAULT_SETTINGS.micVolumePercent,

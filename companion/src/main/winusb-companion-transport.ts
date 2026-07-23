@@ -36,6 +36,9 @@ type PendingRequest = {
 type OpenOptions = {
   retryTimeoutMs?: number;
   retryDelayMs?: number;
+  // Multi-bridge: open this specific companion interface path instead of the
+  // first bridge the helper finds.
+  devicePath?: string;
 };
 
 const REQUEST_TIMEOUT_MS = 1500;
@@ -77,7 +80,7 @@ export class WinUsbCompanionTransport extends EventEmitter {
 
     while (true) {
       try {
-        return await WinUsbCompanionTransport.openOnce();
+        return await WinUsbCompanionTransport.openOnce(options.devicePath);
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
         const elapsedMs = Date.now() - startedAt;
@@ -89,8 +92,12 @@ export class WinUsbCompanionTransport extends EventEmitter {
     }
   }
 
-  private static async openOnce(): Promise<WinUsbCompanionTransport> {
-    const helper = spawn(resolveAudioHelperPath(), ['--companion-transport'], {
+  private static async openOnce(devicePath?: string): Promise<WinUsbCompanionTransport> {
+    const args = ['--companion-transport'];
+    if (devicePath) {
+      args.push('--device-path', devicePath);
+    }
+    const helper = spawn(resolveAudioHelperPath(), args, {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });

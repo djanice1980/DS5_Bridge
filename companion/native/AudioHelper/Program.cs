@@ -34,9 +34,13 @@ if (!string.IsNullOrWhiteSpace(options.ResolveIconDataUrlPath))
 }
 if (options.CompanionTransportServer)
 {
-    Environment.ExitCode = await CompanionTransportServer.RunAsync();
+    Environment.ExitCode = await CompanionTransportServer.RunAsync(options.CompanionDevicePath);
     return;
 }
+// Multi-bridge: when the app specifies which physical bridge it manages,
+// every audio endpoint selection in this process targets exactly that device.
+EndpointManager.TargetBridgeContainer = options.BridgeContainer;
+
 if (options.PlayTestTone)
 {
     AudioHelperTestTone.Play(options);
@@ -56,6 +60,11 @@ if (options.MonitorAudioSessions)
 if (options.ListDevices)
 {
     EndpointManager.ListDevices();
+    return;
+}
+if (options.ListBridges)
+{
+    BridgeCensus.PrintJson();
     return;
 }
 if (options.DefaultRenderStatus)
@@ -171,7 +180,7 @@ static class AudioHelperTestHaptics
 
     public static void Play(HelperOptions options)
     {
-        if (TryPlayViaBridgeFrames(options.HapticsGainPercent))
+        if (TryPlayViaBridgeFrames(options.HapticsGainPercent, options.CompanionDevicePath))
         {
             return;
         }
@@ -179,9 +188,9 @@ static class AudioHelperTestHaptics
         PlayViaRenderEndpoint(options);
     }
 
-    private static bool TryPlayViaBridgeFrames(int hapticsGainPercent)
+    private static bool TryPlayViaBridgeFrames(int hapticsGainPercent, string? devicePath)
     {
-        using var transport = WinUsbBridgeTransport.TryOpen();
+        using var transport = WinUsbBridgeTransport.TryOpen(devicePath);
         if (transport is null)
         {
             return false;
@@ -2760,6 +2769,12 @@ sealed record HelperOptions(
     int RawCaptureDumpSeconds,
     bool CaptureDumpOnly)
 {
+    // Multi-bridge additions (init properties to avoid growing the
+    // positional list): --list-bridges, --device-path, --bridge-container.
+    public bool ListBridges { get; init; }
+    public string? CompanionDevicePath { get; init; }
+    public Guid? BridgeContainer { get; init; }
+
     public string SourceArgument => Source switch
     {
         AudioHelperSource.RawPcmCapture => "raw-pcm-capture",
@@ -2788,6 +2803,9 @@ sealed record HelperOptions(
         var monitorAudioSessions = false;
         string? resolveIconDataUrlPath = null;
         var companionTransportServer = false;
+        var listBridges = false;
+        string? companionDevicePath = null;
+        Guid? bridgeContainer = null;
         var micKeepaliveOnly = false;
         int? appProcessId = null;
         string? appProcessPath = null;
@@ -2952,6 +2970,18 @@ sealed record HelperOptions(
                 case "--capture-dump-only":
                     captureDumpOnly = true;
                     break;
+                case "--list-bridges":
+                    listBridges = true;
+                    break;
+                case "--device-path" when index + 1 < args.Length:
+                    companionDevicePath = args[++index];
+                    break;
+                case "--bridge-container" when index + 1 < args.Length:
+                    if (Guid.TryParse(args[++index], out var parsedContainer))
+                    {
+                        bridgeContainer = parsedContainer;
+                    }
+                    break;
             }
         }
 
@@ -2993,7 +3023,12 @@ sealed record HelperOptions(
             frameDumpFrameLimit,
             rawCaptureDumpPath,
             rawCaptureDumpSeconds,
-            captureDumpOnly);
+            captureDumpOnly)
+        {
+            ListBridges = listBridges,
+            CompanionDevicePath = companionDevicePath,
+            BridgeContainer = bridgeContainer
+        };
     }
 
     private static AudioHelperSource ParseSource(string value)

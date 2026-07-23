@@ -166,6 +166,12 @@ sealed class EndpointManager
         return SelectCaptureEndpoint(enumerator, deviceName);
     }
 
+    // When set (from --bridge-container), endpoint selection targets exactly
+    // this physical bridge. Selection then never falls back to name aliases or
+    // any-bridge container matching: touching a DIFFERENT device than the one
+    // the user selected would be worse than failing.
+    public static Guid? TargetBridgeContainer { get; set; }
+
     public static MMDevice? FindKnownBridgeEndpoint(IEnumerable<MMDevice> devices)
     {
         var deviceArray = devices as MMDevice[] ?? devices.ToArray();
@@ -174,6 +180,10 @@ sealed class EndpointManager
         if (byContainer is not null)
         {
             return byContainer;
+        }
+        if (TargetBridgeContainer is not null)
+        {
+            return null;
         }
 
         foreach (var name in BridgeEndpointAliases)
@@ -200,13 +210,20 @@ sealed class EndpointManager
     private static MMDevice? FindBridgeEndpointByContainerId(MMDevice[] devices)
     {
         HashSet<Guid> bridgeContainers;
-        try
+        if (TargetBridgeContainer is { } target)
         {
-            bridgeContainers = BridgeDeviceIdentity.GetBridgeContainerIds();
+            bridgeContainers = [target];
         }
-        catch
+        else
         {
-            return null;
+            try
+            {
+                bridgeContainers = BridgeDeviceIdentity.GetBridgeContainerIds();
+            }
+            catch
+            {
+                return null;
+            }
         }
         if (bridgeContainers.Count == 0)
         {
@@ -402,6 +419,10 @@ sealed class EndpointManager
         if (byContainer is not null)
         {
             return byContainer;
+        }
+        if (TargetBridgeContainer is not null)
+        {
+            return null;
         }
 
         foreach (var name in BridgeEndpointAliasesForPersona(hostPersonaMode))
