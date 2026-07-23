@@ -36,6 +36,8 @@
   <ItemGroup Condition="'$(IsWindowsTarget)' != 'True'">
     <Compile Remove="AudioSessionCatalog.cs" />
     <Compile Remove="AudioSessionMonitor.cs" />
+    <Compile Remove="BridgeCensus.cs" />
+    <Compile Remove="BridgeDeviceIdentity.cs" />
     <Compile Remove="CompanionTransportServer.cs" />
     <Compile Remove="EndpointManager.cs" />
     <Compile Remove="PackageAppMetadataResolver.cs" />
