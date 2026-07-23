@@ -55,6 +55,7 @@ static class BridgeDeviceIdentity
     {
         var bridges = new List<BridgeInfo>();
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenContainers = new HashSet<Guid>();
         foreach (var interfaceGuid in WinUsbBridgeTransport.BridgeDeviceInterfaceGuids)
         {
             foreach (var path in NativeMethods.EnumerateDeviceInterfacePaths(interfaceGuid))
@@ -65,6 +66,14 @@ static class BridgeDeviceIdentity
                     continue;
                 }
                 TryGetInterfaceContainerId(path, out var container);
+                // One physical bridge = one container. A device registering
+                // both the modern and legacy interface GUIDs yields two paths
+                // for the same hardware -- keep the first (modern GUID
+                // enumerates first).
+                if (container != Guid.Empty && !seenContainers.Add(container))
+                {
+                    continue;
+                }
                 bridges.Add(new BridgeInfo(path, container));
             }
         }

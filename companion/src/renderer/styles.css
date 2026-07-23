@@ -7731,13 +7731,21 @@ input[type="color"]::-webkit-color-swatch {
 
 .bridge-device-select {
   width: 100%;
+  font-size: 13px;
+}
+
+.bridge-device-select button,
+.bridge-device-select [role='option'] {
+  font-size: 13px;
+  padding-top: 6px;
+  padding-bottom: 6px;
 }
 
 .bridge-direct-controller {
   font-size: 12px;
+  line-height: 1.35;
   color: var(--text-muted, #8a8f98);
   padding: 2px 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
