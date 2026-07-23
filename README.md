@@ -96,6 +96,50 @@ automatically without a button press.*
 - See Bluetooth signal quality at a glance.
 - Mount, flash, or nuke Pico firmware from Bridge Settings.
 
+## Multiple controllers, multiple bridges
+
+One Pico 2 W drives one controller with **all** of its features — audio,
+haptics, adaptive triggers — because each bridge has its own dedicated
+Bluetooth link. Want four-player couch co-op with full DualSense features on
+every pad? Use **four Pico 2 Ws**. Nothing is shared or degraded: four bridges,
+four controllers, all first-class.
+
+![Four controllers, four bridges, one PC](docs/images/multi-controller-architecture.svg)
+
+### Profiles follow the controller
+
+Set a controller up once — trigger feel, haptics strength, speaker volume,
+lighting — and that profile is **bound to the controller itself**. Move that
+controller to a different Pico and its profile comes with it, automatically,
+the moment it connects. Your settings live with your controller; the person,
+not the port.
+
+<!-- TODO screenshot: save to docs/images/bridge-selector.png (System page with the DEVICES dropdown / active named bridge), then uncomment:
+![Bridge selector showing named bridges and the active controller](docs/images/bridge-selector.png) -->
+
+### Every device is identified individually
+
+Each Pico is recognized by its own hardware id (the RP2350's factory-unique
+board id), so you can name them — “Living Room”, “Desk” — and the names stick
+across reboots and USB ports. Each controller is tracked by its Bluetooth
+address. Because the app keys everything to real device identity rather than to
+a name string, **a DualSense plugged straight into the PC over USB never gets
+confused with a bridge** — tests, audio, and haptics always target the exact
+device you selected, even when several identically-named “DualSense Wireless
+Controller” audio endpoints exist side by side.
+
+<!-- TODO screenshot: save to docs/images/device-list.png (DEVICES section showing a bridge + a "DualSense Edge — USB direct" line), then uncomment:
+![Device list distinguishing bridges from a directly-connected controller](docs/images/device-list.png) -->
+
+### Wireless play while charging over USB
+
+A DualSense connected to a bridge over Bluetooth can be plugged into the PC
+with a USB cable at the same time — it keeps its wireless data link and simply
+**charges** over the cable, exactly like it does on a PS5. (The controller
+picks one transport for data; see
+[the note below](#known-behavior-controller-bridged-and-cabled-to-the-pc-at-the-same-time)
+on what to expect when you unplug things.)
+
 ## Companion App Tour
 
 The companion app is where you check the bridge, adjust the controller, and save the setup you
