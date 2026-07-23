@@ -7783,3 +7783,9 @@ input[type="color"]::-webkit-color-swatch {
   background: var(--surface-raised, #1a1e26);
   color: inherit;
 }
+
+.bridge-single-name {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 2px 4px;
+}

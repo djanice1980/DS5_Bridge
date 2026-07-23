@@ -3892,7 +3892,13 @@ export function App() {
     ?? '';
   const activeBridgeInfo = bridgeDevices?.bridges.find((bridge) => bridge.connected) ?? null;
   const directControllers = bridgeDevices?.directControllers ?? [];
-  const showBridgeDevices = (bridgeDevices?.bridges.length ?? 0) > 1 || directControllers.length > 0;
+  // Show the Devices section when there is a choice to make, something to
+  // flag, or a nameable (1.6.19+) bridge whose name should be visible even
+  // as the only bridge - renaming with one Pico used to save correctly but
+  // display nowhere.
+  const showBridgeDevices = (bridgeDevices?.bridges.length ?? 0) > 1
+    || directControllers.length > 0
+    || Boolean(activeBridgeInfo?.uniqueId);
   const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
     .replace(' / Real-time', '')
     ?? '--';
@@ -6407,6 +6413,9 @@ export function App() {
             <>
               <div className="sidebar-section-label">Devices</div>
               <div className="bridge-device-census">
+                {bridgeSelectOptions.length === 1 && (
+                  <div className="bridge-single-name">{bridgeSelectOptions[0][0]}</div>
+                )}
                 {bridgeSelectOptions.length > 1 && (
                   <CustomSelect
                     value={activeBridgeSelectValue}
