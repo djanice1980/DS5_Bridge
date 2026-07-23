@@ -1417,14 +1417,33 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hci_event_link_key_request_get_bd_addr(packet, addr);
             link_key_t link_key;
             link_key_type_t link_key_type;
-            bool link = gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
-            bt_note_pairing_event(4, link ? 1 : 0); // link-key request: 1=stored key replied, 0=negative (fresh SSP)
-            if (link) {
+            const bool have_key = gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
+            // Refuse a stored key while a button-armed pairing window is open:
+            // the controller is re-pairing (it forgot us after bonding
+            // elsewhere), so our key is stale and offering it fails auth with
+            // 0x06 "PIN or Key Missing", then loops forever. Decide here, on
+            // the link-key event's OWN address -- the proactive drop at
+            // inquiry-complete used current_device_addr and was NOT clearing
+            // what this event finds (the failure the breadcrumbs caught:
+            // "replied STORED key" -> auth 0x06). Forcing a negative reply is
+            // independent of why the earlier drop missed; also drop the stale
+            // key here so it does not linger for the next attempt.
+            const bool repairing = pairing_window_active(time_us_32());
+            if (have_key && !repairing) {
+                bt_note_pairing_event(4, 1); // stored key replied (normal reconnect)
                 DS5_LOG("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr),
                        (unsigned int) link_key_type);
                 HCI_SEND_CMD_LOGGED(&hci_link_key_request_reply, addr, link_key);
             } else {
-                DS5_LOG("[HCI] Link key request from %s, no key, force re-pair\n", bd_addr_to_str(addr));
+                if (have_key) {
+                    gap_drop_link_key_for_bd_addr(addr);
+                    bt_note_pairing_event(4, 2); // had stale key during re-pair -> dropped, forcing SSP
+                    DS5_LOG("[HCI] Link key request from %s during pairing window, drop stale key, force SSP\n",
+                           bd_addr_to_str(addr));
+                } else {
+                    bt_note_pairing_event(4, 0); // no key -> fresh SSP
+                    DS5_LOG("[HCI] Link key request from %s, no key, force re-pair\n", bd_addr_to_str(addr));
+                }
                 HCI_SEND_CMD_LOGGED(&hci_link_key_request_negative_reply, addr);
             }
             break;
