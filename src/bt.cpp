@@ -481,6 +481,16 @@ bool bt_is_controller_connected() {
     return hid_interrupt_ready;
 }
 
+// Identity of the connected controller (BT address) for the companion's
+// profile-follows-controller binding. Returns false when disconnected.
+bool bt_get_connected_controller_addr(uint8_t out[6]) {
+    if (!hid_interrupt_ready) {
+        return false;
+    }
+    memcpy(out, current_device_addr, 6);
+    return true;
+}
+
 uint8_t bt_controller_type() {
     return controller_type;
 }

@@ -52,6 +52,8 @@ export interface CompanionSettings {
   selectedBridgePath: string | null;
   // Stable bridge identities: unique board id -> label + last-seen container.
   bridgeIdentities: Record<string, BridgeIdentityRecord>;
+  // Profile-follows-controller: controller BT address (hex) -> profile id.
+  controllerBindings: Record<string, string>;
   micVolumePercent: number;
   micMuted: boolean;
   audioReactiveHapticsEnabled: boolean;

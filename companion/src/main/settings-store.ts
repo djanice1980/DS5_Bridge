@@ -167,6 +167,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   speakerGainLevel: 4,
   selectedBridgePath: null,
   bridgeIdentities: {},
+  controllerBindings: {},
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
   audioReactiveHapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,
@@ -938,6 +939,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       ? value.selectedBridgePath
       : null,
     bridgeIdentities: normalizeBridgeIdentities(value?.bridgeIdentities),
+    controllerBindings: normalizeControllerBindings(value?.controllerBindings),
     micVolumePercent: Number.isFinite(value?.micVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))
       : DEFAULT_SETTINGS.micVolumePercent,
@@ -1352,6 +1354,19 @@ function normalizeBridgeIdentities(value: unknown): Record<string, { label: stri
         ? entry.containerId
         : null
     };
+  }
+  return result;
+}
+
+function normalizeControllerBindings(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+  const result: Record<string, string> = {};
+  for (const [key, profileId] of Object.entries(value as Record<string, unknown>)) {
+    if (/^[0-9a-f]{12}$/.test(key) && typeof profileId === 'string' && profileId.length > 0) {
+      result[key] = profileId;
+    }
   }
   return result;
 }

@@ -117,7 +117,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.19';
+const BUNDLED_FIRMWARE_VERSION = '1.6.20';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -1224,6 +1224,8 @@ export class BridgeService extends EventEmitter {
   private lastBridgeCensusAt = 0;
   // Stable identity of the currently connected bridge (firmware 1.6.19+).
   private connectedBridgeUniqueId: string | null = null;
+  // BT address of the controller on the connected bridge (firmware 1.6.20+).
+  private connectedControllerMac: string | null = null;
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hostPersonaTransitionPollTimer: NodeJS.Timeout | null = null;
@@ -3019,8 +3021,19 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
-  async selectControllerProfile(profileId: string): Promise<BridgeSnapshot> {
+  async selectControllerProfile(
+    profileId: string,
+    options: { recordBinding?: boolean } = {}
+  ): Promise<BridgeSnapshot> {
     this.snapshot.settings = this.settingsStore.selectControllerProfile(profileId);
+    if (options.recordBinding !== false && this.connectedControllerMac) {
+      const bindings = this.settingsStore.get().controllerBindings;
+      if (bindings[this.connectedControllerMac] !== profileId) {
+        this.snapshot.settings = this.settingsStore.update({
+          controllerBindings: { ...bindings, [this.connectedControllerMac]: profileId }
+        });
+      }
+    }
     if (this.snapshot.state === 'connected') {
       await this.applyCurrentSettings(this.snapshot.settings, false);
     }
@@ -3538,6 +3551,17 @@ export class BridgeService extends EventEmitter {
     }
     const state = transition ? 'transitioning' : 'connected';
 
+    // Profile-follows-controller: on a controller connect transition, re-read
+    // the identity report (which carries the controller's BT address) and
+    // apply the bound profile.
+    const controllerJustConnected = status.controllerConnected
+      && this.snapshot.status?.controllerConnected !== true;
+    const controllerJustDisconnected = !status.controllerConnected
+      && this.snapshot.status?.controllerConnected === true;
+    if (controllerJustDisconnected) {
+      this.connectedControllerMac = null;
+    }
+
     this.snapshot = {
       state,
       message: transition ? this.hostPersonaTransitionMessage(transition) : 'Companion firmware connected',
@@ -3560,6 +3584,9 @@ export class BridgeService extends EventEmitter {
       personaTransition: transition
     };
     this.emitSnapshot();
+    if (controllerJustConnected) {
+      void this.applyControllerProfileBinding();
+    }
     if (transition) {
       this.scheduleHostPersonaTransitionPoll();
     }
@@ -3980,16 +4007,50 @@ export class BridgeService extends EventEmitter {
 
   private async readBridgeIdentity(): Promise<void> {
     this.connectedBridgeUniqueId = null;
+    this.connectedControllerMac = null;
     if (!this.device) {
       return;
     }
     try {
       const report = await this.device.getFeatureReport(REPORT_ID.DEVICE_IDENTITY, REPORT_LENGTH);
-      this.connectedBridgeUniqueId = parseDeviceIdentityReport(report);
+      const identity = parseDeviceIdentityReport(report);
+      this.connectedBridgeUniqueId = identity.uniqueId;
+      this.connectedControllerMac = identity.controllerMac;
     } catch {
       // Firmware predates the identity report; the bridge stays unnamed.
     }
     this.recordBridgeIdentityAssociation();
+  }
+
+  // Profile-follows-controller: re-read the controller identity when the
+  // status transitions to connected, then apply the profile bound to that
+  // controller. Binding is recorded whenever the user picks a profile while
+  // a controller is connected (selectControllerProfile).
+  private async applyControllerProfileBinding(): Promise<void> {
+    try {
+      const report = await this.device?.getFeatureReport(REPORT_ID.DEVICE_IDENTITY, REPORT_LENGTH);
+      if (!report) {
+        return;
+      }
+      const identity = parseDeviceIdentityReport(report);
+      this.connectedControllerMac = identity.controllerMac;
+    } catch {
+      this.connectedControllerMac = null;
+      return;
+    }
+    const mac = this.connectedControllerMac;
+    if (!mac) {
+      return;
+    }
+    const settings = this.settingsStore.get();
+    const boundProfileId = settings.controllerBindings[mac];
+    if (!boundProfileId || boundProfileId === settings.selectedControllerProfileId) {
+      return;
+    }
+    if (!settings.controllerProfiles.some((profile) => profile.id === boundProfileId)) {
+      return;
+    }
+    await this.selectControllerProfile(boundProfileId, { recordBinding: false });
   }
 
   // Remember which physical container the connected bridge's stable id lives

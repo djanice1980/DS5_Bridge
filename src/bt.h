@@ -25,6 +25,7 @@ typedef void (*bt_data_callback_t)(CHANNEL_TYPE channel, uint8_t *data, uint16_t
 int bt_init();
 void bt_register_data_callback(bt_data_callback_t callback);
 bool bt_is_controller_connected();
+bool bt_get_connected_controller_addr(uint8_t out[6]);
 uint8_t bt_controller_type();
 int8_t bt_get_signal_strength();
 bool bt_has_signal_strength();

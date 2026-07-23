@@ -1075,19 +1075,34 @@ export function ackUserMessage(result: number): string {
   }
 }
 
-// Firmware 1.6.19+: stable physical identity (RP2350 unique board ID).
-// Returns the id as lowercase hex, or null when the firmware predates the
-// report (transport read fails) or returns an empty id.
-export function parseDeviceIdentityReport(report: ArrayLike<number>): string | null {
+export interface DeviceIdentityPayload {
+  uniqueId: string | null;
+  // BT address of the currently connected controller (firmware 1.6.20+),
+  // lowercase hex without separators; null when disconnected or unsupported.
+  controllerMac: string | null;
+}
+
+// Firmware 1.6.19+: stable physical identity (RP2350 unique board ID);
+// 1.6.20+ adds the connected controller's BT address.
+export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIdentityPayload {
   assertReport(report, REPORT_ID.DEVICE_IDENTITY);
   assertCurrentOrOlderVersion(report);
   const length = report[7];
-  if (!length || length > 16) {
-    return null;
+  let uniqueId: string | null = null;
+  if (length && length <= 16) {
+    let hex = '';
+    for (let index = 0; index < length; index += 1) {
+      hex += report[8 + index].toString(16).padStart(2, '0');
+    }
+    uniqueId = /^0+$/.test(hex) ? null : hex;
   }
-  let hex = '';
-  for (let index = 0; index < length; index += 1) {
-    hex += report[8 + index].toString(16).padStart(2, '0');
+  let controllerMac: string | null = null;
+  if (report[16] === 1) {
+    let mac = '';
+    for (let index = 0; index < 6; index += 1) {
+      mac += report[17 + index].toString(16).padStart(2, '0');
+    }
+    controllerMac = /^0+$/.test(mac) ? null : mac;
   }
-  return /^0+$/.test(hex) ? null : hex;
+  return { uniqueId, controllerMac };
 }

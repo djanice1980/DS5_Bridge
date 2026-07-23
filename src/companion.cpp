@@ -26,7 +26,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 19;
+constexpr uint8_t kFirmwarePatch = 20;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1619,6 +1619,13 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
     pico_get_unique_board_id(&board_id);
     buffer[6] = PICO_UNIQUE_BOARD_ID_SIZE_BYTES;
     memcpy(buffer + 7, board_id.id, PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
+    // Connected controller identity (BT address) so the companion can bind
+    // profiles to controllers. [15] = present flag, [16..21] = address.
+    uint8_t controller_addr[6];
+    if (bt_get_connected_controller_addr(controller_addr)) {
+        buffer[15] = 1;
+        memcpy(buffer + 16, controller_addr, 6);
+    }
     return COMPANION_PAYLOAD_SIZE;
 }
 
