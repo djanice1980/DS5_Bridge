@@ -222,6 +222,13 @@ bool usb_line_streaming_active() {
 }
 
 void usb_handle_controller_transport_disconnect() {
+#ifdef DS5_PAIRING_DIAG
+    // Diagnostic: keep USB attached through a controller disconnect so the
+    // pairing breadcrumbs stay readable after a FAILED pairing (which
+    // disconnects). Without this the disconnect tears USB down and, with no
+    // controller and no reboot, nothing re-attaches it.
+    return;
+#endif
     usb_reconnect_requested = false;
     usb_reconnect_connect_pending = false;
     usb_controller_transport_ready = false;
