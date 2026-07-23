@@ -194,6 +194,22 @@ shortcuts, idle disconnect, and PC sleep disconnect.
   <img src="assets/readme/app-bridge-settings.png" width="680" alt="Bridge Settings dialog in the DS5 Bridge companion app">
 </p>
 
+## Known behavior: controller bridged AND cabled to the PC at the same time
+
+A DualSense that is connected to the bridge over Bluetooth treats a USB cable
+plugged in afterwards as **charge-only**: Windows enumerates audio endpoints
+for the wired controller, but the controller never activates them (its data
+session stays on Bluetooth), so the wired speaker/mic stay silent. This is the
+controller's own transport policy, not a bridge fault.
+
+If the bridge is then unplugged while the cable is still in, the controller
+loses its Bluetooth host, blinks orange, powers off — and **will not power on
+again until the USB cable is removed**. Unplug the cable, press `PS`, and it
+reconnects to the bridge normally.
+
+To use a controller wired-only: disconnect it from the bridge first (or power
+it off), then plug in the USB cable from a fresh start.
+
 ## Troubleshooting (Linux)
 
 - Use the companion app and firmware from the same release when possible.
