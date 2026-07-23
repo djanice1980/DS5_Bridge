@@ -194,6 +194,21 @@ shortcuts, idle disconnect, and PC sleep disconnect.
   <img src="assets/readme/app-bridge-settings.png" width="680" alt="Bridge Settings dialog in the DS5 Bridge companion app">
 </p>
 
+## Moving a controller between bridges
+
+A DualSense remembers exactly **one** host: pairing it to a different bridge
+makes it forget the previous one (same as moving between PS5 consoles). A
+plain `PS` press always reconnects to the **last** bridge it paired with — so
+moving a controller back is always a fresh pairing, never just a PS press:
+
+1. Single-click the target Pico's `BOOTSEL` button (60 s pairing window,
+   onboard LED blinks).
+2. Hold `Create` + `PS` on the controller until the lightbar rapidly blinks.
+
+The bridge clears its own stale bond automatically during this (firmware
+1.6.13+), and with profile bindings (companion 1.6.26+) the controller's
+settings follow it to the new bridge on their own.
+
 ## Known behavior: controller bridged AND cabled to the PC at the same time
 
 A DualSense that is connected to the bridge over Bluetooth treats a USB cable
