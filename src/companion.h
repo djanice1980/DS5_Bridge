@@ -15,6 +15,10 @@
 #define COMPANION_REPORT_AUDIO_STATUS 0x08
 #define COMPANION_REPORT_TRIGGER_TRACE 0x09
 #define COMPANION_REPORT_FEEDBACK_TRACE 0x0A
+// Stable physical identity (RP2350 unique board ID) so the app can name and
+// re-recognize individual bridges regardless of USB port. Same report id
+// upstream uses for its device-identity concept.
+#define COMPANION_REPORT_DEVICE_IDENTITY 0x0D
 #define COMPANION_PAYLOAD_SIZE 63
 
 enum CompanionTriggerTraceStage : uint8_t {

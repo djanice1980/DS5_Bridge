@@ -14,6 +14,7 @@
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
 #include "pico/bootrom.h"
+#include "pico/unique_id.h"
 #include "pico/time.h"
 #include "usb.h"
 
@@ -25,7 +26,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 18;
+constexpr uint8_t kFirmwarePatch = 19;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1607,6 +1608,20 @@ uint16_t build_ack(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+    pico_unique_board_id_t board_id;
+    pico_get_unique_board_id(&board_id);
+    buffer[6] = PICO_UNIQUE_BOARD_ID_SIZE_BYTES;
+    memcpy(buffer + 7, board_id.id, PICO_UNIQUE_BOARD_ID_SIZE_BYTES);
+    return COMPANION_PAYLOAD_SIZE;
+}
+
 uint16_t build_shortcut_event(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
         return 0;
@@ -3103,6 +3118,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
 #endif
         case COMPANION_REPORT_AUDIO_STATUS:
             return build_audio_status(buffer, reqlen);
+        case COMPANION_REPORT_DEVICE_IDENTITY:
+            return build_device_identity(buffer, reqlen);
 #if DS5_TRIGGER_TRACE_ENABLED
         case COMPANION_REPORT_TRIGGER_TRACE:
             return build_trigger_trace(buffer, reqlen);
