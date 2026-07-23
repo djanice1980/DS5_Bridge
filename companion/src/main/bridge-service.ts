@@ -1226,6 +1226,9 @@ export class BridgeService extends EventEmitter {
   private connectedBridgeUniqueId: string | null = null;
   // BT address of the controller on the connected bridge (firmware 1.6.20+).
   private connectedControllerMac: string | null = null;
+  // Last controller identity we ran binding application for (prevents
+  // re-applying every poll; reset on device close).
+  private bindingAppliedForMac: string | null = null;
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hostPersonaTransitionPollTimer: NodeJS.Timeout | null = null;
@@ -3033,6 +3036,8 @@ export class BridgeService extends EventEmitter {
           controllerBindings: { ...bindings, [this.connectedControllerMac]: profileId }
         });
       }
+      // A manual pick satisfies this identity; no auto-apply needed after.
+      this.bindingAppliedForMac = this.connectedControllerMac;
     }
     if (this.snapshot.state === 'connected') {
       await this.applyCurrentSettings(this.snapshot.settings, false);
@@ -3586,6 +3591,12 @@ export class BridgeService extends EventEmitter {
     this.emitSnapshot();
     if (controllerJustConnected) {
       void this.applyControllerProfileBinding();
+    } else if (
+      status.controllerConnected
+      && this.connectedControllerMac
+      && this.bindingAppliedForMac !== this.connectedControllerMac
+    ) {
+      void this.maybeApplyBoundProfile();
     }
     if (transition) {
       this.scheduleHostPersonaTransitionPoll();
@@ -4038,10 +4049,20 @@ export class BridgeService extends EventEmitter {
       this.connectedControllerMac = null;
       return;
     }
+    await this.maybeApplyBoundProfile();
+  }
+
+  // Applies the profile bound to the currently known controller identity.
+  // Runs at most once per identity (bindingAppliedForMac), so it is safe to
+  // evaluate every poll - covering both controller connect transitions AND
+  // bridge switches, where the new bridge's status arrives already-connected
+  // and no transition is observable.
+  private async maybeApplyBoundProfile(): Promise<void> {
     const mac = this.connectedControllerMac;
-    if (!mac) {
+    if (!mac || this.bindingAppliedForMac === mac) {
       return;
     }
+    this.bindingAppliedForMac = mac;
     const settings = this.settingsStore.get();
     const boundProfileId = settings.controllerBindings[mac];
     if (!boundProfileId || boundProfileId === settings.selectedControllerProfileId) {
@@ -4161,6 +4182,8 @@ export class BridgeService extends EventEmitter {
     const device = this.device;
     this.device = null;
     this.connectedBridgeUniqueId = null;
+    this.connectedControllerMac = null;
+    this.bindingAppliedForMac = null;
     this.syncAudioHelperBridgeTarget();
     if (device) {
       try {
