@@ -1634,7 +1634,11 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
     // 5 ssp-confirm, 6 legacy-pin, 7 auth-complete, 8 encryption (0xEE =
     // disabled), 9 disconnect (reason), 10 l2cap-open (fires TWICE, once per
     // L2CAP channel), 11 link-key drop did not take (1=pre-connect drop missed
-    // but re-drop took, 2=DB delete broken, 3=drop at link-key-req missed).
+    // but re-drop took, 2=DB delete broken, 3=drop at link-key-req missed),
+    // 12 connection-phase disagreement (high nibble = tracked phase, low nibble
+    // = phase derived from the legacy booleans; 0 Listening, 1 Connecting,
+    // 2 Securing, 3 HidOpening, 4 Ready, 5 Disconnecting). Any 12/xx means the
+    // phase machine does NOT yet model reality and must not be depended on.
     buffer[22] = bt_copy_pairing_events(buffer + 23, 10);
     return COMPANION_PAYLOAD_SIZE;
 }

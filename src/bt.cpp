@@ -264,6 +264,32 @@ static uint32_t pairing_window_until_us = 0; // Non-zero while a button-armed pa
 static bool acl_connection_pending = false;
 static uint32_t acl_connection_pending_at_us = 0;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
+// Explicit connection lifecycle, ported from upstream's model.
+//
+// The same state was previously spread across ~23 booleans/timers and re-derived ad hoc at ~29
+// sites. That scattering is the shared root cause of a family of bugs fixed in 1.6.25: a
+// disconnect teardown that never checked the handle, an auth/encryption span no watchdog owned,
+// and a pairing window re-derived from the clock mid-handshake. Deriving is cheap; AGREEING is
+// what is expensive, so the state gets one owner.
+//
+// MIGRATION STEP 1/2: the phase is maintained at every real transition but NOTHING is gated on
+// it yet, so behaviour is unchanged. check_connection_phase_agreement() reports where it
+// disagrees with the legacy booleans; only once hardware shows agreement do the watchdogs and
+// event guards move over and the shadow booleans get deleted.
+enum class BtConnectionPhase : uint8_t {
+    Listening = 0,
+    Connecting = 1,
+    Securing = 2,
+    HidOpening = 3,
+    Ready = 4,
+    Disconnecting = 5,
+};
+static BtConnectionPhase connection_phase = BtConnectionPhase::Listening;
+// Bumped per connection attempt so a late async event from a previous connection is
+// distinguishable even if BTstack reuses the handle value. (connection_phase_started_us
+// arrives in step 3, when the watchdogs move off securing_started_us and it has a reader.)
+static uint32_t connection_generation = 0;
+static bool phase_disagreement_reported = false;
 // Security-phase watchdogs. Before these, the fork had NO recovery between ACL connect and
 // the HID channels opening: the idle-disconnect check is nested inside the interrupt-data
 // branch so it never runs when no data arrives, and ACL_CONNECTION_PENDING_TIMEOUT_US cannot
@@ -273,6 +299,7 @@ static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint32_t securing_started_us = 0; // Non-zero from auth request until encryption is up.
 static bool encryption_completion_pending = false;
 static hci_con_handle_t encryption_command_handle = HCI_CON_HANDLE_INVALID;
+static uint32_t encryption_command_generation = 0;
 static uint32_t encryption_command_sent_at_us = 0;
 static bool authentication_retry_pending = false;
 static uint8_t authentication_retry_attempts = 0;
@@ -418,10 +445,27 @@ static bool connection_handle_is_current(hci_con_handle_t handle) {
     return handle != HCI_CON_HANDLE_INVALID && handle == acl_handle;
 }
 
+static void note_connection_phase(BtConnectionPhase next) {
+    if (connection_phase == next) {
+        return;
+    }
+    connection_phase = next;
+    phase_disagreement_reported = false; // Re-arm reporting for the new phase.
+}
+
+static void begin_connection_attempt() {
+    connection_generation++;
+    if (connection_generation == 0) {
+        connection_generation++; // 0 stays reserved for "no connection".
+    }
+    note_connection_phase(BtConnectionPhase::Connecting);
+}
+
 static void clear_security_watchdogs() {
     securing_started_us = 0;
     encryption_completion_pending = false;
     encryption_command_handle = HCI_CON_HANDLE_INVALID;
+    encryption_command_generation = 0;
     encryption_command_sent_at_us = 0;
     authentication_retry_pending = false;
     authentication_retry_attempts = 0;
@@ -1125,6 +1169,7 @@ bool bt_disconnect() {
     }
 
     // 0x13 = remote user terminated connection
+    note_connection_phase(BtConnectionPhase::Disconnecting);
     HCI_SEND_CMD_LOGGED(&hci_disconnect, acl_handle, 0x13);
     return true;
 }
@@ -1210,8 +1255,52 @@ static void cancel_hid_channel_recovery_if_ready() {
     }
 }
 
+// MIGRATION STEP 2: derive the phase from the legacy state and report disagreement. This is
+// what earns the right to gate behaviour on connection_phase; until hardware says these agree,
+// the phase is bookkeeping only.
+static BtConnectionPhase derive_connection_phase() {
+    if (acl_handle == HCI_CON_HANDLE_INVALID) {
+        return (acl_connection_pending || device_found)
+            ? BtConnectionPhase::Connecting
+            : BtConnectionPhase::Listening;
+    }
+    if (hid_control_ready && hid_interrupt_ready) {
+        return BtConnectionPhase::Ready;
+    }
+    // securing_started_us is cleared when encryption comes up, so a live handle with no
+    // securing deadline means security is done and the HID channels are still opening.
+    return securing_started_us != 0
+        ? BtConnectionPhase::Securing
+        : BtConnectionPhase::HidOpening;
+}
+
+static void check_connection_phase_agreement() {
+    // Disconnecting has no legacy equivalent -- the old code had no notion of teardown in
+    // progress -- so a mismatch there is expected rather than a finding.
+    if (connection_phase == BtConnectionPhase::Disconnecting) {
+        return;
+    }
+    const BtConnectionPhase derived = derive_connection_phase();
+    if (derived == connection_phase) {
+        phase_disagreement_reported = false;
+        return;
+    }
+    if (phase_disagreement_reported) {
+        return; // One breadcrumb per episode; the ring only holds 10.
+    }
+    phase_disagreement_reported = true;
+    // High nibble = tracked phase, low nibble = derived phase.
+    bt_note_pairing_event(12, static_cast<uint8_t>(
+        (static_cast<uint8_t>(connection_phase) << 4) | static_cast<uint8_t>(derived)
+    ));
+    DS5_LOG("[HCI] Connection phase disagreement tracked=%u derived=%u\n",
+            static_cast<unsigned>(connection_phase),
+            static_cast<unsigned>(derived));
+}
+
 void bt_connection_recovery_loop() {
     const uint32_t recovery_now = time_us_32();
+    check_connection_phase_agreement();
 
     // Re-issue authentication after a transient collision, on the same ACL. Upstream does this
     // with gap_request_security_level(); this fork drives HCI directly, so re-issue the same
@@ -1232,6 +1321,9 @@ void bt_connection_recovery_loop() {
         encryption_completion_pending
         && acl_handle != HCI_CON_HANDLE_INVALID
         && encryption_command_handle == acl_handle
+        // Generation guard: a handle value can be reused across a fast reconnect, so the
+        // handle alone does not prove this command belongs to the live connection.
+        && encryption_command_generation == connection_generation
         && static_cast<uint32_t>(recovery_now - encryption_command_sent_at_us)
             >= ENCRYPTION_COMPLETION_TIMEOUT_US
     ) {
@@ -1351,6 +1443,7 @@ void bt_inquiry_loop() {
         && acl_handle == HCI_CON_HANDLE_INVALID
         && bt_time_reached(now, acl_connection_pending_at_us + ACL_CONNECTION_PENDING_TIMEOUT_US)
     ) {
+        note_connection_phase(BtConnectionPhase::Listening);
         DS5_LOG("[HCI] ACL connection pending timed out, restart inquiry\n");
         clear_outbound_inquiry_target();
         clear_acl_connection_pending();
@@ -1502,6 +1595,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     }
                 }
                 mark_acl_connection_pending();
+                begin_connection_attempt();
                 HCI_SEND_CMD_LOGGED(&hci_create_connection, current_device_addr,
                              hci_usable_acl_packet_types(), 0, 0, 0, 1);
             } else if (!device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
@@ -1519,6 +1613,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             ) {
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
+                note_connection_phase(BtConnectionPhase::Listening);
                 DS5_LOG("[HCI] ACL connection command rejected, restart inquiry\n");
                 schedule_inquiry_retry();
             }
@@ -1538,6 +1633,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (status == 0) {
                 const hci_con_handle_t handle = hci_event_connection_complete_get_connection_handle(packet);
                 acl_handle = handle;
+                note_connection_phase(BtConnectionPhase::Securing);
                 bt_rssi = 0;
                 bt_rssi_known = false;
                 bt_rssi_request_pending = false;
@@ -1556,6 +1652,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             } else {
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
+                note_connection_phase(BtConnectionPhase::Listening);
                 DS5_LOG("[HCI] ACL connect failed status=0x%02X, restart inquiry\n", status);
                 schedule_inquiry_retry();
             }
@@ -1684,6 +1781,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 authentication_retry_attempts = 0;
                 encryption_completion_pending = true;
                 encryption_command_handle = handle;
+                encryption_command_generation = connection_generation;
                 encryption_command_sent_at_us = time_us_32();
                 HCI_SEND_CMD_LOGGED(&hci_set_connection_encryption, handle, 1);
             }
@@ -1703,9 +1801,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             DS5_LOG("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
             encryption_completion_pending = false;
             encryption_command_handle = HCI_CON_HANDLE_INVALID;
+            encryption_command_generation = 0;
             if (status == ERROR_CODE_SUCCESS && enabled) {
                 securing_started_us = 0; // Security phase done; HID opening is covered by
                                          // schedule_hid_channel_recovery() below.
+                note_connection_phase(BtConnectionPhase::HidOpening);
                 DS5_LOG("[L2CAP] Open HID channels\n");
                 schedule_hid_channel_recovery();
                 if (new_pair) {
@@ -1739,6 +1839,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 }
                 inquiry_active = false;
                 gap_inquiry_stop();
+                begin_connection_attempt();
                 HCI_SEND_CMD_LOGGED(&hci_accept_connection_request, addr, 0x01);
             }
             break;
@@ -1766,6 +1867,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             clear_outbound_inquiry_target();
             clear_acl_connection_pending();
             clear_security_watchdogs();
+            note_connection_phase(BtConnectionPhase::Listening);
             inquiry_active = false;
             acl_handle = HCI_CON_HANDLE_INVALID;
             bt_rssi = 0;
@@ -2053,12 +2155,18 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     hid_control_ready = true;
                     hid_channel_recovery_attempts = 0;
                     cancel_hid_channel_recovery_if_ready();
+                    if (hid_interrupt_ready) {
+                        note_connection_phase(BtConnectionPhase::Ready);
+                    }
                 } else if (psm == PSM_HID_INTERRUPT) {
                     DS5_LOG("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
                     hid_interrupt_cid = local_cid;
                     hid_interrupt_ready = true;
                     hid_channel_recovery_attempts = 0;
                     cancel_hid_channel_recovery_if_ready();
+                    if (hid_control_ready) {
+                        note_connection_phase(BtConnectionPhase::Ready);
+                    }
                     critical_section_enter_blocking(&queue_lock);
                     reset_controller_output_session_locked();
                     critical_section_exit(&queue_lock);
