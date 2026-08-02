@@ -32,7 +32,6 @@
 #include "usb.h"
 #include "utils.h"
 #include "bsp/board_api.h"
-#include "hardware/watchdog.h"
 #include "pico/sync.h"
 #include "pico/time.h"
 #include "classic/sdp_server.h"
@@ -95,8 +94,6 @@
 #define CONTROL_SEND_QUEUE_MAX_DEPTH 8
 #define CONTROL_SEND_HEADSET_AUDIO_SAFE_WINDOW_US 6000
 #define CONTROL_SEND_HEADSET_AUDIO_IDLE_US 20000
-#define CYW43_POWER_CYCLE_HOLD_MS 750
-#define CONTROLLER_DISCONNECT_REBOOT_DELAY_MS 25
 #define DEFAULT_IDLE_DISCONNECT_TIMEOUT_MINUTES 15
 #define MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES 1
 #define MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES 120
@@ -376,18 +373,6 @@ static void reset_controller_output_session_locked() {
 
 static bool output_pending_locked() {
     return !urgent_queue.empty() || !audio_queue.empty() || state_pending;
-}
-
-static void power_down_cyw43_for_reboot() {
-#ifdef CYW43_PIN_RFSW_VDD
-    cyw43_hal_pin_config(CYW43_PIN_RFSW_VDD, CYW43_HAL_PIN_MODE_OUTPUT, CYW43_HAL_PIN_PULL_NONE, 0);
-    cyw43_hal_pin_low(CYW43_PIN_RFSW_VDD);
-#endif
-#ifdef CYW43_PIN_WL_REG_ON
-    cyw43_hal_pin_config(CYW43_PIN_WL_REG_ON, CYW43_HAL_PIN_MODE_OUTPUT, CYW43_HAL_PIN_PULL_NONE, 0);
-    cyw43_hal_pin_low(CYW43_PIN_WL_REG_ON);
-#endif
-    sleep_ms(CYW43_POWER_CYCLE_HOLD_MS);
 }
 
 static void update_queue_depth_counters_locked() {
@@ -1805,13 +1790,21 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 DS5_LOG("[HCI] Disconnected reason=0x%02X while USB host suspended; keeping USB on bus\n", reason);
                 break;
             }
-#ifdef DS5_PAIRING_DIAG
-            DS5_LOG("[HCI] DIAG: disconnect reason=0x%02X, NOT rebooting (preserve pairing breadcrumbs)\n", reason);
-#else
-            DS5_LOG("[HCI] Disconnected reason=0x%02X, power-cycle CYW43 then reboot Pico\n", reason);
-            power_down_cyw43_for_reboot();
-            watchdog_reboot(0, 0, CONTROLLER_DISCONNECT_REBOOT_DELAY_MS);
-#endif
+            // Recover in place rather than restarting. The reboot here was inherited from the
+            // base commit that fixed the headset audio route (61de6c3, 2026-05-16) and predates
+            // the explicit route reset that now runs on every disconnect:
+            // audio_handle_controller_disconnect() clears plug_headset / speaker_route_active /
+            // speaker_route_headset, reset_controller_output_session_locked() clears
+            // speaker_output_headset_route, and bt_rearm_speaker_output_route() re-establishes the
+            // route when audio next flows. Everything else the reboot used to guarantee is reset
+            // explicitly above: USB transport, HID channels and cids, output queues, feature cache,
+            // controller type, security watchdogs and RSSI state. Page scan was re-enabled at the
+            // top of this handler, so a bonded controller can page straight back in. Upstream
+            // dropped the same reboot once its teardown became explicit.
+            if (pairing_window_active(time_us_32())) {
+                schedule_inquiry_retry(0); // Window still open; resume discovery for it.
+            }
+            DS5_LOG("[HCI] Disconnected reason=0x%02X, staying alive for reconnect\n", reason);
             break;
         }
 
