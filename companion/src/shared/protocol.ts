@@ -1078,11 +1078,43 @@ export function ackUserMessage(result: number): string {
   }
 }
 
+export interface WatchdogTelemetryPayload {
+  /** The previous reset was a watchdog timeout -- i.e. the main loop hung. */
+  priorTimeout: boolean;
+  /** The retained breadcrumb passed its signature/CRC check. */
+  priorValid: boolean;
+  /** Main-loop phase that was executing when it hung. */
+  priorPhase: number;
+  priorSequence: number;
+  priorPhaseEnteredAtMs: number;
+}
+
+export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
+  0: 'boot',
+  1: 'cyw43',
+  2: 'tinyusb',
+  3: 'interrupt-before-audio',
+  4: 'usb-power',
+  5: 'audio',
+  6: 'button',
+  7: 'lightbar',
+  8: 'rssi',
+  9: 'inquiry',
+  10: 'connection-recovery',
+  11: 'feature-prefetch',
+  12: 'output-retry',
+  13: 'companion',
+  14: 'interrupt-after-companion',
+  15: 'firmware-log-flush'
+};
+
 export interface DeviceIdentityPayload {
   uniqueId: string | null;
   // BT address of the currently connected controller (firmware 1.6.20+),
   // lowercase hex without separators; null when disconnected or unsupported.
   controllerMac: string | null;
+  /** Firmware 1.6.26+: watchdog telemetry retained from the previous boot. */
+  watchdog: WatchdogTelemetryPayload | null;
 }
 
 // Firmware 1.6.19+: stable physical identity (RP2350 unique board ID);
@@ -1107,5 +1139,19 @@ export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIden
     }
     controllerMac = /^0+$/.test(mac) ? null : mac;
   }
-  return { uniqueId, controllerMac };
+  // Firmware 1.6.26+: watchdog telemetry from the previous boot. Payload [43..52],
+  // which is report[44..53] once the report-ID byte is accounted for. Older firmware
+  // leaves these zero, which reads as "no watchdog timeout" -- correct by default.
+  let watchdog: WatchdogTelemetryPayload | null = null;
+  if (report.length > 53) {
+    const flags = report[44] ?? 0;
+    watchdog = {
+      priorTimeout: (flags & 0x01) !== 0,
+      priorValid: (flags & 0x02) !== 0,
+      priorPhase: report[45] ?? 0,
+      priorSequence: readU32(report, 46),
+      priorPhaseEnteredAtMs: readU32(report, 50)
+    };
+  }
+  return { uniqueId, controllerMac, watchdog };
 }

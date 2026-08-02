@@ -23,6 +23,7 @@
 #include "persona/dualsense_persona.h"
 #include "persona/host_persona.h"
 #include "persona/xusb360_usb.h"
+#include "watchdog_telemetry.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
@@ -548,6 +549,7 @@ int main() {
 #endif
 
     board_init();
+    watchdog_telemetry_boot_capture(); // Before watchdog_enable() clobbers the reset marker.
     usb_device_stack_init_disconnected();
     board_init_after_tusb();
 
@@ -590,20 +592,35 @@ int main() {
     watchdog_enable(1000, true);
 
     while (1) {
+        // Each stage stamps a breadcrumb into the watchdog scratch registers, which survive
+        // the reset. If the 1s watchdog fires, the next boot reports exactly which stage was
+        // running -- otherwise a hang is indistinguishable from any other restart.
         watchdog_update();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Cyw43);
         cyw43_arch_poll();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::TinyUsb);
         tud_task();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptBeforeAudio);
         interrupt_loop();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::UsbPower);
         usb_pm_poll();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Audio);
         audio_loop();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Button);
         button_check();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Lightbar);
         bt_lightbar_loop();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Rssi);
         bt_signal_strength_loop();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Inquiry);
         bt_inquiry_loop();
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::ConnectionRecovery);
         bt_connection_recovery_loop();
 #ifdef ENABLE_COMPANION
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Companion);
         companion_loop();
 #endif
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptAfterCompanion);
         interrupt_loop();
     }
 }

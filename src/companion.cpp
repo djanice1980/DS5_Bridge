@@ -6,6 +6,7 @@
 
 #include "audio.h"
 #include "bt.h"
+#include "watchdog_telemetry.h"
 #include "controller_output_policy.h"
 #include "controller_output_submit.h"
 #include "dualsense_output.h"
@@ -26,7 +27,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 25;
+constexpr uint8_t kFirmwarePatch = 26;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1628,6 +1629,20 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
     if (bt_get_connected_controller_addr(controller_addr)) {
         buffer[15] = 1;
         memcpy(buffer + 16, controller_addr, 6);
+    }
+    // Watchdog telemetry from the PREVIOUS boot, so a hang is diagnosable without a UART.
+    // [43] flags: bit0 = last reset was a watchdog timeout, bit1 = breadcrumb valid.
+    // [44] main-loop phase that was running. [45..48] sequence. [49..52] ms since that boot.
+    {
+        WatchdogTelemetrySnapshot wdt{};
+        watchdog_telemetry_snapshot(&wdt);
+        buffer[43] = static_cast<uint8_t>(
+            (wdt.prior_watchdog_timeout ? 0x01 : 0x00)
+            | (wdt.prior_snapshot_valid ? 0x02 : 0x00)
+        );
+        buffer[44] = wdt.prior_phase;
+        write_u32(buffer + 45, wdt.prior_sequence);
+        write_u32(buffer + 49, wdt.prior_phase_entered_at_ms);
     }
     // Pairing breadcrumbs: [22] = event count, then {stage, status} pairs.
     // NB these are PAYLOAD offsets; in the raw feature report add 1 for the

@@ -154,6 +154,9 @@ export interface BridgeDiagnostics {
   feedbackTraceLines: string[];
   feedbackTraceDroppedCount: number;
   audioStatus: AudioStatusPayload | null;
+  /** Set when the bridge's previous reset was a watchdog timeout (a main-loop hang),
+   *  naming the phase that was running. Null when the last boot was clean. */
+  lastWatchdogHang: string | null;
 }
 
 export interface BridgeSnapshot {

@@ -9127,6 +9127,12 @@ export function App() {
                           <dt>Revision</dt>
                           <dd><span className="diagnostic-number">{snapshot.diagnostics.settingsRevision ?? '--'}</span></dd>
                         </div>
+                        {snapshot.diagnostics.lastWatchdogHang ? (
+                          <div>
+                            <dt>Last Hang</dt>
+                            <dd>{snapshot.diagnostics.lastWatchdogHang}</dd>
+                          </div>
+                        ) : null}
                         <div><dt>Last ACK</dt><dd>{ackText}</dd></div>
                         <div><dt>HID Path</dt><dd>{snapshot.diagnostics.hidPath ?? '--'}</dd></div>
                         <div>

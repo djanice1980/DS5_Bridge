@@ -11,6 +11,7 @@ import {
   PROTOCOL_MINOR,
   REPORT_ID,
   REPORT_LENGTH,
+  WATCHDOG_PHASE_NAMES,
   CHORD_FUNCTION_EVENT_BASE,
   MAX_CHORD_ASSIGNMENTS,
   MUTE_KEYBOARD_CHORD_STARTER_FLAG,
@@ -118,7 +119,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.25';
+const BUNDLED_FIRMWARE_VERSION = '1.6.26';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -308,6 +309,7 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     hidPath: null,
     protocolVersion: null,
     uptimeSeconds: null,
+    lastWatchdogHang: null,
     settingsRevision: null,
     lastAck: null,
     lastError: null,
@@ -3510,6 +3512,7 @@ export class BridgeService extends EventEmitter {
           protocolVersion: status.protocolVersion,
           uptimeSeconds: status.uptimeSeconds,
           settingsRevision: status.settingsRevision,
+          lastWatchdogHang: this.snapshot.diagnostics.lastWatchdogHang,
           lastAck: this.snapshot.diagnostics.lastAck,
           lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to ${MIN_SUPPORTED_FIRMWARE_VERSION} or newer.`,
           firmwareUpdateAvailable: null,
@@ -3581,6 +3584,7 @@ export class BridgeService extends EventEmitter {
         protocolVersion: status.protocolVersion,
         uptimeSeconds: status.uptimeSeconds,
         settingsRevision: status.settingsRevision,
+        lastWatchdogHang: this.snapshot.diagnostics.lastWatchdogHang,
         lastAck: this.snapshot.diagnostics.lastAck,
         lastError: null,
         firmwareUpdateAvailable: firmwareUpdateAvailable(status.firmwareVersion),
@@ -4028,6 +4032,13 @@ export class BridgeService extends EventEmitter {
       const identity = parseDeviceIdentityReport(report);
       this.connectedBridgeUniqueId = identity.uniqueId;
       this.connectedControllerMac = identity.controllerMac;
+      // A watchdog reset means the firmware main loop hung for over a second. The phase is
+      // retained across the reset, so surface WHERE it hung rather than just that it happened.
+      this.snapshot.diagnostics.lastWatchdogHang = identity.watchdog?.priorTimeout
+        ? (identity.watchdog.priorValid
+          ? (WATCHDOG_PHASE_NAMES[identity.watchdog.priorPhase] ?? `phase ${identity.watchdog.priorPhase}`)
+          : 'unknown phase')
+        : null;
     } catch {
       // Firmware predates the identity report; the bridge stays unnamed.
     }
