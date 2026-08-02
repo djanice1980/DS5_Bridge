@@ -54,6 +54,8 @@ export interface CompanionSettings {
   bridgeIdentities: Record<string, BridgeIdentityRecord>;
   // Profile-follows-controller: controller BT address (hex) -> profile id.
   controllerBindings: Record<string, string>;
+  // Devices tab: controllers seen by this companion, newest first.
+  controllerHistory: ControllerHistoryEntry[];
   micVolumePercent: number;
   micMuted: boolean;
   audioReactiveHapticsEnabled: boolean;
@@ -186,6 +188,22 @@ export interface DirectControllerInfo {
 export interface BridgeIdentityRecord {
   label: string | null;
   containerId: string | null;
+}
+
+// Devices tab: controllers this companion has seen, keyed by Bluetooth address.
+// Kept companion-side rather than in firmware -- the bridge only knows the controller
+// currently attached to it, and history should survive reflashing and follow the user
+// across bridges.
+export interface ControllerHistoryEntry {
+  /** Bluetooth address, lowercase hex, no separators. */
+  mac: string;
+  controllerType: 'unknown' | 'dualsense' | 'dualsense-edge';
+  /** Epoch ms when this controller was last seen connected. */
+  lastSeenAt: number;
+  /** Battery percent at last sighting, if the bridge reported one. */
+  lastBatteryPercent: number | null;
+  /** Stable id of the bridge it was last seen on, when known. */
+  lastBridgeUniqueId: string | null;
 }
 
 export interface BridgeDeviceCensus {

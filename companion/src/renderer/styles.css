@@ -3551,6 +3551,11 @@ button.overview-shortcut-chip {
 
 /* Feature tiles are status indicators, not controls. They can't use :disabled like
    the old buttons did, so mirror the dimmed "unavailable" look explicitly. */
+/* Devices page header actions must stay on one line -- "Forget Controllers" wraps otherwise. */
+.devices-page .audio-heading-controls .secondary-action {
+  white-space: nowrap;
+}
+
 .feature-icon.unavailable {
   opacity: var(--disabled-opacity);
 }

@@ -138,7 +138,7 @@ import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset
 const IS_WINDOWS_HOST = window.bridge?.platform === 'win32';
 const IS_LINUX = window.bridge?.platform === 'linux';
 
-type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system' | 'interleave';
+type ControlTab = 'overview' | 'devices' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system' | 'interleave';
 type StartupTutorialStep = 'feature-toggle' | 'support' | 'done';
 type ControllerType = BridgeStatusPayload['controllerType'];
 type KnownControllerType = Exclude<ControllerType, 'unknown'>;
@@ -749,6 +749,7 @@ const REMAP_EDGE_LINE_POINTS: Record<DualSenseEdgeRemapButtonId, [[number, numbe
 };
 const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: TablerIcon }> = [
   { id: 'overview', label: 'Overview', Icon: IconLayoutDashboard },
+  { id: 'devices', label: 'Devices', Icon: IconBluetooth },
   { id: 'audio', label: 'Audio', Icon: IconVolume },
   { id: 'haptics', label: 'Haptics', Icon: Sparkles },
   { id: 'triggers', label: 'Triggers', Icon: IconDeviceGamepad2 },
@@ -757,6 +758,28 @@ const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: TablerIcon }> =
   { id: 'system', label: 'System', Icon: IconCpu },
   { id: 'interleave', label: 'Interleave', Icon: SlidersHorizontal }
 ];
+
+// Devices tab formatting. The bridge reports the controller address as bare lowercase hex.
+function formatControllerMac(mac: string): string {
+  return (mac.match(/.{1,2}/g) ?? [mac]).join(':').toUpperCase();
+}
+
+function controllerTypeLabel(type: 'unknown' | 'dualsense' | 'dualsense-edge'): string {
+  if (type === 'dualsense-edge') return 'DualSense Edge';
+  if (type === 'dualsense') return 'DualSense';
+  return 'Controller';
+}
+
+function formatLastSeen(timestamp: number): string {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return 'never';
+  const elapsedMs = Date.now() - timestamp;
+  if (elapsedMs < 60_000) return 'just now';
+  const minutes = Math.floor(elapsedMs / 60_000);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
 
 // A profile picker must never render an empty label. If a profile's name is ever
 // blank at runtime, fall back to a sensible name (and surface the id for anything
@@ -3579,6 +3602,18 @@ export function App() {
     supportedHostPersonaModes.includes(mode) || snapshot?.settings.hostPersonaMode === mode
   ));
   const overviewHostPersonaMode = personaTransition?.to ?? snapshot?.settings.hostPersonaMode ?? 'dualsense';
+  // Devices tab: the newest history entry is the current controller when one is attached,
+  // otherwise it is simply the last one we saw.
+  const controllerHistory = snapshot?.settings.controllerHistory ?? [];
+  const devicesCurrentEntry = controllerHistory[0] ?? null;
+  const devicesPreviousEntries = controllerHistory.slice(1);
+  const devicesCurrentSubtitle = !connected
+    ? 'Bridge offline'
+    : controllerConnected
+      ? 'Connected now'
+      : devicesCurrentEntry
+        ? `Last seen ${formatLastSeen(devicesCurrentEntry.lastSeenAt)}`
+        : 'No controller paired';
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const audioReactiveHapticsEnabled = Boolean(snapshot?.settings.audioReactiveHapticsEnabled);
   // The Audio Haptics header switch is the feature on/off (not just a view toggle), so the
@@ -4586,6 +4621,18 @@ export function App() {
     } finally {
       setAudioReactiveHapticsCommitPending(false);
     }
+  }
+
+  function forgetControllerPairings() {
+    if (!snapshot) return;
+    const confirmed = window.confirm(
+      'Forget every controller paired to this bridge?\n\n'
+      + 'Each controller will have to be paired again (hold Create + PS, then press Pair '
+      + 'Controller). This clears the stored Bluetooth keys on the bridge itself -- the same '
+      + 'thing that used to need a flash nuke.'
+    );
+    if (!confirmed) return;
+    void runAction('forget-controllers', () => window.bridge.forgetControllerPairings());
   }
 
   function setAudioReactiveHapticsMode(mode: AudioReactiveHapticsMode) {
@@ -9206,6 +9253,116 @@ export function App() {
                   powerSavingActive={controllerPowerSavingActive}
                 />
               </section>
+          </div>
+          <div
+            className={`control-page devices-page ${activeControlTab === 'devices' ? 'active' : ''}`}
+            role="tabpanel"
+            id="control-panel-devices"
+            aria-labelledby="control-tab-devices"
+            aria-hidden={activeControlTab !== 'devices'}
+          >
+            <div className="feature-heading">
+              <div>
+                <h2>Devices</h2>
+                <p>Controllers this bridge has paired with.</p>
+              </div>
+              <div className="audio-heading-controls">
+                <button
+                  type="button"
+                  className="secondary-action"
+                  disabled={!connected || pendingAction !== null}
+                  onClick={() => void runAction('pair-controller', () => (
+                    window.bridge.requestControllerPairing()
+                  ))}
+                >
+                  Pair Controller
+                </button>
+                <button
+                  type="button"
+                  className="secondary-action danger"
+                  disabled={!connected || pendingAction !== null}
+                  onClick={forgetControllerPairings}
+                >
+                  <Trash2 size={14} /> Forget Controllers
+                </button>
+              </div>
+            </div>
+            <div className="feature-card-grid">
+              <section className="feature-card">
+                <div className="feature-card-title">
+                  <span className={`feature-icon icon-compact ${controllerConnected ? 'active' : ''} ${!connected ? 'unavailable' : ''}`}>
+                    <IconBluetooth size={20} />
+                  </span>
+                  <div className="title-copy">
+                    <h3>{controllerConnected ? 'Connected Controller' : 'Last Controller'}</h3>
+                    <p>{devicesCurrentSubtitle}</p>
+                  </div>
+                </div>
+                {devicesCurrentEntry ? (
+                  <div className="settings-menu-list">
+                    <div className="settings-menu-row">
+                      <div className="settings-menu-copy"><strong>Address</strong></div>
+                      <span className="inline-state-badge">{formatControllerMac(devicesCurrentEntry.mac)}</span>
+                    </div>
+                    <div className="settings-menu-row">
+                      <div className="settings-menu-copy"><strong>Type</strong></div>
+                      <span className="inline-state-badge">{controllerTypeLabel(devicesCurrentEntry.controllerType)}</span>
+                    </div>
+                    <div className="settings-menu-row">
+                      <div className="settings-menu-copy"><strong>Battery</strong></div>
+                      <span className="inline-state-badge">
+                        {devicesCurrentEntry.lastBatteryPercent === null
+                          ? '--'
+                          : `${devicesCurrentEntry.lastBatteryPercent}%`}
+                      </span>
+                    </div>
+                    <div className="settings-menu-row">
+                      <div className="settings-menu-copy"><strong>Profile</strong></div>
+                      <span className="inline-state-badge">
+                        {profileDisplayName(
+                          snapshot.settings.controllerProfiles.find((profile) => (
+                            profile.id === snapshot.settings.controllerBindings[devicesCurrentEntry.mac]
+                          ))?.name,
+                          snapshot.settings.controllerBindings[devicesCurrentEntry.mac] ?? 'none'
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="feature-empty">
+                    No controller has paired with this bridge yet. Put a controller into pairing mode
+                    (hold Create + PS until the light bar double-flashes), then press Pair Controller
+                    or single-click the bridge's BOOTSEL button.
+                  </p>
+                )}
+              </section>
+              <section className="feature-card">
+                <div className="feature-card-title">
+                  <span className="feature-icon icon-compact"><IconDeviceGamepad2 size={20} /></span>
+                  <div className="title-copy">
+                    <h3>Previously Seen</h3>
+                    <p>Controllers remembered by the app, newest first.</p>
+                  </div>
+                </div>
+                {devicesPreviousEntries.length === 0 ? (
+                  <p className="feature-empty">Nothing else has connected through this app yet.</p>
+                ) : (
+                  <div className="settings-menu-list">
+                    {devicesPreviousEntries.map((entry) => (
+                      <div className="settings-menu-row" key={entry.mac}>
+                        <div className="settings-menu-copy">
+                          <strong>{controllerTypeLabel(entry.controllerType)}</strong>
+                          <span>{formatControllerMac(entry.mac)} - {formatLastSeen(entry.lastSeenAt)}</span>
+                        </div>
+                        <span className="inline-state-badge">
+                          {entry.lastBatteryPercent === null ? '--' : `${entry.lastBatteryPercent}%`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            </div>
           </div>
           <div
             className={`control-page interleave-page ${activeControlTab === 'interleave' ? 'active' : ''}`}

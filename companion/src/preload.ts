@@ -130,6 +130,12 @@ const api = {
   setWakeOnControllerConnect: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setWakeOnControllerConnect', value)
   ),
+  requestControllerPairing: (): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:requestControllerPairing')
+  ),
+  forgetControllerPairings: (): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:forgetControllerPairings')
+  ),
   setSleepKeybindEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setSleepKeybindEnabled', value)
   ),

@@ -1464,15 +1464,44 @@ void bt_inquiry_loop() {
     }
 }
 
-void bt_arm_pairing_window() {
-    // Only meaningful while idle: no controller connected or mid-connect.
-    if (acl_handle != HCI_CON_HANDLE_INVALID || acl_connection_pending || device_found) {
-        return;
-    }
+static void open_pairing_window() {
     pairing_window_until_us = time_us_32() + PAIRING_WINDOW_US;
     inquiry_retry_at_us = 0; // Start inquiry immediately.
     DS5_LOG("[PAIR] Pairing window armed for %us\n", (unsigned)(PAIRING_WINDOW_US / 1000000u));
     start_inquiry_if_needed();
+}
+
+void bt_arm_pairing_window() {
+    // BOOTSEL path: only meaningful while idle. A physical button press must never drop a
+    // controller the user is actively using.
+    if (acl_handle != HCI_CON_HANDLE_INVALID || acl_connection_pending || device_found) {
+        return;
+    }
+    open_pairing_window();
+}
+
+bool bt_request_pairing() {
+    // Companion path: "pair a controller" while one is attached means disconnect and pair.
+    // The window is opened FIRST so the disconnect-complete handler sees it and resumes
+    // discovery instead of returning to passive page scan.
+    open_pairing_window();
+    if (acl_handle != HCI_CON_HANDLE_INVALID) {
+        DS5_LOG("[PAIR] Pairing requested while connected; disconnecting first\n");
+        bt_disconnect();
+    }
+    return true;
+}
+
+bool bt_forget_pairings() {
+    DS5_LOG("[PAIR] Forget all controller pairings requested\n");
+    if (acl_handle != HCI_CON_HANDLE_INVALID) {
+        bt_disconnect();
+    }
+    // Clearing stored link keys is the operation that previously required a flash nuke:
+    // reflashing firmware does NOT wipe them, because they live in a flash region that
+    // survives a reflash.
+    gap_delete_all_link_keys();
+    return true;
 }
 
 int bt_init() {

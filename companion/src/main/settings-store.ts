@@ -39,7 +39,12 @@ import type {
   HostPersonaMode,
   RemapButtonId
 } from '../shared/protocol';
-import type { CompanionSettings, UiScalePercent, UiThemePreset } from '../shared/types';
+import type {
+  CompanionSettings,
+  ControllerHistoryEntry,
+  UiScalePercent,
+  UiThemePreset
+} from '../shared/types';
 
 const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   hapticsEnabled: true,
@@ -168,6 +173,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   selectedBridgePath: null,
   bridgeIdentities: {},
   controllerBindings: {},
+  controllerHistory: [],
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
   audioReactiveHapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,
@@ -940,6 +946,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       : null,
     bridgeIdentities: normalizeBridgeIdentities(value?.bridgeIdentities),
     controllerBindings: normalizeControllerBindings(value?.controllerBindings),
+    controllerHistory: normalizeControllerHistory(value?.controllerHistory),
     micVolumePercent: Number.isFinite(value?.micVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))
       : DEFAULT_SETTINGS.micVolumePercent,
@@ -1354,6 +1361,40 @@ function normalizeBridgeIdentities(value: unknown): Record<string, { label: stri
         ? entry.containerId
         : null
     };
+  }
+  return result;
+}
+
+const MAX_CONTROLLER_HISTORY = 8;
+
+function normalizeControllerHistory(value: unknown): ControllerHistoryEntry[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: ControllerHistoryEntry[] = [];
+  for (const raw of value) {
+    const candidate = raw as Partial<ControllerHistoryEntry> | null;
+    const mac = typeof candidate?.mac === 'string' ? candidate.mac.toLowerCase() : '';
+    if (!/^[0-9a-f]{12}$/.test(mac) || seen.has(mac)) {
+      continue;
+    }
+    seen.add(mac);
+    const type = candidate?.controllerType;
+    result.push({
+      mac,
+      controllerType: type === 'dualsense' || type === 'dualsense-edge' ? type : 'unknown',
+      lastSeenAt: Number.isFinite(candidate?.lastSeenAt) ? Number(candidate!.lastSeenAt) : 0,
+      lastBatteryPercent: Number.isFinite(candidate?.lastBatteryPercent)
+        ? Math.max(0, Math.min(100, Math.round(Number(candidate!.lastBatteryPercent))))
+        : null,
+      lastBridgeUniqueId: typeof candidate?.lastBridgeUniqueId === 'string'
+        ? candidate.lastBridgeUniqueId
+        : null
+    });
+    if (result.length >= MAX_CONTROLLER_HISTORY) {
+      break;
+    }
   }
   return result;
 }

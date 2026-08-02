@@ -105,6 +105,12 @@ void bt_lightbar_loop();
 void bt_signal_strength_loop();
 void bt_inquiry_loop();
 void bt_arm_pairing_window();
+// Companion-initiated pairing: opens the window even if a controller is attached, then
+// disconnects it so the new controller can be found.
+bool bt_request_pairing();
+// Clears every stored Bluetooth link key. This is what a flash nuke used to be needed for --
+// reflashing firmware does not wipe stored keys.
+bool bt_forget_pairings();
 void bt_connection_recovery_loop();
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();

@@ -91,6 +91,9 @@ export const COMMAND_ID = {
   SET_SPEAKER_GAIN: 0x32,
   ENTER_BOOTLOADER: 0x33,
   SET_AUDIO_INTERLEAVE: 0x34,
+  // Devices tab. IDs match upstream so the protocol stays convergent.
+  REQUEST_CONTROLLER_SCAN: 0x27,
+  FORGET_CONTROLLER_PAIRINGS: 0x28,
   SET_WAKE_ON_CONNECT: 0x35
 } as const;
 

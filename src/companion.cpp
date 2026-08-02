@@ -142,6 +142,9 @@ enum CommandId : uint8_t {
     CommandSetSpeakerGain = 0x32,
     CommandEnterBootloader = 0x33,
     CommandSetAudioInterleave = 0x34,
+    // Devices tab. IDs match upstream so the protocol stays convergent.
+    CommandRequestControllerScan = 0x27,
+    CommandForgetControllerPairings = 0x28,
     CommandSetWakeOnConnect = 0x35,
 };
 
@@ -2000,6 +2003,17 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
         }
+
+        case CommandRequestControllerScan:
+            bt_request_pairing();
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandForgetControllerPairings:
+            bt_forget_pairings();
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
 
         case CommandSetWakeOnConnect:
             // Wake the host from sleep when a controller connects (USB remote wakeup).

@@ -70,6 +70,7 @@ import type {
   BridgeDiagnostics,
   BridgeSnapshot,
   CompanionSettings,
+  ControllerHistoryEntry,
   AudioHapticsSession,
   HostPersonaTransition,
   HidDeviceSummary,
@@ -4063,6 +4064,7 @@ export class BridgeService extends EventEmitter {
       return;
     }
     this.bindingAppliedForMac = mac;
+    this.recordControllerHistory(mac);
     const settings = this.settingsStore.get();
     const boundProfileId = settings.controllerBindings[mac];
     if (!boundProfileId || boundProfileId === settings.selectedControllerProfileId) {
@@ -4072,6 +4074,44 @@ export class BridgeService extends EventEmitter {
       return;
     }
     await this.selectControllerProfile(boundProfileId, { recordBinding: false });
+  }
+
+  // Devices tab: remember every controller this companion has seen, newest first.
+  // Kept companion-side because the bridge only knows the controller currently attached
+  // to it, and this should survive a reflash and follow the user across bridges.
+  private recordControllerHistory(mac: string): void {
+    const status = this.snapshot.status;
+    const entry: ControllerHistoryEntry = {
+      mac,
+      controllerType: status?.controllerType ?? 'unknown',
+      lastSeenAt: Date.now(),
+      lastBatteryPercent: status?.batteryPercent ?? null,
+      lastBridgeUniqueId: this.connectedBridgeUniqueId
+    };
+    const existing = this.settingsStore.get().controllerHistory
+      .filter((item) => item.mac !== mac);
+    this.snapshot.settings = this.settingsStore.update({
+      controllerHistory: [entry, ...existing].slice(0, 8)
+    });
+  }
+
+  // Devices tab: ask the bridge to open a pairing window. Unlike the BOOTSEL button this
+  // also works while a controller is attached -- the firmware disconnects it first.
+  async requestControllerPairing(): Promise<BridgeSnapshot> {
+    await this.sendCommand(COMMAND_ID.REQUEST_CONTROLLER_SCAN, 0, { throwOnCommandError: false });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  // Devices tab: clear every stored Bluetooth link key on the bridge. This is the operation
+  // that previously required a flash nuke -- reflashing firmware does not wipe stored keys.
+  // The companion-side history is cleared to match, since those pairings no longer exist.
+  async forgetControllerPairings(): Promise<BridgeSnapshot> {
+    await this.sendCommand(COMMAND_ID.FORGET_CONTROLLER_PAIRINGS, 0, { throwOnCommandError: false });
+    this.bindingAppliedForMac = null;
+    this.snapshot.settings = this.settingsStore.update({ controllerHistory: [] });
+    this.emitSnapshot();
+    return this.getSnapshot();
   }
 
   // Remember which physical container the connected bridge's stable id lives
