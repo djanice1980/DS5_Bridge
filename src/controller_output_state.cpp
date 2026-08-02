@@ -310,6 +310,13 @@ void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len
     copy_payload_range_if_allowed(
         update,
         copy_len,
+        (update[kValidFlag0Offset] & kFlag0HeadphoneVolumeEnable) != 0,
+        kHeadphoneVolumeOffset,
+        1
+    );
+    copy_payload_range_if_allowed(
+        update,
+        copy_len,
         (update[kValidFlag0Offset] & kFlag0SpeakerVolumeEnable) != 0,
         kSpeakerVolumeOffset,
         1
@@ -512,7 +519,9 @@ void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool head
     apply_current_player_led_policy(destination);
     if (headset_plugged) {
         destination[kValidFlag0Offset] = static_cast<uint8_t>(
-            (destination[kValidFlag0Offset] | kFlag0AudioControlEnable)
+            (destination[kValidFlag0Offset]
+                | kFlag0HeadphoneVolumeEnable
+                | kFlag0AudioControlEnable)
             & static_cast<uint8_t>(~kFlag0SpeakerVolumeEnable)
         );
         destination[kHeadphoneVolumeOffset] = kHeadphoneVolumeMax;

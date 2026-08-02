@@ -3710,10 +3710,17 @@ export function App() {
     || !audioReactiveHapticsSupported
     || !audioReactiveHapticsRouteSupported
     || !hapticsEnabled;
-  const audioReactiveHapticsControlDisabled = audioReactiveHapticsBlocked
+  // The on/off switch stays live even when Haptics is off -- toggling Audio Haptics on
+  // turns Haptics on for you (see toggleAudioReactiveHapticsEnabled) rather than leaving
+  // an inert switch. The config controls below still require Haptics to be on.
+  const audioReactiveHapticsControlDisabled = !connected
+    || !audioReactiveHapticsSupported
     || pendingAction !== null
     || audioReactiveHapticsCommitPending;
-  const audioReactiveHapticsConfigDisabled = audioReactiveHapticsControlDisabled || !audioReactiveHapticsEnabled;
+  const audioReactiveHapticsConfigDisabled = audioReactiveHapticsBlocked
+    || pendingAction !== null
+    || audioReactiveHapticsCommitPending
+    || !audioReactiveHapticsEnabled;
   const audioReactiveHapticsStatusLabel = !connected
     ? 'Unavailable'
     : !audioReactiveHapticsSupported
@@ -4552,11 +4559,33 @@ export function App() {
     }
   }
 
-  function toggleAudioReactiveHapticsEnabled() {
-    if (!snapshot) return;
-    void commitAudioReactiveHapticsConfig({
-      enabled: !snapshot.settings.audioReactiveHapticsEnabled
-    });
+  async function toggleAudioReactiveHapticsEnabled() {
+    if (
+      !snapshot
+      || snapshot.state !== 'connected'
+      || !audioReactiveHapticsSupported
+      || pendingAction !== null
+      || audioReactiveHapticsCommitPending
+    ) {
+      return;
+    }
+
+    const enabled = !snapshot.settings.audioReactiveHapticsEnabled;
+    setAudioReactiveHapticsCommitPending(true);
+    try {
+      // Audio Haptics rides on the haptics engine, so enabling it enables Haptics too
+      // instead of silently doing nothing when Haptics happens to be off.
+      if (enabled && !snapshot.settings.hapticsEnabled) {
+        await window.bridge.setHapticsEnabled(true);
+      }
+      const next = await window.bridge.setAudioReactiveHapticsConfig({ enabled });
+      applySnapshot(next);
+    } catch {
+      const next = await window.bridge.getStatus();
+      applySnapshot(next);
+    } finally {
+      setAudioReactiveHapticsCommitPending(false);
+    }
   }
 
   function setAudioReactiveHapticsMode(mode: AudioReactiveHapticsMode) {
