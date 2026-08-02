@@ -126,6 +126,8 @@
 // Grace granted ONCE when the window elapses while a pairing attempt is already in
 // flight, so the handshake is not cut off by the clock (see bt_inquiry_loop).
 #define PAIRING_WINDOW_ATTEMPT_EXTENSION_US 12000000u
+// The only authentication status that means "the controller no longer has our bond".
+#define AUTHENTICATION_PIN_OR_KEY_MISSING 0x06u
 #define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
 #define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
@@ -399,6 +401,16 @@ static void clear_outbound_inquiry_target() {
 static void schedule_inquiry_retry(uint32_t delay_us = INQUIRY_RETRY_DELAY_US) {
     inquiry_active = false;
     inquiry_retry_at_us = time_us_32() + delay_us;
+}
+
+// HCI events carry the handle they refer to, but we only ever own one ACL at a time.
+// Events for any other handle are stale (a duplicate, or a connection we already tore
+// down) and acting on them corrupts the state of the live session -- or, in the case of
+// HCI_EVENT_DISCONNECTION_COMPLETE, reboots the Pico for a connection that already ended.
+// acl_handle is assigned in exactly two places (CONNECTION_COMPLETE sets it,
+// DISCONNECTION_COMPLETE clears it), so INVALID here reliably means "nothing to act on".
+static bool connection_handle_is_current(hci_con_handle_t handle) {
+    return handle != HCI_CON_HANDLE_INVALID && handle == acl_handle;
 }
 
 static bool pairing_window_active(uint32_t now) {
@@ -1555,11 +1567,32 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_AUTHENTICATION_COMPLETE: {
             const uint8_t status = hci_event_authentication_complete_get_status(packet);
             const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
+            if (!connection_handle_is_current(handle)) {
+                DS5_LOG("[HCI] Ignoring stale authentication event handle=0x%04X status=0x%02X\n",
+                       handle, status);
+                break;
+            }
             bt_note_pairing_event(7, status);
             DS5_LOG("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
-                DS5_LOG("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
-                gap_drop_link_key_for_bd_addr(current_device_addr);
+                // Status 0x06 is the controller telling us it no longer holds our bond -- the one
+                // status that justifies destroying a stored key. Everything else (LMP and
+                // different-transaction collisions 0x23/0x2A, page timeouts, transient link errors)
+                // used to wipe a perfectly good bond, forcing a pointless re-pair of a controller
+                // that had done nothing wrong. Preserve the key and let schedule_inquiry_retry()
+                // below retry the attempt instead.
+                // NB upstream additionally retries collisions on the SAME ACL via
+                // gap_request_security_level(); that needs the GAP security model, which this fork
+                // does not use (we drive hci_authentication_requested directly), so retrying the
+                // whole attempt is the portable equivalent here.
+                if (status == AUTHENTICATION_PIN_OR_KEY_MISSING) {
+                    DS5_LOG("[HCI] Remote reports missing key, drop stored key for %s\n",
+                           bd_addr_to_str(current_device_addr));
+                    gap_drop_link_key_for_bd_addr(current_device_addr);
+                } else {
+                    DS5_LOG("[HCI] Transient authentication failure status=0x%02X, preserve stored pairing\n",
+                           status);
+                }
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
                 schedule_inquiry_retry();
@@ -1573,6 +1606,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t status = hci_event_encryption_change_get_status(packet);
             const hci_con_handle_t handle = hci_event_encryption_change_get_connection_handle(packet);
             const uint8_t enabled = hci_event_encryption_change_get_encryption_enabled(packet);
+            if (!connection_handle_is_current(handle)) {
+                DS5_LOG("[HCI] Ignoring stale encryption event handle=0x%04X status=0x%02X\n",
+                       handle, status);
+                break;
+            }
             bt_note_pairing_event(8, status != ERROR_CODE_SUCCESS ? status : (enabled ? 0 : 0xEE));
             DS5_LOG("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
             if (status == ERROR_CODE_SUCCESS && enabled) {
@@ -1615,6 +1653,17 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
+            const hci_con_handle_t disconnected_handle =
+                hci_event_disconnection_complete_get_connection_handle(packet);
+            if (!connection_handle_is_current(disconnected_handle)) {
+                // Previously ANY disconnection event ran the full teardown and rebooted the Pico,
+                // including duplicates and events for handles we never owned. When acl_handle is
+                // already INVALID there is no session to tear down, so ignoring is the correct
+                // response rather than power-cycling the radio and restarting.
+                DS5_LOG("[HCI] Ignoring disconnection for handle=0x%04X (current=0x%04X)\n",
+                       disconnected_handle, acl_handle);
+                break;
+            }
             const bool host_suspended = usb_host_suspended_active();
             usb_handle_controller_transport_disconnect();
             reset_controller_input_report_cache();
