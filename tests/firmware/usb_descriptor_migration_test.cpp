@@ -501,14 +501,23 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         "\n        }\n\n        case GAP_EVENT_RSSI_MEASUREMENT:"
     );
     const auto suspended_query = hci_disconnect.find("usb_host_suspended_active()");
-    const auto watchdog = hci_disconnect.find("watchdog_reboot");
     if (
         suspended_query == std::string::npos
         || hci_disconnect.find("keeping USB on bus") == std::string::npos
-        || watchdog == std::string::npos
-        || watchdog < suspended_query
     ) {
-        throw std::runtime_error("BT disconnect must avoid rebooting while the USB host is suspended");
+        throw std::runtime_error("BT disconnect must keep USB on the bus while the host is suspended");
+    }
+
+    // The bridge recovers in place instead of power-cycling the radio and rebooting. The old
+    // reboot came from the base commit that fixed the headset audio route and predates the
+    // explicit route reset that now runs on every disconnect. Guard inverted so it cannot be
+    // reintroduced without deciding to: a reboot here takes the USB device down and back up
+    // every time a controller wanders out of range.
+    if (hci_disconnect.find("watchdog_reboot") != std::string::npos) {
+        throw std::runtime_error("BT disconnect must recover in place, not reboot the Pico");
+    }
+    if (hci_disconnect.find("staying alive for reconnect") == std::string::npos) {
+        throw std::runtime_error("BT disconnect must stay on the bus and wait for the controller");
     }
 }
 
