@@ -123,6 +123,9 @@
 #define RSSI_REQUEST_TIMEOUT_US 1000000u
 #define INQUIRY_RETRY_DELAY_US 2000000u
 #define PAIRING_WINDOW_US 60000000u // Button-armed discovery window for NEW controllers (60s).
+// Grace granted ONCE when the window elapses while a pairing attempt is already in
+// flight, so the handshake is not cut off by the clock (see bt_inquiry_loop).
+#define PAIRING_WINDOW_ATTEMPT_EXTENSION_US 12000000u
 #define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
 #define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
@@ -251,6 +254,7 @@ static bool new_pair = false; // Only newly paired devices create channels; auto
 static bool inquiry_active = false;
 static uint32_t inquiry_retry_at_us = 0;
 static uint32_t pairing_window_until_us = 0; // Non-zero while a button-armed pairing window is open.
+static bool pairing_window_extended = false; // One-shot in-flight grace, reset on each arm.
 static bool acl_connection_pending = false;
 static uint32_t acl_connection_pending_at_us = 0;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
@@ -1215,16 +1219,37 @@ void bt_inquiry_loop() {
     // reconnecting and waking the host without a button press.
     if (pairing_window_until_us != 0) {
         if (bt_time_reached(now, pairing_window_until_us)) {
-            pairing_window_until_us = 0;
-            if (inquiry_active) {
-                inquiry_active = false;
-                gap_inquiry_stop();
+            // Do not let the clock cut off a handshake that already started. The stale-key
+            // refusals at HCI_EVENT_LINK_KEY_REQUEST and HCI_EVENT_CONNECTION_REQUEST both
+            // re-read pairing_window_active() from the clock, so a controller found in the
+            // last few hundred ms of the window would reach LINK_KEY_REQUEST just after the
+            // window shut, be offered the dead key, and fall into the auth 0x06 -> disconnect
+            // -> reboot loop that 1.6.13/1.6.23 exist to prevent. Grant the grace ONCE: a
+            // wedged attempt must not keep a headless bridge discoverable indefinitely.
+            const bool attempt_in_flight =
+                device_found
+                || acl_connection_pending
+                || acl_handle != HCI_CON_HANDLE_INVALID;
+            if (attempt_in_flight && !pairing_window_extended) {
+                pairing_window_extended = true;
+                pairing_window_until_us = now + PAIRING_WINDOW_ATTEMPT_EXTENSION_US;
+                if (pairing_window_until_us == 0) {
+                    pairing_window_until_us = 1; // 0 is the closed sentinel.
+                }
+                DS5_LOG("[PAIR] Pairing window elapsed with an attempt in flight; extended %us\n",
+                       (unsigned)(PAIRING_WINDOW_ATTEMPT_EXTENSION_US / 1000000u));
+            } else {
+                pairing_window_until_us = 0;
+                if (inquiry_active) {
+                    inquiry_active = false;
+                    gap_inquiry_stop();
+                }
+                gap_discoverable_control(0);
+                if (acl_handle == HCI_CON_HANDLE_INVALID) {
+                    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+                }
+                DS5_LOG("[PAIR] Pairing window expired\n");
             }
-            gap_discoverable_control(0);
-            if (acl_handle == HCI_CON_HANDLE_INVALID) {
-                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
-            }
-            DS5_LOG("[PAIR] Pairing window expired\n");
         } else {
             // Blink state is per-window: pairing_window_until_us doubles as the window
             // id, so re-arming resets the phase and the deadline is always fresh. A
@@ -1278,6 +1303,7 @@ void bt_arm_pairing_window() {
         return;
     }
     pairing_window_until_us = time_us_32() + PAIRING_WINDOW_US;
+    pairing_window_extended = false;
     inquiry_retry_at_us = 0; // Start inquiry immediately.
     DS5_LOG("[PAIR] Pairing window armed for %us\n", (unsigned)(PAIRING_WINDOW_US / 1000000u));
     start_inquiry_if_needed();
