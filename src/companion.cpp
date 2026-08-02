@@ -26,7 +26,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 24;
+constexpr uint8_t kFirmwarePatch = 25;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1627,9 +1627,14 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
         memcpy(buffer + 16, controller_addr, 6);
     }
     // Pairing breadcrumbs: [22] = event count, then {stage, status} pairs.
-    // Stages: 1 inquiry-found, 3 conn-complete, 4 link-key-req (1=stored/
-    // 0=negative), 5 ssp-confirm, 6 legacy-pin, 7 auth-complete, 8 encryption
-    // (0xEE = disabled), 9 disconnect (reason), 10 l2cap-open.
+    // NB these are PAYLOAD offsets; in the raw feature report add 1 for the
+    // report ID (count at byte 23, pairs from byte 24).
+    // Stages: 1 inquiry-found, 2 inbound-during-window (stale key dropped),
+    // 3 conn-complete, 4 link-key-req (1=stored/0=negative/2=stale dropped),
+    // 5 ssp-confirm, 6 legacy-pin, 7 auth-complete, 8 encryption (0xEE =
+    // disabled), 9 disconnect (reason), 10 l2cap-open (fires TWICE, once per
+    // L2CAP channel), 11 link-key drop did not take (1=pre-connect drop missed
+    // but re-drop took, 2=DB delete broken, 3=drop at link-key-req missed).
     buffer[22] = bt_copy_pairing_events(buffer + 23, 10);
     return COMPANION_PAYLOAD_SIZE;
 }

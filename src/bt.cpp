@@ -159,6 +159,10 @@ enum BtAudioDebugKind : uint8_t {
     BtAudioDebugLateAudio = 1,
     BtAudioDebugNonAudioAheadOfQueuedAudio = 2,
     BtAudioDebugControlSend = 3,
+    // 4 was BtAudioDebugControlSuppressed, retired with the host audio encoder
+    // path; the companion still decodes type 4 as "CONTROL_SUPPRESSED", so new
+    // kinds start at 5 to avoid being mislabelled by older companion builds.
+    BtAudioDebugInterruptSendFail = 5,
 };
 
 enum OutputTraceFlag : uint8_t {
@@ -265,7 +269,6 @@ static bool bt_rssi_known = false;
 static bool bt_rssi_request_pending = false;
 static uint32_t bt_rssi_last_request_us = 0;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
-static bool feature_prefetch_active = false;
 static queue<output_packet> urgent_queue;
 static queue<output_packet> audio_queue;
 static vector<control_packet> control_queue;
@@ -1223,12 +1226,23 @@ void bt_inquiry_loop() {
             }
             DS5_LOG("[PAIR] Pairing window expired\n");
         } else {
+            // Blink state is per-window: pairing_window_until_us doubles as the window
+            // id, so re-arming resets the phase and the deadline is always fresh. A
+            // stale (or never-set) deadline breaks bt_time_reached()'s wrapping compare
+            // -- (int32_t)(now - 0) is negative for half of every 71.6 minute
+            // time_us_32() period -- which silently killed the blink for a whole window.
+            static uint32_t led_window_id = 0;
             static uint32_t led_toggle_at_us = 0;
             static bool led_on = false;
+            if (led_window_id != pairing_window_until_us) {
+                led_window_id = pairing_window_until_us;
+                led_toggle_at_us = now; // Blink on this pass.
+                led_on = false;
+            }
             if (bt_time_reached(now, led_toggle_at_us)) {
                 led_on = !led_on;
                 cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, led_on);
-                led_toggle_at_us = now + 250000u; // ~4 Hz.
+                led_toggle_at_us = now + 250000u; // 250 ms per edge = ~2 Hz blink.
             }
         }
     }
@@ -1327,8 +1341,16 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             }
 
             // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
+            // Latch the first match: gap_inquiry_stop() below is asynchronous, so results already
+            // queued in the transport still land here after a target is picked. Without !device_found
+            // a second peripheral in pairing mode would overwrite current_device_addr, and the
+            // inquiry-complete handler would then drop ITS link key and connect to it instead.
+            // NB: pairing_window_active is a FUNCTION in this fork (bt.cpp:397), not upstream's bool
+            // -- any future "parity with upstream" edit must call pairing_window_active(time_us_32()),
+            // never the bare name, which would decay to an always-true function pointer.
             if (
                 (cod & 0x000F00) == 0x000500
+                && !device_found
                 && !acl_connection_pending
                 && acl_handle == HCI_CON_HANDLE_INVALID
             ) {
@@ -1355,6 +1377,31 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 // auth fails and the ensuing disconnect reboots the Pico before the drop persists, which
                 // is why switching a controller between Picos used to require a flash nuke.
                 gap_drop_link_key_for_bd_addr(current_device_addr);
+                // Verify the drop actually took. A 1.6.22 breadcrumb capture showed LINK_KEY_REQUEST
+                // still finding a stored key in the SAME session this drop ran in ("replied STORED key"
+                // -> auth 0x06), which is why the refusal at HCI_EVENT_LINK_KEY_REQUEST exists. Read
+                // back through the same link-key DB: a survivor means the delete failed, this address is
+                // not the one the link-key event will carry, or the TLV delete lost a race with the
+                // BOOTSEL flash lockout. Re-drop once (idempotent; a no-op when absent) and CONTINUE
+                // regardless -- the LINK_KEY_REQUEST refusal already forces fresh SSP, and refusing to
+                // pair here would strand a headless bridge with no way to report why.
+                {
+                    link_key_t stale_key;
+                    link_key_type_t stale_key_type;
+                    if (gap_get_link_key_for_bd_addr(current_device_addr, stale_key, &stale_key_type)) {
+                        DS5_LOG("[HCI] Link key for %s survived the pre-connect drop, dropping again\n",
+                               bd_addr_to_str(current_device_addr));
+                        gap_drop_link_key_for_bd_addr(current_device_addr);
+                        const bool still_there =
+                            gap_get_link_key_for_bd_addr(current_device_addr, stale_key, &stale_key_type);
+                        // 1 = first drop missed but the re-drop took; 2 = the DB delete itself is broken.
+                        bt_note_pairing_event(11, still_there ? 2 : 1);
+                        if (still_there) {
+                            DS5_LOG("[HCI] Link key for %s still present after re-drop; relying on the "
+                                   "LINK_KEY_REQUEST refusal\n", bd_addr_to_str(current_device_addr));
+                        }
+                    }
+                }
                 mark_acl_connection_pending();
                 HCI_SEND_CMD_LOGGED(&hci_create_connection, current_device_addr,
                              hci_usable_acl_packet_types(), 0, 0, 0, 1);
@@ -1442,6 +1489,16 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     bt_note_pairing_event(4, 2); // had stale key during re-pair -> dropped, forcing SSP
                     DS5_LOG("[HCI] Link key request from %s during pairing window, drop stale key, force SSP\n",
                            bd_addr_to_str(addr));
+                    // Read back on the event's OWN address: a survivor here proves the DB delete is what
+                    // fails, not an address mismatch with the pre-connect drop. Diagnostic only -- the
+                    // negative reply below forces fresh SSP either way. A TLV get_tag is an XIP read with
+                    // no flash lockout, and the drop above already performs a flash WRITE on this same
+                    // deadline-bound path, so the extra read costs nothing we were not already paying.
+                    if (gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type)) {
+                        bt_note_pairing_event(11, 3); // drop on the event's own address did not take
+                        DS5_LOG("[HCI] Link key for %s survived the drop at link-key request\n",
+                               bd_addr_to_str(addr));
+                    }
                 } else {
                     bt_note_pairing_event(4, 0); // no key -> fresh SSP
                     DS5_LOG("[HCI] Link key request from %s, no key, force re-pair\n", bd_addr_to_str(addr));
@@ -1941,7 +1998,24 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
             uint8_t status = l2cap_send(hid_interrupt_cid, next_packet.data.data(), next_packet.data.size());
             if (status != 0) {
-                DS5_LOG("[L2CAP] Interrupt Error, Status: 0x%02X\n", status);
+                DS5_LOG("[L2CAP] Interrupt Error, Status: 0x%02X class=%u reason=%u\n",
+                    status,
+                    static_cast<unsigned>(next_packet.packet_class),
+                    static_cast<unsigned>(next_packet.reason));
+                // The packet was already dequeued and counted as sent by
+                // note_output_packet_sent(), so a failure here is silent loss.
+                // Mirror it into the audio debug ring: preset=audio builds carry
+                // the ring but not the UART log, and that is the build used to
+                // chase speaker dropouts. arg4 is the age of the frame that died
+                // (x100 us) -- already-late means a scheduling problem, fresh
+                // means a pure link failure.
+                audio_debug_note_bt_event(
+                    BtAudioDebugInterruptSendFail,
+                    status,
+                    next_packet.packet_class,
+                    next_packet.reason,
+                    packet_age_us(now, next_packet.enqueue_time_us) / 100
+                );
             } else if (!next_packet.data.empty()) {
 #ifdef ENABLE_COMPANION
                 companion_note_trigger_trace_report(
@@ -3102,12 +3176,10 @@ void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len) {
 
 void init_feature() {
     controller_type = ControllerTypeUnknown;
-    feature_prefetch_active = true;
     get_feature_data(0x09, 20);
     get_feature_data(0x20, 64);
     get_feature_data(0x22, 64);
     get_feature_data(0x05, 41);
     controller_type_check_pending = true;
     get_feature_data(0x70, 64);
-    feature_prefetch_active = false;
 }
