@@ -128,6 +128,14 @@
 #define PAIRING_WINDOW_ATTEMPT_EXTENSION_US 12000000u
 // The only authentication status that means "the controller no longer has our bond".
 #define AUTHENTICATION_PIN_OR_KEY_MISSING 0x06u
+// Recoverable authentication collisions: the peer ran its own transaction at the same time.
+#define AUTHENTICATION_LMP_TRANSACTION_COLLISION 0x23u
+#define AUTHENTICATION_DIFFERENT_TRANSACTION_COLLISION 0x2Au
+#define AUTHENTICATION_COLLISION_RETRY_DELAY_US 250000u
+#define AUTHENTICATION_COLLISION_MAX_RETRIES 3u
+// Recovery deadlines for the span between ACL connect and the HID channels opening.
+#define ENCRYPTION_COMPLETION_TIMEOUT_US 2500000u
+#define SECURITY_PHASE_TIMEOUT_US 8000000u
 #define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
 #define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
@@ -256,10 +264,22 @@ static bool new_pair = false; // Only newly paired devices create channels; auto
 static bool inquiry_active = false;
 static uint32_t inquiry_retry_at_us = 0;
 static uint32_t pairing_window_until_us = 0; // Non-zero while a button-armed pairing window is open.
-static bool pairing_window_extended = false; // One-shot in-flight grace, reset on each arm.
 static bool acl_connection_pending = false;
 static uint32_t acl_connection_pending_at_us = 0;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
+// Security-phase watchdogs. Before these, the fork had NO recovery between ACL connect and
+// the HID channels opening: the idle-disconnect check is nested inside the interrupt-data
+// branch so it never runs when no data arrives, and ACL_CONNECTION_PENDING_TIMEOUT_US cannot
+// fire once a handle exists -- a stalled authentication or encryption hung the link until the
+// user power-cycled the Pico. (The span AFTER encryption is already covered by
+// schedule_hid_channel_recovery()/HID_CHANNEL_RECOVERY_MAX_ATTEMPTS.)
+static uint32_t securing_started_us = 0; // Non-zero from auth request until encryption is up.
+static bool encryption_completion_pending = false;
+static hci_con_handle_t encryption_command_handle = HCI_CON_HANDLE_INVALID;
+static uint32_t encryption_command_sent_at_us = 0;
+static bool authentication_retry_pending = false;
+static uint8_t authentication_retry_attempts = 0;
+static uint32_t authentication_retry_at_us = 0;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
@@ -411,6 +431,16 @@ static void schedule_inquiry_retry(uint32_t delay_us = INQUIRY_RETRY_DELAY_US) {
 // DISCONNECTION_COMPLETE clears it), so INVALID here reliably means "nothing to act on".
 static bool connection_handle_is_current(hci_con_handle_t handle) {
     return handle != HCI_CON_HANDLE_INVALID && handle == acl_handle;
+}
+
+static void clear_security_watchdogs() {
+    securing_started_us = 0;
+    encryption_completion_pending = false;
+    encryption_command_handle = HCI_CON_HANDLE_INVALID;
+    encryption_command_sent_at_us = 0;
+    authentication_retry_pending = false;
+    authentication_retry_attempts = 0;
+    authentication_retry_at_us = 0;
 }
 
 static bool pairing_window_active(uint32_t now) {
@@ -1196,6 +1226,49 @@ static void cancel_hid_channel_recovery_if_ready() {
 }
 
 void bt_connection_recovery_loop() {
+    const uint32_t recovery_now = time_us_32();
+
+    // Re-issue authentication after a transient collision, on the same ACL. Upstream does this
+    // with gap_request_security_level(); this fork drives HCI directly, so re-issue the same
+    // command CONNECTION_COMPLETE sent.
+    if (
+        authentication_retry_pending
+        && acl_handle != HCI_CON_HANDLE_INVALID
+        && bt_time_reached(recovery_now, authentication_retry_at_us)
+    ) {
+        authentication_retry_pending = false;
+        DS5_LOG("[HCI] Retrying authentication on handle=0x%04X attempt=%u\n",
+                acl_handle, authentication_retry_attempts);
+        HCI_SEND_CMD_LOGGED(&hci_authentication_requested, acl_handle);
+    }
+
+    // Encryption was commanded but HCI_EVENT_ENCRYPTION_CHANGE never arrived.
+    if (
+        encryption_completion_pending
+        && acl_handle != HCI_CON_HANDLE_INVALID
+        && encryption_command_handle == acl_handle
+        && static_cast<uint32_t>(recovery_now - encryption_command_sent_at_us)
+            >= ENCRYPTION_COMPLETION_TIMEOUT_US
+    ) {
+        DS5_LOG("[HCI] Encryption completion stalled; recycling the ACL (pairing preserved)\n");
+        clear_security_watchdogs();
+        bt_disconnect();
+        return;
+    }
+
+    // The whole authenticate-then-encrypt phase wedged (no auth-complete at all, or a peer that
+    // keeps colliding). Recycle rather than hanging until the user power-cycles.
+    if (
+        securing_started_us != 0
+        && acl_handle != HCI_CON_HANDLE_INVALID
+        && static_cast<uint32_t>(recovery_now - securing_started_us) >= SECURITY_PHASE_TIMEOUT_US
+    ) {
+        DS5_LOG("[HCI] Security phase timed out; recycling the ACL (pairing preserved)\n");
+        clear_security_watchdogs();
+        bt_disconnect();
+        return;
+    }
+
     if (!hid_channel_recovery_pending || acl_handle == HCI_CON_HANDLE_INVALID) {
         return;
     }
@@ -1236,14 +1309,18 @@ void bt_inquiry_loop() {
             // re-read pairing_window_active() from the clock, so a controller found in the
             // last few hundred ms of the window would reach LINK_KEY_REQUEST just after the
             // window shut, be offered the dead key, and fall into the auth 0x06 -> disconnect
-            // -> reboot loop that 1.6.13/1.6.23 exist to prevent. Grant the grace ONCE: a
-            // wedged attempt must not keep a headless bridge discoverable indefinitely.
+            // -> reboot loop that 1.6.13/1.6.23 exist to prevent. Re-extended for as long as the
+            // attempt is genuinely in flight, matching upstream: this is only safe because every
+            // in-flight state now has a bounded exit -- ACL_CONNECTION_PENDING_TIMEOUT_US for a
+            // connect that never completes, the security-phase and encryption watchdogs in
+            // bt_connection_recovery_loop() for a stalled handshake, and
+            // HID_CHANNEL_RECOVERY_MAX_ATTEMPTS for channels that never open. A wedged attempt
+            // therefore cannot keep a headless bridge discoverable indefinitely.
             const bool attempt_in_flight =
                 device_found
                 || acl_connection_pending
                 || acl_handle != HCI_CON_HANDLE_INVALID;
-            if (attempt_in_flight && !pairing_window_extended) {
-                pairing_window_extended = true;
+            if (attempt_in_flight) {
                 pairing_window_until_us = now + PAIRING_WINDOW_ATTEMPT_EXTENSION_US;
                 if (pairing_window_until_us == 0) {
                     pairing_window_until_us = 1; // 0 is the closed sentinel.
@@ -1315,7 +1392,6 @@ void bt_arm_pairing_window() {
         return;
     }
     pairing_window_until_us = time_us_32() + PAIRING_WINDOW_US;
-    pairing_window_extended = false;
     inquiry_retry_at_us = 0; // Start inquiry immediately.
     DS5_LOG("[PAIR] Pairing window armed for %us\n", (unsigned)(PAIRING_WINDOW_US / 1000000u));
     start_inquiry_if_needed();
@@ -1489,6 +1565,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 // new-controller pairing still resumes the PC while it is in its wakeable sleep window.
                 usb_wake_host_if_suspended();
                 DS5_LOG("[HCI] Request authentication on handle=0x%04X\n", handle);
+                clear_security_watchdogs();
+                securing_started_us = time_us_32(); // Arm the security-phase deadline.
                 HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
             } else {
                 clear_outbound_inquiry_target();
@@ -1575,6 +1653,26 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             bt_note_pairing_event(7, status);
             DS5_LOG("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
+                // An LMP/different-transaction collision means the peer started its own security
+                // transaction at the same moment; the bond is fine and the ACL is still up, so
+                // re-issue authentication on the SAME connection rather than tearing anything down.
+                // The security-phase watchdog still bounds the whole sequence, so a peer that keeps
+                // colliding cannot stall us indefinitely.
+                if (
+                    (
+                        status == AUTHENTICATION_LMP_TRANSACTION_COLLISION
+                        || status == AUTHENTICATION_DIFFERENT_TRANSACTION_COLLISION
+                    )
+                    && authentication_retry_attempts < AUTHENTICATION_COLLISION_MAX_RETRIES
+                ) {
+                    authentication_retry_attempts++;
+                    authentication_retry_pending = true;
+                    authentication_retry_at_us = time_us_32()
+                        + AUTHENTICATION_COLLISION_RETRY_DELAY_US * authentication_retry_attempts;
+                    DS5_LOG("[HCI] Authentication collision status=0x%02X, retry same ACL attempt=%u\n",
+                           status, authentication_retry_attempts);
+                    break;
+                }
                 // Status 0x06 is the controller telling us it no longer holds our bond -- the one
                 // status that justifies destroying a stored key. Everything else (LMP and
                 // different-transaction collisions 0x23/0x2A, page timeouts, transient link errors)
@@ -1597,6 +1695,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 clear_acl_connection_pending();
                 schedule_inquiry_retry();
             } else {
+                authentication_retry_pending = false;
+                authentication_retry_attempts = 0;
+                encryption_completion_pending = true;
+                encryption_command_handle = handle;
+                encryption_command_sent_at_us = time_us_32();
                 HCI_SEND_CMD_LOGGED(&hci_set_connection_encryption, handle, 1);
             }
             break;
@@ -1613,7 +1716,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             }
             bt_note_pairing_event(8, status != ERROR_CODE_SUCCESS ? status : (enabled ? 0 : 0xEE));
             DS5_LOG("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
+            encryption_completion_pending = false;
+            encryption_command_handle = HCI_CON_HANDLE_INVALID;
             if (status == ERROR_CODE_SUCCESS && enabled) {
+                securing_started_us = 0; // Security phase done; HID opening is covered by
+                                         // schedule_hid_channel_recovery() below.
                 DS5_LOG("[L2CAP] Open HID channels\n");
                 schedule_hid_channel_recovery();
                 if (new_pair) {
@@ -1673,6 +1780,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             bt_note_pairing_event(9, reason);
             clear_outbound_inquiry_target();
             clear_acl_connection_pending();
+            clear_security_watchdogs();
             inquiry_active = false;
             acl_handle = HCI_CON_HANDLE_INVALID;
             bt_rssi = 0;
