@@ -53,10 +53,15 @@ vi.mock('node:fs', () => ({
 
 import {
   AudioHapticsSessionMonitor,
+  getDefaultRenderEndpointStatus,
   playBridgeHapticsTestPattern,
   playBridgeSpeakerTestTone,
   SystemAudioHapticsEngine
 } from './audio-helper';
+
+async function flushMicrotasks(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
+}
 
 beforeEach(() => {
   childProcessMock.processes.length = 0;
@@ -190,5 +195,40 @@ describe('audio haptics session listing', () => {
     expect(childProcessMock.spawn.mock.calls[0]![1]).toEqual(['--monitor-audio-sessions']);
 
     await monitor.stop();
+  });
+});
+
+// Keep last: this is the only suite here that drives runAudioHelperCommand, and
+// it deliberately leaves the module's preferred-command cache populated.
+describe('audio helper command fallback', () => {
+  it('reuses the candidate that worked instead of re-walking the fallback chain', async () => {
+    const first = getDefaultRenderEndpointStatus();
+    expect(childProcessMock.spawn.mock.calls[0]![0]).toContain('AudioHelper.exe');
+    childProcessMock.processes[0]!.emit('exit', 1, null);
+    await flushMicrotasks();
+
+    expect(childProcessMock.spawn.mock.calls[1]![0]).toBe('dotnet');
+    childProcessMock.processes[1]!.stdout.emit(
+      'data',
+      Buffer.from('{"deviceName":"DS5 Bridge","isBridgeEndpoint":true}')
+    );
+    childProcessMock.processes[1]!.emit('exit', 0, null);
+
+    await expect(first).resolves.toEqual({ deviceName: 'DS5 Bridge', isBridgeEndpoint: true });
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(2);
+
+    // The launcher that answered is tried first next time, so a helper that is
+    // merely slow no longer costs a timeout per stale candidate on every call.
+    const second = getDefaultRenderEndpointStatus();
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(3);
+    expect(childProcessMock.spawn.mock.calls[2]![0]).toBe('dotnet');
+    childProcessMock.processes[2]!.stdout.emit(
+      'data',
+      Buffer.from('{"deviceName":"DS5 Bridge","isBridgeEndpoint":true}')
+    );
+    childProcessMock.processes[2]!.emit('exit', 0, null);
+
+    await expect(second).resolves.toEqual({ deviceName: 'DS5 Bridge', isBridgeEndpoint: true });
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(3);
   });
 });
