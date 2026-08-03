@@ -34,6 +34,17 @@ enum class WatchdogMainLoopPhase : uint8_t {
     // off, so the watchdog is the only thing that ends it -- which is indistinguishable
     // from a stall unless we stamp it on the way in.
     Panic = 23,
+    // CPU faults. The SDK default for these is a breakpoint that locks the core until the
+    // watchdog fires, which looks exactly like a stall and never reaches panic().
+    FaultHard = 24,
+    FaultMemManage = 25,
+    FaultBus = 26,
+    FaultUsage = 27,
+    // Steps within the USB send, to separate "waiting on the endpoint" from "stuck in the
+    // hardware layer". The last one entered before a reset is the one that did not return.
+    SendClaim = 28,
+    SendXfer = 29,
+    SendDcdXfer = 30,
 };
 
 struct WatchdogTelemetrySnapshot {
