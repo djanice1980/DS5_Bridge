@@ -306,11 +306,16 @@ void reset_controller_input_report_cache() {
 }
 
 void interrupt_loop() {
+    // Sub-step breadcrumbs: a confirmed watchdog hang lands in this function, but every call
+    // here returns immediately when read in isolation. Stamping each step means the retained
+    // breadcrumb names the statement that actually blocked instead of the stage.
+    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptQuietCheck);
     const uint32_t now = time_us_32();
     if (host_input_quiet_active(now)) {
         return;
     }
 
+    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptReadyCheck);
     const HostPersonaMode persona = host_persona_active();
     const bool xusb = persona == HostPersonaModeXusb360;
     if (!host_input_ready_for_persona(persona)) {
@@ -321,6 +326,7 @@ void interrupt_loop() {
     BridgeControllerState safe_state{};
 
 
+    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptLockAcquire);
     critical_section_enter_blocking(&report_cs);
     if (report_dirty) {
         safe_state = interrupt_in_state;
@@ -331,24 +337,28 @@ void interrupt_loop() {
 
     // Only send to TinyUSB if we actually grabbed fresh data
     if (should_send) {
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptEncode);
         HostPersonaInputReport safe_report{};
         if (!host_persona_encode_input(persona, safe_state, safe_report)) {
             return;
         }
         note_usb_input_report(safe_report.bytes, safe_report.len);
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptSend);
         const bool queued = xusb
             ? xusb360_usb_send_report(safe_report.bytes, safe_report.len)
             : tud_hid_report(safe_report.report_id, safe_report.bytes, safe_report.len);
         if (!queued) {
             DS5_LOG("[USBHID] tud_hid_report error\n");
-            
-            // If the report failed to queue, restore the dirty flag 
+
+            // If the report failed to queue, restore the dirty flag
             // so we try again on the next loop iteration.
+            watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptRelock);
             critical_section_enter_blocking(&report_cs);
             report_dirty = true;
             critical_section_exit(&report_cs);
         }
     }
+    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptTail);
 }
 
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {

@@ -20,6 +20,16 @@ enum class WatchdogMainLoopPhase : uint8_t {
     Companion = 13,
     InterruptAfterCompanion = 14,
     FirmwareLogFlush = 15,
+    // Sub-steps INSIDE interrupt_loop(). The phase-level breadcrumb narrowed a confirmed
+    // hang to interrupt_loop, but every statement in it returns immediately on inspection
+    // -- so the breadcrumb has to name the exact statement rather than the stage.
+    InterruptQuietCheck = 16,
+    InterruptReadyCheck = 17,
+    InterruptLockAcquire = 18,
+    InterruptEncode = 19,
+    InterruptSend = 20,
+    InterruptRelock = 21,
+    InterruptTail = 22,
 };
 
 struct WatchdogTelemetrySnapshot {

@@ -1114,7 +1114,17 @@ export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
   12: 'output-retry',
   13: 'companion',
   14: 'interrupt-after-companion',
-  15: 'firmware-log-flush'
+  15: 'firmware-log-flush',
+  // Firmware 1.6.29+: sub-steps inside interrupt_loop(). These do not distinguish the
+  // before-audio call from the after-companion one -- only one phase byte is retained --
+  // but the statement is what we need, and the stage was already known.
+  16: 'interrupt/quiet-check',
+  17: 'interrupt/ready-check',
+  18: 'interrupt/lock-acquire',
+  19: 'interrupt/encode',
+  20: 'interrupt/send',
+  21: 'interrupt/relock',
+  22: 'interrupt/tail'
 };
 
 export interface DeviceIdentityPayload {
