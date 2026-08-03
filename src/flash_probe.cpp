@@ -15,7 +15,9 @@
 // stall is elsewhere in the BT path and this rules flash out.
 
 #include "pico.h"
+#include "pico/time.h"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace {
