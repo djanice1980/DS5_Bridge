@@ -27,7 +27,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 32;
+constexpr uint8_t kFirmwarePatch = 33;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1654,6 +1654,10 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
         buffer[53] = worst_phase;
         buffer[54] = static_cast<uint8_t>(worst_ms > 0xFFFFu ? 0xFFu : (worst_ms & 0xFFu));
         buffer[55] = static_cast<uint8_t>(worst_ms > 0xFFFFu ? 0xFFu : ((worst_ms >> 8) & 0xFFu));
+        // [56..59] faulting data address, [60] phase the main loop was in before the fault
+        // vector overwrote the phase byte. Both zero on non-fault records.
+        write_u32(buffer + 56, wdt.prior_fault_address);
+        buffer[60] = wdt.prior_phase_before_fault;
     }
     // Pairing breadcrumbs: [22] = event count, then {stage, status} pairs.
     // NB these are PAYLOAD offsets; in the raw feature report add 1 for the

@@ -120,7 +120,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.32';
+const BUNDLED_FIRMWARE_VERSION = '1.6.33';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -4052,8 +4052,17 @@ export class BridgeService extends EventEmitter {
         const pc = wdt.priorPhaseEnteredAtMs >>> 0;
         const cfsr = wdt.priorSequence & 0xffff;
         const escalated = (wdt.priorSequence & 0x4000_0000) !== 0 ? ' escalated' : '';
+        const addr = wdt.faultAddress >>> 0;
+        // The faulting data address is what separates a null pointer from a garbage one.
+        const at = addr !== 0 ? ` accessing 0x${addr.toString(16).padStart(8, '0')}` : '';
+        // The fault vector overwrites the phase byte, so the pre-fault phase is carried
+        // separately -- it is the context that makes the crash address meaningful.
+        const before = wdt.phaseBeforeFault !== 0
+          ? ` during ${WATCHDOG_PHASE_NAMES[wdt.phaseBeforeFault] ?? `phase ${wdt.phaseBeforeFault}`}`
+          : '';
         this.snapshot.diagnostics.lastWatchdogHang +=
-          ` @ PC 0x${pc.toString(16).padStart(8, '0')} (CFSR 0x${cfsr.toString(16).padStart(4, '0')}${escalated})`;
+          ` @ PC 0x${pc.toString(16).padStart(8, '0')}${at}${before}`
+          + ` (CFSR 0x${cfsr.toString(16).padStart(4, '0')}${escalated})`;
       }
       // Live worst-phase timing (firmware 1.6.28+). A phase can be slow enough to matter
       // without ever reaching the 1s watchdog budget, and that is invisible otherwise.

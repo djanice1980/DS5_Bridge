@@ -58,6 +58,10 @@ struct WatchdogTelemetrySnapshot {
     uint8_t prior_phase;
     uint32_t prior_sequence;
     uint32_t prior_phase_entered_at_ms;
+    // Fault records only: the data address that faulted, and what the main loop was doing
+    // before the fault vector overwrote the phase byte.
+    uint32_t prior_fault_address;
+    uint8_t prior_phase_before_fault;
 };
 
 // Capture must happen before watchdog_enable() overwrites the SDK reset marker.
@@ -71,7 +75,12 @@ void watchdog_telemetry_worst_phase(uint8_t *phase, uint32_t *duration_us);
 // Record a CPU fault. On a fault the sequence/timestamp words carry the faulting PC and the
 // fault status register instead -- a crash address identifies the defect, a timestamp does
 // not. The phase byte says which record shape applies, so nothing is ambiguous.
-void watchdog_telemetry_note_fault(WatchdogMainLoopPhase phase, uint32_t pc, uint32_t status);
+void watchdog_telemetry_note_fault(
+    WatchdogMainLoopPhase phase,
+    uint32_t pc,
+    uint32_t status,
+    uint32_t fault_address
+);
 const char *watchdog_telemetry_phase_name(uint8_t phase);
 
 #endif // DS5_BRIDGE_WATCHDOG_TELEMETRY_H

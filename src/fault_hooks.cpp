@@ -32,6 +32,8 @@ namespace {
 // ARMv8-M System Control Block. Read directly rather than pulling in CMSIS headers.
 constexpr uintptr_t kScbCfsr = 0xE000ED28u; // Configurable Fault Status
 constexpr uintptr_t kScbHfsr = 0xE000ED2Cu; // HardFault Status
+constexpr uintptr_t kScbMmfar = 0xE000ED34u; // MemManage Fault Address
+constexpr uintptr_t kScbBfar = 0xE000ED38u;  // BusFault Address
 
 inline uint32_t read_reg(uintptr_t addr) {
     return *reinterpret_cast<volatile uint32_t *>(addr);
@@ -47,8 +49,18 @@ inline uint32_t read_reg(uintptr_t addr) {
     const uint32_t pc = frame != nullptr ? frame[6] : 0;
     // CFSR says what kind of fault; HFSR's FORCED bit (30) says a configurable fault
     // escalated to hard. Pack both: CFSR in the low half, HFSR's top bits in the high half.
-    const uint32_t status = (read_reg(kScbCfsr) & 0xFFFFu) | (read_reg(kScbHfsr) & 0xFFFF0000u);
-    watchdog_telemetry_note_fault(phase, pc, status);
+    const uint32_t cfsr = read_reg(kScbCfsr);
+    const uint32_t status = (cfsr & 0xFFFFu) | (read_reg(kScbHfsr) & 0xFFFF0000u);
+    // The faulting DATA address -- the one number that separates "the pointer was null"
+    // from "the pointer was garbage" from "the stack ran off its end". Only meaningful
+    // when the matching valid bit is set: BFARVALID (bit 15) or MMARVALID (bit 7).
+    uint32_t fault_address = 0;
+    if ((cfsr & (1u << 15)) != 0) {
+        fault_address = read_reg(kScbBfar);
+    } else if ((cfsr & (1u << 7)) != 0) {
+        fault_address = read_reg(kScbMmfar);
+    }
+    watchdog_telemetry_note_fault(phase, pc, status, fault_address);
     while (true) {
         tight_loop_contents();
     }
