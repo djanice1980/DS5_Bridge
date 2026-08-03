@@ -128,6 +128,10 @@ static void usb_reset_audio_class_state() {
     }
 }
 
+bool usb_device_stack_ready() {
+    return tud_inited();
+}
+
 static void usb_deinit_device_stack() {
     if (!tud_inited()) {
         return;
