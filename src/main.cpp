@@ -218,9 +218,10 @@ static BridgeControllerState neutral_controller_state() {
 }
 
 static bool host_input_ready_for_persona(HostPersonaMode persona) {
-    // The stack check must come first. Between tusb_deinit() and the next tusb_init() --
-    // the window a controller power-cycle opens -- tud_hid_ready() still returns true off
-    // stale state, and the send that follows dereferences a null endpoint mutex.
+    // The stack check must come first: tud_hid_ready() answers true off stale state whenever
+    // the stack is not initialised, and the send that follows would dereference a null
+    // endpoint mutex. That window is closed now that disconnect is a soft detach, so this is
+    // defence rather than the active fix.
     if (!usb_device_stack_ready()) {
         return false;
     }

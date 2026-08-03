@@ -31,6 +31,13 @@ static bool usb_reconnect_connect_pending = false;
 static uint32_t usb_reconnect_at_us = 0;
 static bool usb_controller_transport_ready = false;
 static bool usb_controller_transport_disconnect_pending = false;
+// Upstream's model, adopted after this fork's deinit approach was traced to a hard fault
+// and a 172ms main-loop stall. "attached" tracks whether the emulated controller is
+// presented to the host; "transition_pending" defers the actual TinyUSB work to
+// usb_pm_poll(). Bluetooth callbacks only publish desired state -- they must never touch
+// the stack from inside cyw43_arch_poll() or a TinyUSB callback.
+static bool usb_controller_transport_attached = false;
+static bool usb_controller_transport_transition_pending = false;
 static volatile bool usb_mounted = false;
 static volatile bool usb_host_suspended = false;
 static volatile uint32_t usb_suspend_at_us = 0;
@@ -132,15 +139,6 @@ bool usb_device_stack_ready() {
     return tud_inited();
 }
 
-static void usb_deinit_device_stack() {
-    if (!tud_inited()) {
-        return;
-    }
-
-    tud_disconnect();
-    tusb_deinit(BOARD_TUD_RHPORT);
-}
-
 void usb_device_stack_init_disconnected() {
     const bool initialized_now = !tud_inited();
     if (!tud_inited()) {
@@ -161,8 +159,14 @@ void usb_device_stack_init_disconnected() {
 static void usb_connect_controller_transport(uint32_t now) {
     (void)now;
     usb_controller_transport_ready = true;
+    if (usb_controller_transport_attached) {
+        return;
+    }
+    // init_disconnected() only does real work on the very first attach now, because the
+    // stack is never torn down. That is what removes the 150ms sleep from every reconnect.
     usb_device_stack_init_disconnected();
     tud_connect();
+    usb_controller_transport_attached = true;
 }
 
 #ifdef DS5_PAIRING_DIAG
@@ -243,7 +247,9 @@ void usb_handle_controller_transport_disconnect() {
     }
     usb_controller_transport_disconnect_pending = false;
     usb_mounted = false;
-    usb_deinit_device_stack();
+    // Reconciled in usb_pm_poll(). This runs from a Bluetooth callback, i.e. inside
+    // cyw43_arch_poll(), and must not touch TinyUSB from here.
+    usb_controller_transport_transition_pending = true;
 }
 
 void usb_wake_host_if_suspended() {
@@ -269,7 +275,10 @@ void usb_handle_controller_transport_ready() {
         usb_wake_host_if_suspended(); // Fallback wake in case the early link-connect signal was missed.
         return;
     }
-    usb_connect_controller_transport(time_us_32());
+    usb_controller_transport_ready = true;
+    // Same rule as the disconnect path: this is a Bluetooth callback, so only the desired
+    // state is published here. usb_pm_poll() does the TinyUSB work.
+    usb_controller_transport_transition_pending = true;
 }
 
 void usb_set_wake_on_connect(bool enabled) {
@@ -353,10 +362,28 @@ void usb_pm_poll() {
         return;
     }
 
+    if (usb_controller_transport_transition_pending) {
+        usb_controller_transport_transition_pending = false;
+        usb_controller_transport_disconnect_pending = false;
+        if (usb_controller_transport_ready) {
+            usb_connect_controller_transport(now);
+        } else if (usb_controller_transport_attached && tud_inited()) {
+            // Soft detach: drop the pull-up so the host sees the controller go away, but
+            // keep the initialised stack. From the host side this is indistinguishable from
+            // the old teardown -- both just remove the pull-up -- while leaving TinyUSB's
+            // endpoint mutex valid instead of null.
+            usb_controller_transport_attached = false;
+            usb_mounted = false;
+            usb_reset_audio_class_state();
+            tud_disconnect();
+        }
+        return;
+    }
+
     if (usb_controller_transport_disconnect_pending && !usb_controller_transport_ready) {
         usb_controller_transport_disconnect_pending = false;
         usb_mounted = false;
-        usb_deinit_device_stack();
+        usb_controller_transport_transition_pending = true;
         return;
     }
 

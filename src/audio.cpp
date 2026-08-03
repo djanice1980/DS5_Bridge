@@ -2038,8 +2038,9 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
 void __not_in_flash_func(audio_loop)() {
     const uint32_t now = time_us_32();
     AudioLoopTelemetryScope loop_telemetry(now);
-    // Same deinit window as the input path: every tud_audio_* call below goes through the
-    // endpoint mutex that tusb_deinit() nulls, and the ready predicates keep saying yes.
+    // Same reasoning as the input path: every tud_audio_* call below goes through TinyUSB's
+    // endpoint mutex, which is null whenever the stack is not initialised, and the ready
+    // predicates do not tell you that.
     if (!usb_device_stack_ready()) {
         return;
     }

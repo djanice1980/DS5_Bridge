@@ -21,11 +21,15 @@ extern uint32_t usb_host_volume_set_count[3];
 extern float usb_host_speaker_gain; // Host UAC speaker volume as linear gain.
 
 void usb_device_stack_init_disconnected();
-// True only while the TinyUSB device stack is initialised. tusb_deinit() nulls TinyUSB's
-// internal endpoint mutex but leaves _usbd_dev.cfg_num and _hidd_itf untouched, so
-// tud_mounted()/tud_hid_ready() keep answering true from stale state. Anything that calls
-// a device API from the main loop must check this first or it will dereference that null
-// mutex and hard fault.
+// True only while the TinyUSB device stack is initialised.
+//
+// The stack is no longer torn down at runtime -- a controller disconnect is a soft detach
+// now -- so in normal operation this is true from the first attach onward. It is kept as
+// deliberate defence: tud_deinit() nulls TinyUSB's endpoint mutex while leaving
+// _usbd_dev.cfg_num and _hidd_itf untouched, so tud_mounted()/tud_hid_ready() go on
+// answering true from stale state. Any future code that reintroduces a deinit would
+// otherwise dereference that null mutex and hard fault. Check this before any tud_* call
+// made from the main loop.
 bool usb_device_stack_ready();
 #ifdef DS5_PAIRING_DIAG
 void usb_diag_force_connect();

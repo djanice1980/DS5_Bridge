@@ -467,13 +467,25 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         "\n}\n\nvoid usb_handle_controller_transport_ready()"
     );
     const auto disconnect_suspend = disconnect_block.find("usb_bus_suspended()");
-    const auto disconnect_deinit = disconnect_block.find("usb_deinit_device_stack();");
+    const auto disconnect_pending = disconnect_block.find("usb_controller_transport_transition_pending = true;");
     if (
         disconnect_suspend == std::string::npos
-        || disconnect_deinit == std::string::npos
-        || disconnect_deinit < disconnect_suspend
+        || disconnect_pending == std::string::npos
+        || disconnect_pending < disconnect_suspend
     ) {
-        throw std::runtime_error("Controller disconnect must defer USB deinit while the host is suspended");
+        throw std::runtime_error("Controller disconnect must defer the USB transition while the host is suspended");
+    }
+
+    // This runs from a Bluetooth callback, i.e. inside cyw43_arch_poll(). Touching TinyUSB
+    // from here is what produced a hard fault (a null endpoint mutex reached through
+    // tud_hid_report) and a 172ms main-loop stall (a 150ms re-init sleep inside the BT
+    // phase). The callback may only publish desired state; usb_pm_poll() reconciles it.
+    for (const char *forbidden : {"tud_", "tusb_"}) {
+        if (disconnect_block.find(forbidden) != std::string::npos) {
+            throw std::runtime_error(
+                "Controller disconnect must not call TinyUSB directly; defer to usb_pm_poll"
+            );
+        }
     }
 
     const std::string ready_block = extract_between(
@@ -482,13 +494,30 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         "\n}\n\nextern \"C\" void tud_mount_cb(void) {"
     );
     const auto ready_suspend = ready_block.find("usb_bus_suspended()");
-    const auto ready_connect = ready_block.find("usb_connect_controller_transport");
+    const auto ready_pending = ready_block.find("usb_controller_transport_transition_pending = true;");
     if (
         ready_suspend == std::string::npos
-        || ready_connect == std::string::npos
-        || ready_connect < ready_suspend
+        || ready_pending == std::string::npos
+        || ready_pending < ready_suspend
     ) {
         throw std::runtime_error("Controller reconnect must not re-enumerate USB while the host is suspended");
+    }
+
+    // Same rule as the disconnect path: a Bluetooth callback publishes state, nothing more.
+    for (const char *forbidden : {"tud_", "tusb_"}) {
+        if (ready_block.find(forbidden) != std::string::npos) {
+            throw std::runtime_error(
+                "Controller reconnect must not call TinyUSB directly; defer to usb_pm_poll"
+            );
+        }
+    }
+
+    // The stack is initialised once and then soft-detached, never torn down. A reintroduced
+    // deinit brings back both the null-mutex hard fault and the 150ms reconnect stall.
+    if (usb_cpp.find("tusb_deinit") != std::string::npos) {
+        throw std::runtime_error(
+            "USB device stack must not be deinitialised at runtime; use tud_disconnect (soft detach)"
+        );
     }
 
     if (usb_h.find("bool usb_host_suspended_active();") == std::string::npos) {
