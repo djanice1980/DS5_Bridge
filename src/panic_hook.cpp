@@ -20,7 +20,7 @@
 
 #include "watchdog_telemetry.h"
 
-#include "pico/platform.h"
+#include "pico.h"
 
 extern "C" {
 
