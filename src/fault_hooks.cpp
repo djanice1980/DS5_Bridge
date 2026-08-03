@@ -60,7 +60,9 @@ inline uint32_t read_reg(uintptr_t addr) {
     } else if ((cfsr & (1u << 7)) != 0) {
         fault_address = read_reg(kScbMmfar);
     }
-    watchdog_telemetry_note_fault(phase, pc, status, fault_address);
+    // frame[0] is R0 -- the first argument to the faulting function.
+    const uint32_t arg0 = frame != nullptr ? frame[0] : 0;
+    watchdog_telemetry_note_fault(phase, pc, status, fault_address, arg0);
     while (true) {
         tight_loop_contents();
     }

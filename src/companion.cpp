@@ -27,7 +27,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 33;
+constexpr uint8_t kFirmwarePatch = 34;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1658,6 +1658,11 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
         // vector overwrote the phase byte. Both zero on non-fault records.
         write_u32(buffer + 56, wdt.prior_fault_address);
         buffer[60] = wdt.prior_phase_before_fault;
+        // [61..62]: high half of the faulting function's first argument. Only two payload
+        // bytes remain, and the top 16 bits are what distinguish a garbage pointer
+        // (0xf000....) from a valid SRAM one (0x2000....).
+        buffer[61] = static_cast<uint8_t>((wdt.prior_fault_arg0 >> 16) & 0xFFu);
+        buffer[62] = static_cast<uint8_t>((wdt.prior_fault_arg0 >> 24) & 0xFFu);
     }
     // Pairing breadcrumbs: [22] = event count, then {stage, status} pairs.
     // NB these are PAYLOAD offsets; in the raw feature report add 1 for the

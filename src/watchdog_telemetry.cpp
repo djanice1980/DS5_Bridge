@@ -13,7 +13,7 @@ namespace {
 // Schema 2 adds the fault detail words in scratch[5]/[6]. scratch[4] is the SDK's
 // watchdog_enable magic and must never be touched; scratch[5..7] are only used by
 // watchdog_reboot(), which this firmware no longer calls.
-constexpr uint32_t kScratchSignature = 0x44540200u; // "DT", schema 2.
+constexpr uint32_t kScratchSignature = 0x44540300u; // "DT", schema 3.
 
 WatchdogTelemetrySnapshot state{};
 uint32_t current_sequence = 0;
@@ -41,10 +41,11 @@ uint8_t __not_in_flash_func(scratch_crc)(
     uint32_t word2,
     uint32_t word3,
     uint32_t word4,
-    uint32_t word5
+    uint32_t word5,
+    uint32_t word6
 ) {
     uint8_t crc = 0;
-    const uint32_t words[] = {word1, word2, word3, word4, word5};
+    const uint32_t words[] = {word1, word2, word3, word4, word5, word6};
     for (uint32_t word : words) {
         for (uint8_t shift = 0; shift < 32; shift += 8) {
             crc = crc8_update(
@@ -61,7 +62,8 @@ void __not_in_flash_func(commit_words)(
     uint32_t word2,
     uint32_t word3,
     uint32_t word4,
-    uint32_t word5
+    uint32_t word5,
+    uint32_t word6
 ) {
     // Publish the signature last. A reset partway through this update is reported as an
     // invalid breadcrumb instead of a misleading valid phase.
@@ -71,12 +73,13 @@ void __not_in_flash_func(commit_words)(
     watchdog_hw->scratch[3] = word3;
     watchdog_hw->scratch[5] = word4;
     watchdog_hw->scratch[6] = word5;
+    watchdog_hw->scratch[7] = word6;
     watchdog_hw->scratch[0] =
-        kScratchSignature | scratch_crc(word1, word2, word3, word4, word5);
+        kScratchSignature | scratch_crc(word1, word2, word3, word4, word5, word6);
 }
 
 void commit_phase(WatchdogMainLoopPhase phase) {
-    commit_words(static_cast<uint8_t>(phase), ++current_sequence, now_ms(), 0, 0);
+    commit_words(static_cast<uint8_t>(phase), ++current_sequence, now_ms(), 0, 0, 0);
 }
 
 } // namespace
@@ -92,10 +95,11 @@ void watchdog_telemetry_boot_capture() {
     const uint32_t word3 = watchdog_hw->scratch[3];
     const uint32_t word4 = watchdog_hw->scratch[5];
     const uint32_t word5 = watchdog_hw->scratch[6];
+    const uint32_t word6 = watchdog_hw->scratch[7];
     const bool signature_valid =
         (word0 & 0xffffff00u) == kScratchSignature;
     const bool crc_valid =
-        static_cast<uint8_t>(word0) == scratch_crc(word1, word2, word3, word4, word5);
+        static_cast<uint8_t>(word0) == scratch_crc(word1, word2, word3, word4, word5, word6);
 
     state.prior_watchdog_timeout = timeout_reset;
     state.prior_watchdog_enable_timeout = enable_timeout_reset;
@@ -108,6 +112,7 @@ void watchdog_telemetry_boot_capture() {
         state.prior_phase_entered_at_ms = word3;
         state.prior_fault_address = word4;
         state.prior_phase_before_fault = static_cast<uint8_t>(word5);
+        state.prior_fault_arg0 = word6;
         current_sequence = word2;
     }
 
@@ -135,7 +140,8 @@ void __not_in_flash_func(watchdog_telemetry_note_fault)(
     WatchdogMainLoopPhase phase,
     uint32_t pc,
     uint32_t status,
-    uint32_t fault_address
+    uint32_t fault_address,
+    uint32_t arg0
 ) {
     // Runs from RAM: a fault can be raised while executing from flash in a state where
     // fetching more flash is exactly what fails.
@@ -143,7 +149,7 @@ void __not_in_flash_func(watchdog_telemetry_note_fault)(
     // active_phase is captured too, because stamping the fault phase overwrites the record
     // of what the main loop was doing -- and that is the context that makes the crash
     // address meaningful.
-    commit_words(static_cast<uint8_t>(phase), status, pc, fault_address, active_phase);
+    commit_words(static_cast<uint8_t>(phase), status, pc, fault_address, active_phase, arg0);
 }
 
 void watchdog_telemetry_worst_phase(uint8_t *phase, uint32_t *duration_us) {

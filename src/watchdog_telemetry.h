@@ -62,6 +62,9 @@ struct WatchdogTelemetrySnapshot {
     // before the fault vector overwrote the phase byte.
     uint32_t prior_fault_address;
     uint8_t prior_phase_before_fault;
+    // First argument register at the fault. For the mutex crash this is the mutex pointer,
+    // which is what separates "the pointer is garbage" from "its contents are".
+    uint32_t prior_fault_arg0;
 };
 
 // Capture must happen before watchdog_enable() overwrites the SDK reset marker.
@@ -79,7 +82,8 @@ void watchdog_telemetry_note_fault(
     WatchdogMainLoopPhase phase,
     uint32_t pc,
     uint32_t status,
-    uint32_t fault_address
+    uint32_t fault_address,
+    uint32_t arg0
 );
 const char *watchdog_telemetry_phase_name(uint8_t phase);
 

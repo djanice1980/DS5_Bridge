@@ -120,7 +120,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.33';
+const BUNDLED_FIRMWARE_VERSION = '1.6.34';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -4060,8 +4060,11 @@ export class BridgeService extends EventEmitter {
         const before = wdt.phaseBeforeFault !== 0
           ? ` during ${WATCHDOG_PHASE_NAMES[wdt.phaseBeforeFault] ?? `phase ${wdt.phaseBeforeFault}`}`
           : '';
+        const arg0 = wdt.faultArg0High !== 0
+          ? ` arg0hi 0x${wdt.faultArg0High.toString(16).padStart(4, '0')}`
+          : '';
         this.snapshot.diagnostics.lastWatchdogHang +=
-          ` @ PC 0x${pc.toString(16).padStart(8, '0')}${at}${before}`
+          ` @ PC 0x${pc.toString(16).padStart(8, '0')}${at}${before}${arg0}`
           + ` (CFSR 0x${cfsr.toString(16).padStart(4, '0')}${escalated})`;
       }
       // Live worst-phase timing (firmware 1.6.28+). A phase can be slow enough to matter

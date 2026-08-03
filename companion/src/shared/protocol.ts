@@ -1099,6 +1099,8 @@ export interface WatchdogTelemetryPayload {
   /** Fault records only (firmware 1.6.33+): faulting data address, and the pre-fault phase. */
   faultAddress: number;
   phaseBeforeFault: number;
+  /** High 16 bits of the faulting function's first argument (the mutex pointer). */
+  faultArg0High: number;
 }
 
 export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
@@ -1197,7 +1199,8 @@ export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIden
       worstPhase: report[54] ?? 0,
       worstPhaseMs: (report[55] ?? 0) | ((report[56] ?? 0) << 8),
       faultAddress: readU32(report, 57),
-      phaseBeforeFault: report[61] ?? 0
+      phaseBeforeFault: report[61] ?? 0,
+      faultArg0High: (report[62] ?? 0) | ((report[63] ?? 0) << 8)
     };
   }
   return { uniqueId, controllerMac, watchdog };
