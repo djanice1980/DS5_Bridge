@@ -38,8 +38,9 @@ void __attribute__((noreturn)) __wrap_panic(const char *fmt, ...) {
     watchdog_telemetry_note_fault(
         WatchdogMainLoopPhase::Panic,
         reinterpret_cast<uint32_t>(__builtin_return_address(0)),
-        0,
-        0
+        0, // no CFSR: this is a software abort, not a CPU fault
+        0, // no faulting data address
+        0  // no argument register capture
     );
 
     // Deliberately NOT forwarding to __real_panic: it calls puts(), which takes the stdout
