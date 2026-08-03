@@ -23,7 +23,12 @@ enum class WatchdogMainLoopPhase : uint8_t {
 };
 
 struct WatchdogTelemetrySnapshot {
+    // Broad predicate -- matches the 3-blink boot indicator in main().
     bool prior_watchdog_timeout;
+    // Narrow SDK predicate (requires the watchdog_enable magic in scratch[4]). Reported
+    // separately because it can disagree with the broad one, and gating on it silently
+    // threw away good breadcrumbs.
+    bool prior_watchdog_enable_timeout;
     bool prior_snapshot_valid;
     uint8_t prior_phase;
     uint32_t prior_sequence;

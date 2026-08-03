@@ -1081,8 +1081,10 @@ export function ackUserMessage(result: number): string {
 export interface WatchdogTelemetryPayload {
   /** The previous reset was a watchdog timeout -- i.e. the main loop hung. */
   priorTimeout: boolean;
-  /** The retained breadcrumb passed its signature/CRC check. */
+  /** The retained breadcrumb passed its signature/CRC check, independent of the reset cause. */
   priorValid: boolean;
+  /** Narrow SDK predicate; can disagree with priorTimeout. Informational. */
+  priorEnableTimeout: boolean;
   /** Main-loop phase that was executing when it hung. */
   priorPhase: number;
   priorSequence: number;
@@ -1148,6 +1150,7 @@ export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIden
     watchdog = {
       priorTimeout: (flags & 0x01) !== 0,
       priorValid: (flags & 0x02) !== 0,
+      priorEnableTimeout: (flags & 0x04) !== 0,
       priorPhase: report[45] ?? 0,
       priorSequence: readU32(report, 46),
       priorPhaseEnteredAtMs: readU32(report, 50)

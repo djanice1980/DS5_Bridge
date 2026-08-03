@@ -119,7 +119,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.26';
+const BUNDLED_FIRMWARE_VERSION = '1.6.27';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -4034,11 +4034,17 @@ export class BridgeService extends EventEmitter {
       this.connectedControllerMac = identity.controllerMac;
       // A watchdog reset means the firmware main loop hung for over a second. The phase is
       // retained across the reset, so surface WHERE it hung rather than just that it happened.
-      this.snapshot.diagnostics.lastWatchdogHang = identity.watchdog?.priorTimeout
-        ? (identity.watchdog.priorValid
-          ? (WATCHDOG_PHASE_NAMES[identity.watchdog.priorPhase] ?? `phase ${identity.watchdog.priorPhase}`)
-          : 'unknown phase')
-        : null;
+      // Always report something on firmware that supports it. Showing nothing after a hang is
+      // indistinguishable from the telemetry being broken -- which is exactly what happened the
+      // first time this shipped.
+      const wdt = identity.watchdog;
+      this.snapshot.diagnostics.lastWatchdogHang = wdt === null
+        ? null
+        : wdt.priorTimeout
+          ? (wdt.priorValid
+            ? `HANG in ${WATCHDOG_PHASE_NAMES[wdt.priorPhase] ?? `phase ${wdt.priorPhase}`}`
+            : 'HANG (breadcrumb invalid)')
+          : 'clean boot';
     } catch {
       // Firmware predates the identity report; the bridge stays unnamed.
     }

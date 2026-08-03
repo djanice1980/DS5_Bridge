@@ -9129,7 +9129,7 @@ export function App() {
                         </div>
                         {snapshot.diagnostics.lastWatchdogHang ? (
                           <div>
-                            <dt>Last Hang</dt>
+                            <dt>Watchdog</dt>
                             <dd>{snapshot.diagnostics.lastWatchdogHang}</dd>
                           </div>
                         ) : null}

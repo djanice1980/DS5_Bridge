@@ -62,7 +62,8 @@ void commit_phase(WatchdogMainLoopPhase phase) {
 void watchdog_telemetry_boot_capture() {
     std::memset(&state, 0, sizeof(state));
 
-    const bool timeout_reset = watchdog_enable_caused_reboot();
+    const bool timeout_reset = watchdog_caused_reboot();
+    const bool enable_timeout_reset = watchdog_enable_caused_reboot();
     const uint32_t word0 = watchdog_hw->scratch[0];
     const uint32_t word1 = watchdog_hw->scratch[1];
     const uint32_t word2 = watchdog_hw->scratch[2];
@@ -73,8 +74,10 @@ void watchdog_telemetry_boot_capture() {
         static_cast<uint8_t>(word0) == scratch_crc(word1, word2, word3);
 
     state.prior_watchdog_timeout = timeout_reset;
-    state.prior_snapshot_valid =
-        timeout_reset && signature_valid && crc_valid;
+    state.prior_watchdog_enable_timeout = enable_timeout_reset;
+    // Validity is a property of the breadcrumb alone. Tying it to the reset predicate meant
+    // a disagreeing predicate discarded a perfectly good phase record.
+    state.prior_snapshot_valid = signature_valid && crc_valid;
     if (state.prior_snapshot_valid) {
         state.prior_phase = static_cast<uint8_t>(word1);
         state.prior_sequence = word2;
