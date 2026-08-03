@@ -30,6 +30,10 @@ enum class WatchdogMainLoopPhase : uint8_t {
     InterruptSend = 20,
     InterruptRelock = 21,
     InterruptTail = 22,
+    // An SDK/TinyUSB panic() was reached. panic() is noreturn and spins with interrupts
+    // off, so the watchdog is the only thing that ends it -- which is indistinguishable
+    // from a stall unless we stamp it on the way in.
+    Panic = 23,
 };
 
 struct WatchdogTelemetrySnapshot {

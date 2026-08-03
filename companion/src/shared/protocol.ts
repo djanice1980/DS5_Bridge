@@ -1124,7 +1124,10 @@ export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
   19: 'interrupt/encode',
   20: 'interrupt/send',
   21: 'interrupt/relock',
-  22: 'interrupt/tail'
+  22: 'interrupt/tail',
+  // Firmware 1.6.30+: an SDK/TinyUSB panic() was reached. panic() never returns, so without
+  // this stamp it is indistinguishable from a main-loop stall.
+  23: 'PANIC (usb endpoint)'
 };
 
 export interface DeviceIdentityPayload {

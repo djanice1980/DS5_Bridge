@@ -65,6 +65,7 @@ add_executable(ds5-bridge
         src/haptics_test_signal.cpp
         src/output_scheduler.cpp
         src/watchdog_telemetry.cpp
+        src/panic_hook.cpp
         src/audio.cpp
         src/bt.cpp
 )
@@ -228,7 +229,7 @@ if(DS5_PAIRING_DIAG)
 endif()
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "1.6.29")
+pico_set_program_version(ds5-bridge "1.6.30")
 
 if(DS5_ENABLE_FIRMWARE_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)
@@ -255,6 +256,11 @@ target_link_libraries(ds5-bridge
         wdl_resampler
         opus
 )
+
+# Redirect panic() to src/panic_hook.cpp so a panic leaves a breadcrumb instead of looking
+# like an ordinary main-loop stall. Applied at link time because the SDK's PICO_PANIC_FUNCTION
+# define is consumed when it compiles its own panic.c, not by our target.
+target_link_options(ds5-bridge PRIVATE -Wl,--wrap=panic)
 
 pico_add_extra_outputs(ds5-bridge)
 
