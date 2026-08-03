@@ -67,6 +67,7 @@ add_executable(ds5-bridge
         src/watchdog_telemetry.cpp
         src/panic_hook.cpp
         src/fault_hooks.cpp
+        src/flash_probe.cpp
         src/audio.cpp
         src/bt.cpp
 )
@@ -230,7 +231,7 @@ if(DS5_PAIRING_DIAG)
 endif()
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "1.6.35")
+pico_set_program_version(ds5-bridge "1.6.36")
 
 if(DS5_ENABLE_FIRMWARE_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)
@@ -267,6 +268,10 @@ target_link_options(ds5-bridge PRIVATE
         -Wl,--wrap=usbd_edpt_claim
         -Wl,--wrap=usbd_edpt_xfer
         -Wl,--wrap=dcd_edpt_xfer
+        # Flash stall measurement (src/flash_probe.cpp).
+        -Wl,--wrap=flash_range_erase
+        -Wl,--wrap=flash_range_program
+        -Wl,--wrap=flash_safe_execute
 )
 
 pico_add_extra_outputs(ds5-bridge)

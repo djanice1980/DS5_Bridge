@@ -1101,6 +1101,13 @@ export interface WatchdogTelemetryPayload {
   phaseBeforeFault: number;
   /** High 16 bits of the faulting function's first argument (the mutex pointer). */
   faultArg0High: number;
+  /**
+   * Non-fault records only (firmware 1.6.36+): worst single flash operation since boot and
+   * how many have run. Flash writes park core 1, so they are the prime suspect for a
+   * main-loop stall. Shares payload bytes with the fault detail; the phase byte disambiguates.
+   */
+  flashWorstMs: number;
+  flashOpCount: number;
 }
 
 export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
@@ -1200,7 +1207,9 @@ export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIden
       worstPhaseMs: (report[55] ?? 0) | ((report[56] ?? 0) << 8),
       faultAddress: readU32(report, 57),
       phaseBeforeFault: report[61] ?? 0,
-      faultArg0High: (report[62] ?? 0) | ((report[63] ?? 0) << 8)
+      faultArg0High: (report[62] ?? 0) | ((report[63] ?? 0) << 8),
+      flashWorstMs: (report[57] ?? 0) | ((report[58] ?? 0) << 8),
+      flashOpCount: (report[59] ?? 0) | ((report[60] ?? 0) << 8)
     };
   }
   return { uniqueId, controllerMac, watchdog };

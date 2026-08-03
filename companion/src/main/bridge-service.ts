@@ -120,7 +120,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.35';
+const BUNDLED_FIRMWARE_VERSION = '1.6.36';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -4066,6 +4066,12 @@ export class BridgeService extends EventEmitter {
         this.snapshot.diagnostics.lastWatchdogHang +=
           ` @ PC 0x${pc.toString(16).padStart(8, '0')}${at}${before}${arg0}`
           + ` (CFSR 0x${cfsr.toString(16).padStart(4, '0')}${escalated})`;
+      }
+      // Flash-stall telemetry (firmware 1.6.36+). Flash writes park core 1, so they are the
+      // prime suspect for the main-loop stall that became visible once the crash was fixed.
+      if (wdt !== null && !isFaultPhase(wdt.priorPhase) && wdt.flashOpCount > 0) {
+        this.snapshot.diagnostics.lastWatchdogHang +=
+          ` · flash worst ${wdt.flashWorstMs}ms over ${wdt.flashOpCount} ops`;
       }
       // Live worst-phase timing (firmware 1.6.28+). A phase can be slow enough to matter
       // without ever reaching the 1s watchdog budget, and that is invisible otherwise.

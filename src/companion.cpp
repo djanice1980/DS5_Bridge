@@ -7,6 +7,8 @@
 #include "audio.h"
 #include "bt.h"
 #include "watchdog_telemetry.h"
+
+extern "C" void flash_probe_stats(uint32_t *worst_us, uint32_t *count);
 #include "controller_output_policy.h"
 #include "controller_output_submit.h"
 #include "dualsense_output.h"
@@ -27,7 +29,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 35;
+constexpr uint8_t kFirmwarePatch = 36;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1658,6 +1660,18 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
         // vector overwrote the phase byte. Both zero on non-fault records.
         write_u32(buffer + 56, wdt.prior_fault_address);
         buffer[60] = wdt.prior_phase_before_fault;
+        if (buffer[44] < 24 || buffer[44] > 27) {
+            // Not a fault record, so [56..59] are free: report flash-stall telemetry here
+            // instead. [56..57] worst flash op in ms, [58..59] how many have run.
+            uint32_t flash_worst_us = 0;
+            uint32_t flash_count = 0;
+            flash_probe_stats(&flash_worst_us, &flash_count);
+            const uint32_t flash_worst_ms = flash_worst_us / 1000u;
+            buffer[56] = static_cast<uint8_t>(flash_worst_ms & 0xFFu);
+            buffer[57] = static_cast<uint8_t>(flash_worst_ms > 0xFFFFu ? 0xFFu : ((flash_worst_ms >> 8) & 0xFFu));
+            buffer[58] = static_cast<uint8_t>(flash_count & 0xFFu);
+            buffer[59] = static_cast<uint8_t>(flash_count > 0xFFFFu ? 0xFFu : ((flash_count >> 8) & 0xFFu));
+        }
         // [61..62]: high half of the faulting function's first argument. Only two payload
         // bytes remain, and the top 16 bits are what distinguish a garbage pointer
         // (0xf000....) from a valid SRAM one (0x2000....).
