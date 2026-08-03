@@ -57,7 +57,15 @@ const winUsbTransportMock = vi.hoisted(() => ({
 const audioHelperMock = vi.hoisted(() => ({
   playBridgeHapticsTestPattern: vi.fn(async () => undefined),
   playBridgeSpeakerTestTone: vi.fn(async () => undefined),
-  listBridges: vi.fn(async () => ({ bridges: [], hidDevices: [] }))
+  listBridges: vi.fn(async () => ({ bridges: [], hidDevices: [] })),
+  // Host persona switches query and restore the default render endpoint. Both
+  // spawn the real AudioHelper process, which takes seconds and blows the
+  // 5s test timeout; stub them so no test in this file shells out.
+  getDefaultRenderEndpointStatus: vi.fn(async () => ({
+    deviceName: 'Mock Render Endpoint',
+    isBridgeEndpoint: false
+  })),
+  setDefaultRenderBridgeEndpoint: vi.fn(async () => undefined)
 }));
 
 vi.mock('node-hid', () => ({
@@ -79,7 +87,9 @@ vi.mock('./audio-helper', async (importOriginal) => {
     ...actual,
     playBridgeHapticsTestPattern: audioHelperMock.playBridgeHapticsTestPattern,
     playBridgeSpeakerTestTone: audioHelperMock.playBridgeSpeakerTestTone,
-    listBridges: audioHelperMock.listBridges
+    listBridges: audioHelperMock.listBridges,
+    getDefaultRenderEndpointStatus: audioHelperMock.getDefaultRenderEndpointStatus,
+    setDefaultRenderBridgeEndpoint: audioHelperMock.setDefaultRenderBridgeEndpoint
   };
 });
 
@@ -488,6 +498,8 @@ describe('BridgeService', () => {
     winUsbTransportMock.open.mockClear();
     audioHelperMock.playBridgeHapticsTestPattern.mockClear();
     audioHelperMock.playBridgeSpeakerTestTone.mockClear();
+    audioHelperMock.getDefaultRenderEndpointStatus.mockClear();
+    audioHelperMock.setDefaultRenderBridgeEndpoint.mockClear();
     tempDirs = [];
     services = [];
   });
@@ -695,7 +707,7 @@ describe('BridgeService', () => {
     expect(snapshot.diagnostics.lastError).toBeNull();
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toEqual({
       currentVersion: '1.6.2',
-      availableVersion: '1.6.37'
+      availableVersion: '1.6.38'
     });
   });
 
@@ -727,7 +739,7 @@ describe('BridgeService', () => {
   it('does not surface an available update for the bundled bridge firmware', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
-    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 37 });
+    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 38 });
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
@@ -735,7 +747,7 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('connected');
-    expect(snapshot.status?.firmwareVersion).toBe('1.6.37');
+    expect(snapshot.status?.firmwareVersion).toBe('1.6.38');
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toBeNull();
   });
 

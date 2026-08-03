@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { CompanionDebugConfig, DEBUG_ENV } from './debug-config';
@@ -51,7 +51,12 @@ const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
 const HELPER_START_TIMEOUT_MS = 8000;
 const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
+// Round-trip on the stdin pipe of an already-running helper. Fast; 2.5s is generous.
 const HELPER_COMMAND_TIMEOUT_MS = 2500;
+// One-shot commands pay a cold .NET runtime start plus WASAPI endpoint
+// enumeration, which measures 2-5s on a healthy machine. A cap below that made
+// every slow call fall through the fallback chain and silently give up.
+const HELPER_SPAWN_COMMAND_TIMEOUT_MS = 8000;
 const HELPER_SESSION_MONITOR_START_TIMEOUT_MS = 3000;
 const HELPER_SESSION_MONITOR_STOP_TIMEOUT_MS = 500;
 const HELPER_STDERR_MAX_CHARS = 8192;
@@ -901,17 +906,36 @@ function buildSystemAudioHapticsHelperEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+// Which candidate last worked. The fallback chain exists for a launcher that
+// can't run at all, not for a slow one, so once a candidate answers we keep
+// using it instead of re-walking (and re-paying the timeout of) the whole list
+// on every call. Label is independent of the per-call args.
+let preferredAudioHelperCommandLabel: string | null = null;
+
 async function runAudioHelperCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  const commands = resolveAudioHelperCommands(args);
+  const commands = orderByPreferredAudioHelperCommand(resolveAudioHelperCommands(args));
   let lastError: Error | null = null;
   for (const command of commands) {
     try {
-      return await runAudioHelperCommandOnce(command.command, command.args);
+      const result = await runAudioHelperCommandOnce(command.command, command.args);
+      preferredAudioHelperCommandLabel = command.label;
+      return result;
     } catch (error) {
+      if (preferredAudioHelperCommandLabel === command.label) {
+        preferredAudioHelperCommandLabel = null;
+      }
       lastError = error instanceof Error ? error : new Error(String(error));
     }
   }
   throw lastError ?? new Error('Audio helper command failed.');
+}
+
+function orderByPreferredAudioHelperCommand(commands: AudioHelperCommand[]): AudioHelperCommand[] {
+  const preferred = commands.find((command) => command.label === preferredAudioHelperCommandLabel);
+  if (!preferred) {
+    return commands;
+  }
+  return [preferred, ...commands.filter((command) => command !== preferred)];
 }
 
 function runAudioHelperCommandOnce(command: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -940,8 +964,8 @@ function runAudioHelperCommandOnce(command: string, args: string[]): Promise<{ s
       }
     };
     const timeout = setTimeout(() => {
-      finish(new Error(`Audio helper command timed out after ${HELPER_COMMAND_TIMEOUT_MS}ms.`));
-    }, HELPER_COMMAND_TIMEOUT_MS);
+      finish(new Error(`Audio helper command timed out after ${HELPER_SPAWN_COMMAND_TIMEOUT_MS}ms.`));
+    }, HELPER_SPAWN_COMMAND_TIMEOUT_MS);
 
     helper.stdout.on('data', (chunk: Buffer) => {
       stdout = (stdout + chunk.toString('utf8')).slice(-HELPER_STDERR_MAX_CHARS);
@@ -1566,46 +1590,13 @@ function resolveHelperPath(): string {
   return resolveAudioHelperPath();
 }
 
+// Only the DLL published alongside the resolved launcher. `bin/Release` and
+// `bin/Debug` used to be searched too, but those are stale intermediate build
+// outputs for other RIDs -- they can't run ("You must install or update .NET")
+// and only served to burn a timeout each before the real failure surfaced.
 function audioHelperDllFallbackCandidates(helperPath: string): string[] {
-  const seen = new Set<string>();
-  const candidates = [
-    path.join(path.dirname(helperPath), 'AudioHelper.dll'),
-    ...audioHelperBuildDllFallbackCandidates(helperPath)
-  ];
-  return candidates.filter((candidate) => {
-    const normalized = path.normalize(candidate).toLowerCase();
-    if (seen.has(normalized) || !existsSync(candidate)) {
-      return false;
-    }
-    seen.add(normalized);
-    return true;
-  });
-}
-
-function audioHelperBuildDllFallbackCandidates(helperPath: string): string[] {
-  const binDirectory = path.resolve(path.dirname(helperPath), '..', '..');
-  const candidates: string[] = [];
-  for (const configuration of ['Release', 'Debug']) {
-    const configurationDirectory = path.join(binDirectory, configuration);
-    for (const targetFramework of safeReadDirectory(configurationDirectory)) {
-      if (!targetFramework.startsWith('net')) {
-        continue;
-      }
-      candidates.push(
-        path.join(configurationDirectory, targetFramework, HELPER_PUBLISH_RID, 'AudioHelper.dll'),
-        path.join(configurationDirectory, targetFramework, 'AudioHelper.dll')
-      );
-    }
-  }
-  return candidates;
-}
-
-function safeReadDirectory(directoryPath: string): string[] {
-  try {
-    return readdirSync(directoryPath);
-  } catch {
-    return [];
-  }
+  const candidate = path.join(path.dirname(helperPath), 'AudioHelper.dll');
+  return existsSync(candidate) ? [candidate] : [];
 }
 
 function resolveHelperTestAudioPath(helperPath: string): string {

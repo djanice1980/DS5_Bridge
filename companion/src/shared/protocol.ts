@@ -1155,7 +1155,9 @@ export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
  * fault status and the faulting PC instead of their usual meanings.
  */
 export function isFaultPhase(phase: number): boolean {
-  return phase >= 24 && phase <= 27;
+  // 23 is the panic marker. It shares the record shape -- the PC field carries panic()'s
+  // caller instead of a faulting instruction -- so it is read the same way.
+  return phase >= 23 && phase <= 27;
 }
 
 export interface DeviceIdentityPayload {

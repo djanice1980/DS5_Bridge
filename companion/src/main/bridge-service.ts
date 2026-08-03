@@ -120,7 +120,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.37';
+const BUNDLED_FIRMWARE_VERSION = '1.6.38';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -4103,6 +4103,32 @@ export class BridgeService extends EventEmitter {
       return;
     }
     await this.maybeApplyBoundProfile();
+    this.refreshControllerHistoryBattery();
+  }
+
+  // recordControllerHistory() runs once per controller identity, at connect, so the stored
+  // battery froze at whatever it was then -- wrong on the Devices tab while connected, and
+  // still wrong afterwards as a "last seen" figure. Keep it current instead. Battery moves
+  // in ~10% steps, and this only writes on an actual change, so it is not disk churn.
+  private refreshControllerHistoryBattery(): void {
+    const mac = this.connectedControllerMac;
+    const battery = this.snapshot.status?.batteryPercent ?? null;
+    if (mac === null || battery === null) {
+      return;
+    }
+    const history = this.settingsStore.get().controllerHistory;
+    const entry = history.find((item) => item.mac === mac);
+    if (!entry || entry.lastBatteryPercent === battery) {
+      return;
+    }
+    // Rewritten in place rather than moved to the front: this is a refresh, not a new sighting.
+    this.snapshot.settings = this.settingsStore.update({
+      controllerHistory: history.map((item) => (
+        item.mac === mac
+          ? { ...item, lastBatteryPercent: battery, lastSeenAt: Date.now() }
+          : item
+      ))
+    });
   }
 
   // Applies the profile bound to the currently known controller identity.

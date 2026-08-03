@@ -20,6 +20,8 @@
 
 #include "watchdog_telemetry.h"
 
+#include <cstdint>
+
 #include "pico.h"
 
 extern "C" {
@@ -29,7 +31,16 @@ void __attribute__((noreturn)) __real_panic(const char *fmt, ...);
 
 void __attribute__((noreturn)) __wrap_panic(const char *fmt, ...) {
     // Record it first. Anything after this point may not survive to run.
-    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Panic);
+    //
+    // note_fault rather than note_phase: it carries the return address (i.e. WHICH call site
+    // panicked) and preserves the main-loop phase, which note_phase would overwrite with the
+    // panic marker. A panic with no context is only marginally better than a mystery reboot.
+    watchdog_telemetry_note_fault(
+        WatchdogMainLoopPhase::Panic,
+        reinterpret_cast<uint32_t>(__builtin_return_address(0)),
+        0,
+        0
+    );
 
     // Deliberately NOT forwarding to __real_panic: it calls puts(), which takes the stdout
     // mutex and can itself deadlock when panicking from an ISR. Spin instead and let the

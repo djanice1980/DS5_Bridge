@@ -3624,6 +3624,11 @@ export function App() {
   // otherwise it is simply the last one we saw.
   const controllerHistory = snapshot?.settings.controllerHistory ?? [];
   const devicesCurrentEntry = controllerHistory[0] ?? null;
+  // While the controller is connected the live reading is authoritative; the stored value is
+  // only a snapshot. Falling back to it keeps a meaningful "last seen" figure once it is gone.
+  const devicesCurrentBatteryPercent = controllerConnected
+    ? snapshot?.status?.batteryPercent ?? devicesCurrentEntry?.lastBatteryPercent ?? null
+    : devicesCurrentEntry?.lastBatteryPercent ?? null;
   const devicesPreviousEntries = controllerHistory.slice(1);
   const devicesCurrentSubtitle = !connected
     ? 'Bridge offline'
@@ -9335,9 +9340,9 @@ export function App() {
                     <div className="settings-menu-row">
                       <div className="settings-menu-copy"><strong>Battery</strong></div>
                       <span className="inline-state-badge">
-                        {devicesCurrentEntry.lastBatteryPercent === null
+                        {devicesCurrentBatteryPercent === null
                           ? '--'
-                          : `${devicesCurrentEntry.lastBatteryPercent}%`}
+                          : `${devicesCurrentBatteryPercent}%`}
                       </span>
                     </div>
                     <div className="settings-menu-row">
