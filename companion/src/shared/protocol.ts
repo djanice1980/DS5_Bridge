@@ -1138,6 +1138,14 @@ export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
   30: 'send/dcd-xfer'
 };
 
+/**
+ * Fault phases (firmware 1.6.31+). For these the retained sequence/timestamp words carry the
+ * fault status and the faulting PC instead of their usual meanings.
+ */
+export function isFaultPhase(phase: number): boolean {
+  return phase >= 24 && phase <= 27;
+}
+
 export interface DeviceIdentityPayload {
   uniqueId: string | null;
   // BT address of the currently connected controller (firmware 1.6.20+),

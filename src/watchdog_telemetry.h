@@ -67,6 +67,11 @@ void watchdog_telemetry_snapshot(WatchdogTelemetrySnapshot *snapshot);
 // Worst single-phase duration observed since boot, so a slow phase is visible without
 // having to wait for it to trip the watchdog.
 void watchdog_telemetry_worst_phase(uint8_t *phase, uint32_t *duration_us);
+
+// Record a CPU fault. On a fault the sequence/timestamp words carry the faulting PC and the
+// fault status register instead -- a crash address identifies the defect, a timestamp does
+// not. The phase byte says which record shape applies, so nothing is ambiguous.
+void watchdog_telemetry_note_fault(WatchdogMainLoopPhase phase, uint32_t pc, uint32_t status);
 const char *watchdog_telemetry_phase_name(uint8_t phase);
 
 #endif // DS5_BRIDGE_WATCHDOG_TELEMETRY_H

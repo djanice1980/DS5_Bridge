@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "pico.h"
 #include "hardware/structs/watchdog.h"
 #include "hardware/watchdog.h"
 #include "pico/time.h"
@@ -22,7 +23,7 @@ uint32_t now_ms() {
     return static_cast<uint32_t>(time_us_64() / 1000u);
 }
 
-uint8_t crc8_update(uint8_t crc, uint8_t value) {
+uint8_t __not_in_flash_func(crc8_update)(uint8_t crc, uint8_t value) {
     crc ^= value;
     for (uint8_t bit = 0; bit < 8; ++bit) {
         crc = (crc & 0x80u) != 0
@@ -32,7 +33,7 @@ uint8_t crc8_update(uint8_t crc, uint8_t value) {
     return crc;
 }
 
-uint8_t scratch_crc(uint32_t word1, uint32_t word2, uint32_t word3) {
+uint8_t __not_in_flash_func(scratch_crc)(uint32_t word1, uint32_t word2, uint32_t word3) {
     uint8_t crc = 0;
     const uint32_t words[] = {word1, word2, word3};
     for (uint32_t word : words) {
@@ -46,11 +47,7 @@ uint8_t scratch_crc(uint32_t word1, uint32_t word2, uint32_t word3) {
     return crc;
 }
 
-void commit_phase(WatchdogMainLoopPhase phase) {
-    const uint32_t word1 = static_cast<uint8_t>(phase);
-    const uint32_t word2 = ++current_sequence;
-    const uint32_t word3 = now_ms();
-
+void __not_in_flash_func(commit_words)(uint32_t word1, uint32_t word2, uint32_t word3) {
     // Publish the signature last. A reset during this five-register update is
     // reported as an invalid breadcrumb instead of a misleading valid phase.
     watchdog_hw->scratch[0] = 0;
@@ -59,6 +56,10 @@ void commit_phase(WatchdogMainLoopPhase phase) {
     watchdog_hw->scratch[3] = word3;
     watchdog_hw->scratch[0] =
         kScratchSignature | scratch_crc(word1, word2, word3);
+}
+
+void commit_phase(WatchdogMainLoopPhase phase) {
+    commit_words(static_cast<uint8_t>(phase), ++current_sequence, now_ms());
 }
 
 } // namespace
@@ -107,6 +108,16 @@ void watchdog_telemetry_note_phase(WatchdogMainLoopPhase phase) {
     active_phase_started_us = now_us;
 
     commit_phase(phase);
+}
+
+void __not_in_flash_func(watchdog_telemetry_note_fault)(
+    WatchdogMainLoopPhase phase,
+    uint32_t pc,
+    uint32_t status
+) {
+    // Runs from RAM: a fault can be raised while executing from flash in a state where
+    // fetching more flash is exactly what fails.
+    commit_words(static_cast<uint8_t>(phase), status, pc);
 }
 
 void watchdog_telemetry_worst_phase(uint8_t *phase, uint32_t *duration_us) {

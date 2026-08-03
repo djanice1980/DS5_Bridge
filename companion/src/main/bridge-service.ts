@@ -12,6 +12,7 @@ import {
   REPORT_ID,
   REPORT_LENGTH,
   WATCHDOG_PHASE_NAMES,
+  isFaultPhase,
   CHORD_FUNCTION_EVENT_BASE,
   MAX_CHORD_ASSIGNMENTS,
   MUTE_KEYBOARD_CHORD_STARTER_FLAG,
@@ -119,7 +120,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.31';
+const BUNDLED_FIRMWARE_VERSION = '1.6.32';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -4045,6 +4046,15 @@ export class BridgeService extends EventEmitter {
             ? `HANG in ${WATCHDOG_PHASE_NAMES[wdt.priorPhase] ?? `phase ${wdt.priorPhase}`}`
             : 'HANG (breadcrumb invalid)')
           : 'clean boot';
+      // Firmware 1.6.32+: on a CPU fault the sequence/timestamp words carry the faulting PC
+      // and fault status instead. A crash address identifies the defect; a timestamp does not.
+      if (wdt !== null && wdt.priorTimeout && wdt.priorValid && isFaultPhase(wdt.priorPhase)) {
+        const pc = wdt.priorPhaseEnteredAtMs >>> 0;
+        const cfsr = wdt.priorSequence & 0xffff;
+        const escalated = (wdt.priorSequence & 0x4000_0000) !== 0 ? ' escalated' : '';
+        this.snapshot.diagnostics.lastWatchdogHang +=
+          ` @ PC 0x${pc.toString(16).padStart(8, '0')} (CFSR 0x${cfsr.toString(16).padStart(4, '0')}${escalated})`;
+      }
       // Live worst-phase timing (firmware 1.6.28+). A phase can be slow enough to matter
       // without ever reaching the 1s watchdog budget, and that is invisible otherwise.
       if (wdt !== null && wdt.worstPhaseMs > 0) {

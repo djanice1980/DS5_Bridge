@@ -29,10 +29,26 @@
 
 namespace {
 
-// Record, then stop and let the watchdog reset us. Deliberately not attempting to recover:
-// the goal is to learn what happened, and a fault we "handled" would hide its own cause.
-[[noreturn]] void stamp_and_park(WatchdogMainLoopPhase phase) {
-    watchdog_telemetry_note_phase(phase);
+// ARMv8-M System Control Block. Read directly rather than pulling in CMSIS headers.
+constexpr uintptr_t kScbCfsr = 0xE000ED28u; // Configurable Fault Status
+constexpr uintptr_t kScbHfsr = 0xE000ED2Cu; // HardFault Status
+
+inline uint32_t read_reg(uintptr_t addr) {
+    return *reinterpret_cast<volatile uint32_t *>(addr);
+}
+
+// Record the faulting PC, then stop and let the watchdog reset us. Deliberately not
+// attempting to recover: a fault we silently "handled" would hide its own cause.
+//
+// `frame` is the exception stack frame the CPU pushed. Layout is R0, R1, R2, R3, R12, LR,
+// PC, xPSR -- so frame[6] is the instruction that faulted, which is the whole point. That
+// holds for the FP extended frame too, since the FP registers are stacked after xPSR.
+[[noreturn]] void __not_in_flash_func(report_fault)(WatchdogMainLoopPhase phase, uint32_t *frame) {
+    const uint32_t pc = frame != nullptr ? frame[6] : 0;
+    // CFSR says what kind of fault; HFSR's FORCED bit (30) says a configurable fault
+    // escalated to hard. Pack both: CFSR in the low half, HFSR's top bits in the high half.
+    const uint32_t status = (read_reg(kScbCfsr) & 0xFFFFu) | (read_reg(kScbHfsr) & 0xFFFF0000u);
+    watchdog_telemetry_note_fault(phase, pc, status);
     while (true) {
         tight_loop_contents();
     }
@@ -42,22 +58,41 @@ namespace {
 
 extern "C" {
 
+// Called from the naked vectors below with the stack frame pointer already resolved.
+[[noreturn]] void __not_in_flash_func(ds5_fault_dispatch)(uint32_t *frame, uint32_t which) {
+    report_fault(static_cast<WatchdogMainLoopPhase>(which), frame);
+}
+
 // The SDK declares these weak in crt0.S; defining them here takes over the vectors.
-void __not_in_flash_func(isr_hardfault)() {
-    stamp_and_park(WatchdogMainLoopPhase::FaultHard);
-}
+//
+// Naked, because the compiler must not touch the stack before we capture the frame.
+// EXC_RETURN bit 2 selects which stack the frame was pushed to.
+#define DS5_FAULT_VECTOR(name, phase_value)                                                \
+    __attribute__((naked)) void __not_in_flash_func(name)() {                              \
+        __asm volatile(                                                                    \
+            "movs r1, %0        \n"                                                        \
+            "tst  lr, #4        \n"                                                        \
+            "ite  eq            \n"                                                        \
+            "mrseq r0, msp      \n"                                                        \
+            "mrsne r0, psp      \n"                                                        \
+            "b    ds5_fault_dispatch\n"                                                    \
+            :                                                                              \
+            : "I"(phase_value)                                                             \
+            : "r0", "r1"                                                                   \
+        );                                                                                 \
+    }
 
-void __not_in_flash_func(isr_memmanage)() {
-    stamp_and_park(WatchdogMainLoopPhase::FaultMemManage);
-}
+DS5_FAULT_VECTOR(isr_hardfault, 24)
+DS5_FAULT_VECTOR(isr_memmanage, 25)
+DS5_FAULT_VECTOR(isr_busfault, 26)
+DS5_FAULT_VECTOR(isr_usagefault, 27)
 
-void __not_in_flash_func(isr_busfault)() {
-    stamp_and_park(WatchdogMainLoopPhase::FaultBus);
-}
-
-void __not_in_flash_func(isr_usagefault)() {
-    stamp_and_park(WatchdogMainLoopPhase::FaultUsage);
-}
+// The vector macro needs literal immediates, so the enum cannot be used directly there.
+// Keep the two in lockstep.
+static_assert(static_cast<int>(WatchdogMainLoopPhase::FaultHard) == 24);
+static_assert(static_cast<int>(WatchdogMainLoopPhase::FaultMemManage) == 25);
+static_assert(static_cast<int>(WatchdogMainLoopPhase::FaultBus) == 26);
+static_assert(static_cast<int>(WatchdogMainLoopPhase::FaultUsage) == 27);
 
 // --- transfer path breadcrumbs -------------------------------------------------------
 // These sit on a hot path (every audio packet also lands here), so they only stamp. The

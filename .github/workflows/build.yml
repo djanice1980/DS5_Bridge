@@ -84,6 +84,8 @@ jobs:
           cmake --build build/companion --target ds5-bridge
           mkdir -p artifacts
           cp build/companion/ds5-bridge.uf2 artifacts/ds5-bridge-companion.uf2
+          # Link map: lets a faulting PC reported by watchdog telemetry be resolved to a symbol.
+          cp build/companion/ds5-bridge.elf.map artifacts/ds5-bridge-companion.elf.map
 
       - name: Build companion firmware (Waveshare RP2350B-Plus-W)
         run: |
@@ -128,6 +130,13 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/ds5-bridge-companion.uf2
+          archive: false
+          if-no-files-found: error
+
+      - name: Upload companion link map artifact
+        uses: actions/upload-artifact@v7
+        with:
+          path: artifacts/ds5-bridge-companion.elf.map
           archive: false
           if-no-files-found: error
 
