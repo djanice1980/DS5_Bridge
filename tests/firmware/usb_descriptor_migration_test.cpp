@@ -476,15 +476,37 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         throw std::runtime_error("Controller disconnect must defer the USB transition while the host is suspended");
     }
 
-    // This runs from a Bluetooth callback, i.e. inside cyw43_arch_poll(). Touching TinyUSB
-    // from here is what produced a hard fault (a null endpoint mutex reached through
+    // These run from a Bluetooth callback, i.e. inside cyw43_arch_poll(). Touching TinyUSB
+    // from there is what produced a hard fault (a null endpoint mutex reached through
     // tud_hid_report) and a 172ms main-loop stall (a 150ms re-init sleep inside the BT
-    // phase). The callback may only publish desired state; usb_pm_poll() reconciles it.
-    for (const char *forbidden : {"tud_", "tusb_"}) {
-        if (disconnect_block.find(forbidden) != std::string::npos) {
-            throw std::runtime_error(
-                "Controller disconnect must not call TinyUSB directly; defer to usb_pm_poll"
-            );
+    // phase). The callbacks may only publish desired state; usb_pm_poll() reconciles it.
+    //
+    // Scoped to the function body: the blocks above deliberately run to the NEXT function,
+    // and unrelated helpers in between (usb_wake_host_if_suspended) do call TinyUSB legally.
+    const auto callback_body = [&](const char *signature) {
+        const auto start = usb_cpp.find(signature);
+        if (start == std::string::npos) {
+            throw std::runtime_error(std::string("Missing function: ") + signature);
+        }
+        const auto end = usb_cpp.find("\n}\n", start);
+        if (end == std::string::npos) {
+            throw std::runtime_error(std::string("Unterminated function: ") + signature);
+        }
+        return usb_cpp.substr(start, end - start);
+    };
+
+    for (const char *signature : {
+        "void usb_handle_controller_transport_disconnect() {",
+        "void usb_handle_controller_transport_ready() {"
+    }) {
+        const std::string body = callback_body(signature);
+        for (const char *forbidden : {"tud_", "tusb_"}) {
+            if (body.find(forbidden) != std::string::npos) {
+                throw std::runtime_error(
+                    std::string("Bluetooth callback must not call TinyUSB directly; "
+                                "defer to usb_pm_poll: ") + signature
+                );
+            }
         }
     }
 
@@ -501,15 +523,6 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         || ready_pending < ready_suspend
     ) {
         throw std::runtime_error("Controller reconnect must not re-enumerate USB while the host is suspended");
-    }
-
-    // Same rule as the disconnect path: a Bluetooth callback publishes state, nothing more.
-    for (const char *forbidden : {"tud_", "tusb_"}) {
-        if (ready_block.find(forbidden) != std::string::npos) {
-            throw std::runtime_error(
-                "Controller reconnect must not call TinyUSB directly; defer to usb_pm_poll"
-            );
-        }
     }
 
     // The stack is initialised once and then soft-detached, never torn down. A reintroduced
