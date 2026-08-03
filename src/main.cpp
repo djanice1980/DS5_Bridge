@@ -595,30 +595,45 @@ int main() {
         // Each stage stamps a breadcrumb into the watchdog scratch registers, which survive
         // the reset. If the 1s watchdog fires, the next boot reports exactly which stage was
         // running -- otherwise a hang is indistinguishable from any other restart.
+        // Feed the watchdog after EVERY phase, matching upstream. With a single feed per
+        // iteration the 1s budget was shared across all phases, so the watchdog fired
+        // wherever the clock happened to run out rather than in the phase that was slow --
+        // which made the retained breadcrumb point at the wrong place.
         watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Cyw43);
         cyw43_arch_poll();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::TinyUsb);
         tud_task();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptBeforeAudio);
         interrupt_loop();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::UsbPower);
         usb_pm_poll();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Audio);
         audio_loop();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Button);
         button_check();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Lightbar);
         bt_lightbar_loop();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Rssi);
         bt_signal_strength_loop();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Inquiry);
         bt_inquiry_loop();
+        watchdog_update();
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::ConnectionRecovery);
         bt_connection_recovery_loop();
+        watchdog_update();
 #ifdef ENABLE_COMPANION
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Companion);
         companion_loop();
+        watchdog_update();
 #endif
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptAfterCompanion);
         interrupt_loop();

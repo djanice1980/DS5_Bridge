@@ -119,7 +119,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.27';
+const BUNDLED_FIRMWARE_VERSION = '1.6.28';
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -4045,6 +4045,13 @@ export class BridgeService extends EventEmitter {
             ? `HANG in ${WATCHDOG_PHASE_NAMES[wdt.priorPhase] ?? `phase ${wdt.priorPhase}`}`
             : 'HANG (breadcrumb invalid)')
           : 'clean boot';
+      // Live worst-phase timing (firmware 1.6.28+). A phase can be slow enough to matter
+      // without ever reaching the 1s watchdog budget, and that is invisible otherwise.
+      if (wdt !== null && wdt.worstPhaseMs > 0) {
+        const worst = WATCHDOG_PHASE_NAMES[wdt.worstPhase] ?? `phase ${wdt.worstPhase}`;
+        this.snapshot.diagnostics.lastWatchdogHang =
+          `${this.snapshot.diagnostics.lastWatchdogHang} · slowest ${worst} ${wdt.worstPhaseMs}ms`;
+      }
     } catch {
       // Firmware predates the identity report; the bridge stays unnamed.
     }

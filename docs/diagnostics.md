@@ -73,6 +73,37 @@ DS5_BRIDGE_AUDIO_HELPER_DIAGNOSTICS=1
 Companion runtime defaults and environment variable names live in
 `companion/src/main/debug-config.ts`.
 
+## Watchdog Telemetry
+
+A hardware watchdog resets the Pico if the firmware's main loop ever goes more than a
+second without checking in. On the next boot the LED does three slow blinks, which is the
+only outward sign that a reset was a hang rather than a normal power-up.
+
+No setup is needed for this one — it is always on. The **Watchdog** row in
+**System -> Diagnostics** reads:
+
+```text
+clean boot                              Previous reset was not a watchdog timeout.
+HANG in <phase>                         The main loop stalled in that phase.
+HANG (breadcrumb invalid)               It hung, but the retained record did not survive.
+... - slowest <phase> <n>ms             Worst single phase since the CURRENT boot.
+```
+
+The phase names match the stages of the main loop: `cyw43`, `tinyusb`,
+`interrupt-before-audio`, `usb-power`, `audio`, `button`, `lightbar`, `rssi`, `inquiry`,
+`connection-recovery`, `companion`, `interrupt-after-companion`.
+
+Two distinct things are being reported. The `HANG in` part is retained from the *previous*
+boot in the watchdog's scratch registers, which survive the reset. The `slowest` part is
+live from the current boot and needs no crash at all -- it is there because a phase can be
+slow enough to matter while still staying under the one-second budget, and that would
+otherwise be invisible.
+
+Firmware 1.6.28 and later feeds the watchdog after every phase, so the budget applies to
+each phase individually. That matters for interpretation: on earlier builds the whole
+iteration shared one budget, so the reported phase was only where the clock happened to
+run out, not necessarily the phase that was slow.
+
 ## Common Recipes
 
 Audio-only firmware and companion diagnostics:

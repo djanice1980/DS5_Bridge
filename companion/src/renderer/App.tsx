@@ -2459,6 +2459,24 @@ function AudioHapticsConfigLabel({
   );
 }
 
+// Raw seconds are hard to read once the bridge has been up a while, and the number that
+// matters most here is "did it just restart" -- which is easier to see as m:ss.
+function formatUptime(seconds: number | null): string {
+  if (seconds === null) {
+    return '--';
+  }
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  if (minutes < 60) {
+    return `${minutes}m ${String(remainder).padStart(2, '0')}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, '0')}m ${String(remainder).padStart(2, '0')}s`;
+}
+
 function UptimeValue({
   active,
   lastPollAt,
@@ -2486,7 +2504,7 @@ function UptimeValue({
     return () => window.clearInterval(handle);
   }, [active, lastPollAt, uptimeSeconds]);
 
-  return <span className="uptime-value">{displayUptime ?? '--'}s</span>;
+  return <span className="uptime-value">{formatUptime(displayUptime)}</span>;
 }
 
 function RemapGlyphOption({ label, value }: { label: string; value: RemapButtonId }) {

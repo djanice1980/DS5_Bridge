@@ -1089,6 +1089,13 @@ export interface WatchdogTelemetryPayload {
   priorPhase: number;
   priorSequence: number;
   priorPhaseEnteredAtMs: number;
+  /**
+   * Firmware 1.6.28+: worst single-phase duration since boot, and which phase. Reported
+   * live, so a slow phase is visible without having to wait for it to trip the watchdog.
+   * Zero on older firmware.
+   */
+  worstPhase: number;
+  worstPhaseMs: number;
 }
 
 export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
@@ -1153,7 +1160,10 @@ export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIden
       priorEnableTimeout: (flags & 0x04) !== 0,
       priorPhase: report[45] ?? 0,
       priorSequence: readU32(report, 46),
-      priorPhaseEnteredAtMs: readU32(report, 50)
+      priorPhaseEnteredAtMs: readU32(report, 50),
+      // Firmware 1.6.28+ appends payload [53..55]; older firmware leaves them zero.
+      worstPhase: report[54] ?? 0,
+      worstPhaseMs: (report[55] ?? 0) | ((report[56] ?? 0) << 8)
     };
   }
   return { uniqueId, controllerMac, watchdog };

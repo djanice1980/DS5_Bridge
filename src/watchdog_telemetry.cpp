@@ -13,6 +13,10 @@ constexpr uint32_t kScratchSignature = 0x44540100u; // "DT", schema 1.
 
 WatchdogTelemetrySnapshot state{};
 uint32_t current_sequence = 0;
+uint8_t active_phase = 0;
+uint32_t active_phase_started_us = 0;
+uint8_t worst_phase_id = 0;
+uint32_t worst_phase_us = 0;
 
 uint32_t now_ms() {
     return static_cast<uint32_t>(time_us_64() / 1000u);
@@ -89,7 +93,29 @@ void watchdog_telemetry_boot_capture() {
 }
 
 void watchdog_telemetry_note_phase(WatchdogMainLoopPhase phase) {
+    // Close out the phase that was running and remember the worst one seen. time_us_32() is
+    // a bare timer read, so this stays cheap enough to run on every phase of every iteration.
+    const uint32_t now_us = time_us_32();
+    if (active_phase_started_us != 0) {
+        const uint32_t elapsed = now_us - active_phase_started_us;
+        if (elapsed > worst_phase_us) {
+            worst_phase_us = elapsed;
+            worst_phase_id = active_phase;
+        }
+    }
+    active_phase = static_cast<uint8_t>(phase);
+    active_phase_started_us = now_us;
+
     commit_phase(phase);
+}
+
+void watchdog_telemetry_worst_phase(uint8_t *phase, uint32_t *duration_us) {
+    if (phase != nullptr) {
+        *phase = worst_phase_id;
+    }
+    if (duration_us != nullptr) {
+        *duration_us = worst_phase_us;
+    }
 }
 
 void watchdog_telemetry_snapshot(WatchdogTelemetrySnapshot *snapshot) {

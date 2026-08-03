@@ -27,7 +27,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 27;
+constexpr uint8_t kFirmwarePatch = 28;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1633,6 +1633,7 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
     // Watchdog telemetry from the PREVIOUS boot, so a hang is diagnosable without a UART.
     // [43] flags: bit0 = last reset was a watchdog timeout, bit1 = breadcrumb valid.
     // [44] main-loop phase that was running. [45..48] sequence. [49..52] ms since that boot.
+    // [53..55] are live rather than retained: the worst phase seen since THIS boot.
     {
         WatchdogTelemetrySnapshot wdt{};
         watchdog_telemetry_snapshot(&wdt);
@@ -1644,6 +1645,15 @@ uint16_t build_device_identity(uint8_t *buffer, uint16_t reqlen) {
         buffer[44] = wdt.prior_phase;
         write_u32(buffer + 45, wdt.prior_sequence);
         write_u32(buffer + 49, wdt.prior_phase_entered_at_ms);
+        // [53] worst phase since boot, [54..55] its duration in ms (clamped). Surfaces a slow
+        // phase even when it never trips the watchdog.
+        uint8_t worst_phase = 0;
+        uint32_t worst_us = 0;
+        watchdog_telemetry_worst_phase(&worst_phase, &worst_us);
+        const uint32_t worst_ms = worst_us / 1000u;
+        buffer[53] = worst_phase;
+        buffer[54] = static_cast<uint8_t>(worst_ms > 0xFFFFu ? 0xFFu : (worst_ms & 0xFFu));
+        buffer[55] = static_cast<uint8_t>(worst_ms > 0xFFFFu ? 0xFFu : ((worst_ms >> 8) & 0xFFu));
     }
     // Pairing breadcrumbs: [22] = event count, then {stage, status} pairs.
     // NB these are PAYLOAD offsets; in the raw feature report add 1 for the
