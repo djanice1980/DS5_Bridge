@@ -1613,6 +1613,296 @@ static bool bt_blacklist_remove(bd_addr_t addr) {
     return true;
 }
 
+// --- pairing transaction (rollback) ---------------------------------------------------
+//
+// Re-pairing a controller means dropping its stored key BEFORE the new bond exists, so
+// there is a window where a failure leaves the controller with no usable key at all -- the
+// old bond destroyed, the new one never completed. This is the durable record that closes
+// it: the prior key is written to flash first, so an interrupted re-pair can put it back.
+//
+// Ported from upstream. Boot recovery matters as much as the live path, because the failure
+// mode that motivated it is a reset mid-pairing.
+constexpr uint32_t BT_PAIRING_TRANSACTION_TLV_TAG = 0x50545832u; // 'PTX2'
+constexpr uint8_t BT_PAIRING_TRANSACTION_VERSION = 2u;
+constexpr uint8_t BT_PAIRING_TRANSACTION_FLAG_PRIOR_KEY = 0x01u;
+constexpr size_t BT_PAIRING_TRANSACTION_SIZE = 3u + BD_ADDR_LEN + LINK_KEY_LEN + 1u;
+
+enum class pairing_transaction_state : uint8_t {
+    AwaitingKey = 1, // key dropped, new bond not yet offered
+    KeyAccepted = 2, // new key stored; rollback would now destroy a good bond
+};
+
+struct pairing_transaction {
+    bool valid;
+    pairing_transaction_state state;
+    bool prior_key_valid;
+    bd_addr_t addr;
+    link_key_t prior_key;
+    link_key_type_t prior_type;
+};
+
+// Set when the durable record could not be read, written or discarded. While true the
+// bridge refuses to pair or accept controllers: with the record unreliable a rollback can
+// no longer be guaranteed, and silently pairing anyway is how a bond gets destroyed.
+static bool pairing_transaction_recovery_failed = false;
+
+static bool link_key_material_is_valid(uint8_t const *key, link_key_type_t type) {
+    if (type == INVALID_LINK_KEY || gap_security_level_for_link_key_type(type) < LEVEL_2) {
+        return false;
+    }
+    for (uint8_t i = 0; i < LINK_KEY_LEN; ++i) {
+        if (key[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool pairing_transaction_equal(
+    pairing_transaction const &left,
+    pairing_transaction const &right
+) {
+    return left.valid == right.valid
+        && left.state == right.state
+        && left.prior_key_valid == right.prior_key_valid
+        && bd_addr_cmp(left.addr, right.addr) == 0
+        && (!left.prior_key_valid || (
+            memcmp(left.prior_key, right.prior_key, LINK_KEY_LEN) == 0
+            && left.prior_type == right.prior_type
+        ));
+}
+
+static bool pairing_transaction_storage_status(bool &present) {
+    present = false;
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        return false;
+    }
+    present = tlv->get_tag(tlv_context, BT_PAIRING_TRANSACTION_TLV_TAG, nullptr, 0) > 0;
+    return true;
+}
+
+static bool read_pairing_transaction(pairing_transaction &transaction) {
+    transaction = {};
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        return false;
+    }
+    uint8_t record[BT_PAIRING_TRANSACTION_SIZE]{};
+    const int len =
+        tlv->get_tag(tlv_context, BT_PAIRING_TRANSACTION_TLV_TAG, record, sizeof(record));
+    if (
+        len != static_cast<int>(sizeof(record))
+        || record[0] != BT_PAIRING_TRANSACTION_VERSION
+        || (record[2] & ~BT_PAIRING_TRANSACTION_FLAG_PRIOR_KEY) != 0
+    ) {
+        return false;
+    }
+    if (
+        record[1] != static_cast<uint8_t>(pairing_transaction_state::AwaitingKey)
+        && record[1] != static_cast<uint8_t>(pairing_transaction_state::KeyAccepted)
+    ) {
+        return false;
+    }
+    transaction.state = static_cast<pairing_transaction_state>(record[1]);
+    transaction.prior_key_valid = (record[2] & BT_PAIRING_TRANSACTION_FLAG_PRIOR_KEY) != 0;
+    bd_addr_copy(transaction.addr, &record[3]);
+    memcpy(transaction.prior_key, &record[3 + BD_ADDR_LEN], LINK_KEY_LEN);
+    transaction.prior_type =
+        static_cast<link_key_type_t>(record[3 + BD_ADDR_LEN + LINK_KEY_LEN]);
+    if (
+        transaction.prior_key_valid
+        && !link_key_material_is_valid(transaction.prior_key, transaction.prior_type)
+    ) {
+        return false;
+    }
+    transaction.valid = true;
+    return true;
+}
+
+// Verified by read-back, like the blacklist: a record that did not land is worse than none,
+// because the caller would believe a rollback is available when it is not.
+static bool write_pairing_transaction(pairing_transaction const &transaction) {
+    if (!transaction.valid) {
+        return false;
+    }
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        return false;
+    }
+    uint8_t record[BT_PAIRING_TRANSACTION_SIZE]{};
+    record[0] = BT_PAIRING_TRANSACTION_VERSION;
+    record[1] = static_cast<uint8_t>(transaction.state);
+    record[2] = transaction.prior_key_valid ? BT_PAIRING_TRANSACTION_FLAG_PRIOR_KEY : 0;
+    memcpy(&record[3], transaction.addr, BD_ADDR_LEN);
+    if (transaction.prior_key_valid) {
+        memcpy(&record[3 + BD_ADDR_LEN], transaction.prior_key, LINK_KEY_LEN);
+        record[3 + BD_ADDR_LEN + LINK_KEY_LEN] = static_cast<uint8_t>(transaction.prior_type);
+    }
+    if (
+        tlv->store_tag(tlv_context, BT_PAIRING_TRANSACTION_TLV_TAG, record, sizeof(record)) != 0
+    ) {
+        return false;
+    }
+    pairing_transaction verified{};
+    return read_pairing_transaction(verified) && pairing_transaction_equal(verified, transaction);
+}
+
+static bool discard_pairing_transaction() {
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        return false;
+    }
+    tlv->delete_tag(tlv_context, BT_PAIRING_TRANSACTION_TLV_TAG);
+    return tlv->get_tag(tlv_context, BT_PAIRING_TRANSACTION_TLV_TAG, nullptr, 0) == 0;
+}
+
+// Called immediately BEFORE a stale key is dropped for a re-pair. Refuses to clobber an
+// unfinished record -- two overlapping re-pairs would lose the first one's prior key.
+static bool stage_pairing_transaction(
+    bd_addr_t addr,
+    uint8_t const *prior_key,
+    link_key_type_t prior_type
+) {
+    bool transaction_present = false;
+    if (!pairing_transaction_storage_status(transaction_present) || transaction_present) {
+        DS5_LOG("[PAIR] Refuse to overwrite unfinished pairing transaction\n");
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    pairing_transaction transaction{};
+    transaction.valid = true;
+    transaction.state = pairing_transaction_state::AwaitingKey;
+    transaction.prior_key_valid =
+        prior_key != nullptr && link_key_material_is_valid(prior_key, prior_type);
+    bd_addr_copy(transaction.addr, addr);
+    if (transaction.prior_key_valid) {
+        memcpy(transaction.prior_key, prior_key, LINK_KEY_LEN);
+        transaction.prior_type = prior_type;
+    }
+    const bool staged = write_pairing_transaction(transaction);
+    pairing_transaction_recovery_failed = !staged;
+    return staged;
+}
+
+static bool mark_pairing_transaction_key_accepted(bd_addr_t addr) {
+    pairing_transaction transaction{};
+    if (!read_pairing_transaction(transaction) || bd_addr_cmp(transaction.addr, addr) != 0) {
+        return false;
+    }
+    transaction.state = pairing_transaction_state::KeyAccepted;
+    return write_pairing_transaction(transaction);
+}
+
+// The rollback. Past KeyAccepted the new bond is real and must be kept -- undoing it there
+// would destroy a working pairing. Before that, put the prior key back (or clear a partial
+// one), and verify it actually landed.
+static bool restore_uncommitted_pairing_key(char const *reason) {
+    bool transaction_present = false;
+    if (!pairing_transaction_storage_status(transaction_present)) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    if (!transaction_present) {
+        pairing_transaction_recovery_failed = false;
+        return true;
+    }
+    pairing_transaction transaction{};
+    if (!read_pairing_transaction(transaction)) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    if (transaction.state == pairing_transaction_state::KeyAccepted) {
+        if (!bt_blacklist_remove(transaction.addr) || !discard_pairing_transaction()) {
+            pairing_transaction_recovery_failed = true;
+            return false;
+        }
+        pairing_transaction_recovery_failed = false;
+        return true;
+    }
+
+    link_key_t stored_key;
+    link_key_type_t stored_type;
+    const bool has_current_key =
+        gap_get_link_key_for_bd_addr(transaction.addr, stored_key, &stored_type);
+    if (transaction.prior_key_valid) {
+        const bool prior_is_current =
+            has_current_key
+            && memcmp(stored_key, transaction.prior_key, LINK_KEY_LEN) == 0
+            && stored_type == transaction.prior_type;
+        if (!prior_is_current) {
+            if (has_current_key) {
+                gap_drop_link_key_for_bd_addr(transaction.addr);
+            }
+            gap_store_link_key_for_bd_addr(
+                transaction.addr, transaction.prior_key, transaction.prior_type);
+        }
+        if (
+            !gap_get_link_key_for_bd_addr(transaction.addr, stored_key, &stored_type)
+            || memcmp(stored_key, transaction.prior_key, LINK_KEY_LEN) != 0
+            || stored_type != transaction.prior_type
+        ) {
+            DS5_LOG("[PAIR] Failed to restore prior pairing key during %s\n", reason);
+            pairing_transaction_recovery_failed = true;
+            return false;
+        }
+        DS5_LOG("[PAIR] Restored prior pairing key after %s\n", reason);
+    } else {
+        if (has_current_key) {
+            gap_drop_link_key_for_bd_addr(transaction.addr);
+        }
+        if (gap_get_link_key_for_bd_addr(transaction.addr, stored_key, &stored_type)) {
+            DS5_LOG("[PAIR] Failed to clear partial pairing key during %s\n", reason);
+            pairing_transaction_recovery_failed = true;
+            return false;
+        }
+    }
+    if (!discard_pairing_transaction()) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    pairing_transaction_recovery_failed = false;
+    return true;
+}
+
+// A completed pairing: the controller is deliberately here, so clear any blacklist entry
+// and close the transaction.
+static bool finalize_pairing_transaction(bd_addr_t addr) {
+    bool ok = bt_blacklist_remove(addr);
+    bool transaction_present = false;
+    if (pairing_transaction_storage_status(transaction_present) && transaction_present) {
+        ok = discard_pairing_transaction() && ok;
+    }
+    pairing_transaction_recovery_failed = !ok;
+    return ok;
+}
+
+// A reset mid-pairing is the exact case this exists for, so recovery runs at boot.
+static bool recover_pairing_transaction_on_boot() {
+    return restore_uncommitted_pairing_key("boot recovery");
+}
+
+// A forget must not race a half-finished pairing: settle the record durably first, or the
+// forget is refused. Nothing is deleted while the rollback state is unknown.
+static bool cancel_pairing_transaction_before_forget() {
+    bool transaction_present = false;
+    if (!pairing_transaction_storage_status(transaction_present)) {
+        return false;
+    }
+    if (!transaction_present) {
+        return true;
+    }
+    return discard_pairing_transaction();
+}
+
 static void open_pairing_window() {
     pairing_window_until_us = time_us_32() + PAIRING_WINDOW_US;
     inquiry_retry_at_us = 0; // Start inquiry immediately.
@@ -1679,6 +1969,11 @@ bool bt_forget_pairings() {
         return false;
     }
 
+    if (!cancel_pairing_transaction_before_forget()) {
+        DS5_LOG("[PAIR] Forget all aborted: pairing transaction not durably settled
+");
+        return false;
+    }
     if (acl_handle != HCI_CON_HANDLE_INVALID) {
         bt_disconnect();
     }
@@ -1717,6 +2012,11 @@ bool bt_forget_pairing(const uint8_t address[6]) {
         return false;
     }
 
+    if (!cancel_pairing_transaction_before_forget()) {
+        DS5_LOG("[PAIR] Targeted forget aborted: pairing transaction not durably settled
+");
+        return false;
+    }
     const bool targets_current_session =
         bt_current_address_known() && bd_addr_cmp(current_device_addr, addr) == 0;
     gap_drop_link_key_for_bd_addr(addr);
@@ -1764,6 +2064,12 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 // TLV is only usable once the stack is up, so the blacklist loads here
                 // rather than in bt_init().
                 bt_blacklist_load();
+                // A reset part-way through a re-pair is the case the transaction record
+                // exists for, so roll it back before any controller is accepted.
+                if (!recover_pairing_transaction_on_boot()) {
+                    DS5_LOG("[PAIR] Pairing transaction recovery incomplete at boot
+");
+                }
                 schedule_inquiry_retry(0);
                 start_inquiry_if_needed();
             }
@@ -1817,6 +2123,16 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 bt_note_pairing_event(1, 0); // inquiry-found -> connecting
                 new_pair = true;
+                // Record the key we are about to destroy, so an interrupted re-pair can
+                // put it back instead of leaving this controller with no bond at all.
+                {
+                    link_key_t prior_key;
+                    link_key_type_t prior_type;
+                    const bool had_prior = gap_get_link_key_for_bd_addr(
+                        current_device_addr, prior_key, &prior_type);
+                    (void)stage_pairing_transaction(
+                        current_device_addr, had_prior ? prior_key : nullptr, prior_type);
+                }
                 // A controller found via inquiry is in pairing mode and wants a fresh bond, so any
                 // stored link key for it is stale (it forgot us after pairing to another host). Drop it
                 // now so LINK_KEY_REQUEST forces fresh SSP instead of offering a dead key -- the dead-key
@@ -1909,6 +2225,24 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 note_connection_phase(BtConnectionPhase::Listening);
                 DS5_LOG("[HCI] ACL connect failed status=0x%02X, restart inquiry\n", status);
                 schedule_inquiry_retry();
+            }
+            break;
+        }
+
+        case HCI_EVENT_LINK_KEY_NOTIFICATION: {
+            // The new bond exists from here on (BTstack stores it). Advance the transaction
+            // to KeyAccepted so a later failure does NOT roll back over a good key -- past
+            // this point the rollback would destroy the pairing it is meant to protect.
+            bd_addr_t addr;
+            hci_event_link_key_notification_get_bd_addr(packet, addr);
+            if (!mark_pairing_transaction_key_accepted(addr)) {
+                // No matching record is normal for a first-time bond with nothing to roll
+                // back to. Only flag it when a record exists but could not be updated.
+                bool transaction_present = false;
+                if (pairing_transaction_storage_status(transaction_present) && transaction_present) {
+                    DS5_LOG("[PAIR] New key stored but transaction acceptance not recorded\n");
+                    pairing_transaction_recovery_failed = true;
+                }
             }
             break;
         }
@@ -2027,6 +2361,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     DS5_LOG("[HCI] Transient authentication failure status=0x%02X, preserve stored pairing\n",
                            status);
                 }
+                // The re-pair failed for good. Put the prior bond back if the new one
+                // never completed -- otherwise this controller is left with nothing.
+                (void)restore_uncommitted_pairing_key("authentication failure");
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
                 schedule_inquiry_retry();
@@ -2036,7 +2373,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 // entry so it reconnects normally from here on. A failed durable removal
                 // stays fail-closed: it keeps working now, and is blocked again next boot.
                 if (bt_current_address_known()) {
-                    (void)bt_blacklist_remove(current_device_addr);
+                    (void)finalize_pairing_transaction(current_device_addr);
                 }
                 authentication_retry_pending = false;
                 authentication_retry_attempts = 0;
@@ -2104,6 +2441,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 // gate keeps normal bonded reconnects using their valid key.
                 if (pairing_window_active(time_us_32())) {
                     bt_note_pairing_event(2, 0); // inbound during pairing window -> drop stale key
+                    // Same rollback record as the outbound path.
+                    {
+                        link_key_t prior_key;
+                        link_key_type_t prior_type;
+                        const bool had_prior =
+                            gap_get_link_key_for_bd_addr(addr, prior_key, &prior_type);
+                        (void)stage_pairing_transaction(
+                            addr, had_prior ? prior_key : nullptr, prior_type);
+                    }
                     gap_drop_link_key_for_bd_addr(addr);
                 }
                 inquiry_active = false;
