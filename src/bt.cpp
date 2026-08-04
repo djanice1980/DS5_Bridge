@@ -24,6 +24,7 @@
 #include "companion.h"
 #endif
 #include "btstack_event.h"
+#include "btstack_tlv.h"
 #include "controller_report.h"
 #include "gap.h"
 #include "l2cap.h"
@@ -1464,6 +1465,145 @@ void bt_inquiry_loop() {
     }
 }
 
+// --- forget blacklist ---------------------------------------------------------------
+//
+// Deleting a link key is not enough to forget a controller. A controller that is still
+// powered on simply pages us again moments later, we accept it, and the pairing comes
+// straight back -- so "Forget" appears to do nothing. This is the durable record of
+// controllers the user has cleared, consulted on the INBOUND path only: an explicit pairing
+// window still lets one back in, which is how a forgotten controller is meant to return.
+//
+// Ported from upstream (SundayMoments), which reached the same conclusion. Their version
+// additionally couples this to a pairing-transaction record for crash-safety mid-forget;
+// that is deliberately not ported yet -- see docs/upstream-backport-notes.md. Without it the
+// worst case is benign and self-correcting: the blacklist persists but the key survives
+// (press Forget again), or the key goes and the blacklist entry does not (it can re-pair).
+constexpr uint32_t BT_BLACKLIST_TLV_TAG = 0x424C434Bu; // 'BLCK'
+
+static bd_addr_t cleared_controller_addrs[NVM_NUM_LINK_KEYS];
+static int cleared_controller_addr_count = 0;
+
+// Fail-closed: the caller must treat "false" as "do not delete any keys". Verifies by
+// reading back what was written, because a forget that half-persists is worse than one that
+// refuses -- the user would believe a controller was cleared when it was not.
+static bool bt_blacklist_persist() {
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        DS5_LOG("[BLACKLIST] No TLV instance available, not persisting\n");
+        return false;
+    }
+
+    if (cleared_controller_addr_count == 0) {
+        tlv->delete_tag(tlv_context, BT_BLACKLIST_TLV_TAG);
+        const bool deleted = tlv->get_tag(tlv_context, BT_BLACKLIST_TLV_TAG, nullptr, 0) == 0;
+        DS5_LOG("[BLACKLIST] Empty, deleted from flash verified=%u\n", deleted ? 1u : 0u);
+        return deleted;
+    }
+
+    const uint32_t bytes =
+        static_cast<uint32_t>(cleared_controller_addr_count) * sizeof(bd_addr_t);
+    const int rc = tlv->store_tag(
+        tlv_context,
+        BT_BLACKLIST_TLV_TAG,
+        reinterpret_cast<const uint8_t *>(cleared_controller_addrs),
+        bytes
+    );
+    bd_addr_t verified_addrs[NVM_NUM_LINK_KEYS]{};
+    const int verified_len = tlv->get_tag(
+        tlv_context,
+        BT_BLACKLIST_TLV_TAG,
+        reinterpret_cast<uint8_t *>(verified_addrs),
+        sizeof(verified_addrs)
+    );
+    const bool verified =
+        rc == 0
+        && verified_len == static_cast<int>(bytes)
+        && memcmp(verified_addrs, cleared_controller_addrs, bytes) == 0;
+    DS5_LOG("[BLACKLIST] Persisted %d entries, rc=%d verified=%u\n",
+            cleared_controller_addr_count, rc, verified ? 1u : 0u);
+    return verified;
+}
+
+static void bt_blacklist_load() {
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        cleared_controller_addr_count = 0;
+        return;
+    }
+    const int len = tlv->get_tag(
+        tlv_context,
+        BT_BLACKLIST_TLV_TAG,
+        reinterpret_cast<uint8_t *>(cleared_controller_addrs),
+        sizeof(cleared_controller_addrs)
+    );
+    if (len <= 0 || (len % static_cast<int>(sizeof(bd_addr_t))) != 0) {
+        cleared_controller_addr_count = 0;
+        DS5_LOG("[BLACKLIST] No persisted entries\n");
+        return;
+    }
+    cleared_controller_addr_count = len / static_cast<int>(sizeof(bd_addr_t));
+    if (cleared_controller_addr_count > NVM_NUM_LINK_KEYS) {
+        cleared_controller_addr_count = NVM_NUM_LINK_KEYS;
+    }
+    DS5_LOG("[BLACKLIST] Loaded %d entries from flash\n", cleared_controller_addr_count);
+}
+
+static bool bt_blacklist_contains(bd_addr_t addr) {
+    for (int i = 0; i < cleared_controller_addr_count; i++) {
+        if (bd_addr_cmp(addr, cleared_controller_addrs[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// In-memory only; the caller persists once after a batch so a multi-address forget is a
+// single durable write rather than several partial ones.
+static bool bt_blacklist_add_unique(bd_addr_t addr) {
+    if (bt_blacklist_contains(addr)) {
+        return true;
+    }
+    if (cleared_controller_addr_count >= NVM_NUM_LINK_KEYS) {
+        DS5_LOG("[BLACKLIST] Full, cannot add %s\n", bd_addr_to_str(addr));
+        return false;
+    }
+    bd_addr_copy(cleared_controller_addrs[cleared_controller_addr_count++], addr);
+    DS5_LOG("[BLACKLIST] Added %s\n", bd_addr_to_str(addr));
+    return true;
+}
+
+// Persists immediately and rolls back on failure. Removal is the permissive direction, so a
+// failed write must leave the controller blocked rather than silently allowed.
+static bool bt_blacklist_remove(bd_addr_t addr) {
+    for (int i = 0; i < cleared_controller_addr_count; i++) {
+        if (bd_addr_cmp(addr, cleared_controller_addrs[i]) != 0) {
+            continue;
+        }
+        bd_addr_t previous_addrs[NVM_NUM_LINK_KEYS]{};
+        const int previous_count = cleared_controller_addr_count;
+        memcpy(previous_addrs, cleared_controller_addrs, sizeof(previous_addrs));
+        for (int j = i; j < cleared_controller_addr_count - 1; j++) {
+            bd_addr_copy(cleared_controller_addrs[j], cleared_controller_addrs[j + 1]);
+        }
+        cleared_controller_addr_count--;
+        memset(cleared_controller_addrs[cleared_controller_addr_count], 0, sizeof(bd_addr_t));
+        if (!bt_blacklist_persist()) {
+            memcpy(cleared_controller_addrs, previous_addrs, sizeof(previous_addrs));
+            cleared_controller_addr_count = previous_count;
+            DS5_LOG("[BLACKLIST] Failed durable removal for %s; staying fail-closed\n",
+                    bd_addr_to_str(addr));
+            return false;
+        }
+        DS5_LOG("[BLACKLIST] Removed %s\n", bd_addr_to_str(addr));
+        return true;
+    }
+    return true;
+}
+
 static void open_pairing_window() {
     pairing_window_until_us = time_us_32() + PAIRING_WINDOW_US;
     inquiry_retry_at_us = 0; // Start inquiry immediately.
@@ -1492,8 +1632,44 @@ bool bt_request_pairing() {
     return true;
 }
 
+// Every address we currently hold a key for, so a forget-all also blocks each of them from
+// walking straight back in.
+static bool bt_blacklist_add_stored_link_keys() {
+    btstack_link_key_iterator_t it;
+    if (!gap_link_key_iterator_init(&it)) {
+        DS5_LOG("[BLACKLIST] Link key iterator unavailable\n");
+        return false;
+    }
+    bd_addr_t addr;
+    link_key_t key;
+    link_key_type_t type;
+    bool ok = true;
+    while (gap_link_key_iterator_get_next(&it, addr, key, &type)) {
+        ok = bt_blacklist_add_unique(addr) && ok;
+    }
+    gap_link_key_iterator_done(&it);
+    return ok;
+}
+
 bool bt_forget_pairings() {
     DS5_LOG("[PAIR] Forget all controller pairings requested\n");
+    // Blacklist FIRST and only delete keys once it is durably stored. Deleting first would
+    // leave a window where the keys are gone but nothing stops the controller re-pairing,
+    // which is the failure this whole mechanism exists to prevent.
+    bd_addr_t previous_addrs[NVM_NUM_LINK_KEYS]{};
+    const int previous_count = cleared_controller_addr_count;
+    memcpy(previous_addrs, cleared_controller_addrs, sizeof(previous_addrs));
+    if (
+        !bt_blacklist_add_stored_link_keys()
+        || (bt_current_address_known() && !bt_blacklist_add_unique(current_device_addr))
+        || !bt_blacklist_persist()
+    ) {
+        memcpy(cleared_controller_addrs, previous_addrs, sizeof(previous_addrs));
+        cleared_controller_addr_count = previous_count;
+        DS5_LOG("[BLACKLIST] Forget all aborted: durable blacklist update failed\n");
+        return false;
+    }
+
     if (acl_handle != HCI_CON_HANDLE_INVALID) {
         bt_disconnect();
     }
@@ -1501,6 +1677,43 @@ bool bt_forget_pairings() {
     // reflashing firmware does NOT wipe them, because they live in a flash region that
     // survives a reflash.
     gap_delete_all_link_keys();
+    return true;
+}
+
+// Forget ONE controller, by address. Same ordering rule as forget-all: nothing is deleted
+// until the blacklist entry is durably stored.
+bool bt_forget_pairing(const uint8_t address[6]) {
+    if (address == nullptr) {
+        return false;
+    }
+    bool has_address_material = false;
+    for (size_t i = 0; i < sizeof(bd_addr_t); i++) {
+        has_address_material = has_address_material || address[i] != 0;
+    }
+    if (!has_address_material) {
+        return false;
+    }
+
+    bd_addr_t addr;
+    memcpy(addr, address, sizeof(addr));
+    DS5_LOG("[PAIR] Forget controller pairing requested for %s\n", bd_addr_to_str(addr));
+
+    bd_addr_t previous_addrs[NVM_NUM_LINK_KEYS]{};
+    const int previous_count = cleared_controller_addr_count;
+    memcpy(previous_addrs, cleared_controller_addrs, sizeof(previous_addrs));
+    if (!bt_blacklist_add_unique(addr) || !bt_blacklist_persist()) {
+        memcpy(cleared_controller_addrs, previous_addrs, sizeof(previous_addrs));
+        cleared_controller_addr_count = previous_count;
+        DS5_LOG("[BLACKLIST] Targeted forget aborted: durable blacklist update failed\n");
+        return false;
+    }
+
+    const bool targets_current_session =
+        bt_current_address_known() && bd_addr_cmp(current_device_addr, addr) == 0;
+    gap_drop_link_key_for_bd_addr(addr);
+    if (targets_current_session && acl_handle != HCI_CON_HANDLE_INVALID) {
+        bt_disconnect();
+    }
     return true;
 }
 
@@ -1539,6 +1752,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             DS5_LOG("[BT] State: %u\n", state);
             if (state == HCI_STATE_WORKING) {
                 DS5_LOG("[BT] Stack ready\n");
+                // TLV is only usable once the stack is up, so the blacklist loads here
+                // rather than in bt_init().
+                bt_blacklist_load();
                 schedule_inquiry_retry(0);
                 start_inquiry_if_needed();
             }
@@ -1806,6 +2022,13 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 clear_acl_connection_pending();
                 schedule_inquiry_retry();
             } else {
+                // Authenticated successfully, so this controller is deliberately back --
+                // whether the user re-paired it or it was never cleared. Drop any blacklist
+                // entry so it reconnects normally from here on. A failed durable removal
+                // stays fail-closed: it keeps working now, and is blocked again next boot.
+                if (bt_current_address_known()) {
+                    (void)bt_blacklist_remove(current_device_addr);
+                }
                 authentication_retry_pending = false;
                 authentication_retry_attempts = 0;
                 encryption_completion_pending = true;
@@ -1850,6 +2073,14 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
             DS5_LOG("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
             if ((cod & 0x000F00) == 0x000500) {
+                // A cleared controller must not silently return. Inbound only: an explicit
+                // pairing window drives an OUTBOUND connect, which is how the user
+                // deliberately brings one back.
+                if (bt_blacklist_contains(addr) && !pairing_window_active(time_us_32())) {
+                    DS5_LOG("[BLACKLIST] Rejecting cleared controller %s until paired again\n",
+                            bd_addr_to_str(addr));
+                    break;
+                }
                 bd_addr_copy(current_device_addr, addr);
                 clear_outbound_inquiry_target();
                 mark_acl_connection_pending();

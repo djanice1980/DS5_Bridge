@@ -111,6 +111,11 @@ bool bt_request_pairing();
 // Clears every stored Bluetooth link key. This is what a flash nuke used to be needed for --
 // reflashing firmware does not wipe stored keys.
 bool bt_forget_pairings();
+// Forget a single controller by BT address. Both forget paths record the address in a
+// durable blacklist BEFORE deleting any key, so a controller that is still powered on
+// cannot silently re-pair and make the forget look like it did nothing. An explicit pairing
+// window still lets it back in -- that is the intended way to undo this.
+bool bt_forget_pairing(const uint8_t address[6]);
 void bt_connection_recovery_loop();
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();

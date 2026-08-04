@@ -29,7 +29,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 38;
+constexpr uint8_t kFirmwarePatch = 39;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -148,6 +148,7 @@ enum CommandId : uint8_t {
     // Devices tab. IDs match upstream so the protocol stays convergent.
     CommandRequestControllerScan = 0x27,
     CommandForgetControllerPairings = 0x28,
+    CommandForgetControllerPairing = 0x2E,
     CommandSetWakeOnConnect = 0x35,
 };
 
@@ -160,6 +161,9 @@ enum AckResult : uint8_t {
     AckUnknownCommand = 0x05,
     AckNotConnected = 0x06,
     AckBusy = 0x07,
+    // A forget refused because its durable blacklist write did not verify. Value matches
+    // upstream so the protocols stay convergent.
+    AckPersistenceFailed = 0x08,
 };
 
 enum MuteButtonMode : uint8_t {
@@ -2059,10 +2063,40 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
 
         case CommandForgetControllerPairings:
-            bt_forget_pairings();
+            // Can now genuinely fail: nothing is deleted unless the blacklist write verifies.
+            // Reporting AckOk regardless would tell the user a controller was cleared when
+            // it was not.
+            if (!bt_forget_pairings()) {
+                set_ack(command_id, sequence, AckPersistenceFailed);
+                return;
+            }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
+
+        case CommandForgetControllerPairing: {
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            uint8_t address[6];
+            memcpy(address, buffer + 10, sizeof(address));
+            bool has_address_material = false;
+            for (uint8_t byte : address) {
+                has_address_material = has_address_material || byte != 0;
+            }
+            if (!has_address_material) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!bt_forget_pairing(address)) {
+                set_ack(command_id, sequence, AckPersistenceFailed);
+                return;
+            }
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+        }
 
         case CommandSetWakeOnConnect:
             // Wake the host from sleep when a controller connects (USB remote wakeup).
