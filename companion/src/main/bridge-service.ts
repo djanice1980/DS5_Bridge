@@ -4211,6 +4211,46 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  // Devices tab: forget ONE controller rather than all of them. The firmware records the
+  // address in its durable blacklist before dropping the key, so the controller cannot
+  // silently re-pair itself afterwards.
+  async forgetControllerPairing(mac: string): Promise<BridgeSnapshot> {
+    const address = BridgeService.parseControllerMac(mac);
+    if (!address) {
+      throw new Error(`Not a controller address: ${mac}`);
+    }
+    await this.sendCommand(COMMAND_ID.FORGET_CONTROLLER_PAIRING, 0, {
+      extraPayload: address,
+      throwOnCommandError: false
+    });
+    if (this.connectedControllerMac === mac) {
+      // Forgetting the attached controller drops it, so the bound-profile latch has to go
+      // too or the next controller inherits its binding decision.
+      this.bindingAppliedForMac = null;
+    }
+    this.snapshot.settings = this.settingsStore.update({
+      controllerHistory: this.settingsStore.get().controllerHistory
+        .filter((entry) => entry.mac !== mac)
+    });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  // Stored form is 12 lowercase hex characters with no separators.
+  private static parseControllerMac(mac: string): number[] | null {
+    const normalized = mac.trim().toLowerCase().replace(/[^0-9a-f]/g, '');
+    if (normalized.length !== 12) {
+      return null;
+    }
+    const bytes: number[] = [];
+    for (let index = 0; index < 12; index += 2) {
+      bytes.push(Number.parseInt(normalized.slice(index, index + 2), 16));
+    }
+    // An all-zero address is what the firmware rejects as "no address material", so catch
+    // it here rather than sending a command that is guaranteed to fail.
+    return bytes.some((byte) => byte !== 0) ? bytes : null;
+  }
+
   // Remember which physical container the connected bridge's stable id lives
   // in, so unconnected bridges can still be shown by name in the selector.
   private recordBridgeIdentityAssociation(): void {

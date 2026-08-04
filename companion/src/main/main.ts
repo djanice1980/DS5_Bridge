@@ -1141,6 +1141,7 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:requestControllerPairing', () => service.requestControllerPairing());
   ipcMain.handle('bridge:forgetControllerPairings', () => service.forgetControllerPairings());
+  ipcMain.handle('bridge:forgetControllerPairing', (_event, mac: string) => service.forgetControllerPairing(mac));
   ipcMain.handle('bridge:setWakeOnControllerConnect', (_event, value: boolean) => (
     service.setWakeOnControllerConnect(value)
   ));

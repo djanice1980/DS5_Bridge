@@ -94,6 +94,10 @@ export const COMMAND_ID = {
   // Devices tab. IDs match upstream so the protocol stays convergent.
   REQUEST_CONTROLLER_SCAN: 0x27,
   FORGET_CONTROLLER_PAIRINGS: 0x28,
+  // Forget ONE controller. The 6-byte BT address rides in the command's extra payload,
+  // which buildCommandReport places at report[11..16] -- payload[10..15], exactly where the
+  // firmware reads it.
+  FORGET_CONTROLLER_PAIRING: 0x2e,
   SET_WAKE_ON_CONNECT: 0x35
 } as const;
 
@@ -105,7 +109,11 @@ export const ACK_RESULT = {
   ERR_INVALID_VALUE: 0x04,
   ERR_UNKNOWN_COMMAND: 0x05,
   ERR_NOT_CONNECTED: 0x06,
-  ERR_BUSY: 0x07
+  ERR_BUSY: 0x07,
+  // A forget refused because its durable blacklist write did not verify, so no key was
+  // deleted. Reported rather than swallowed: the user must not be told a controller was
+  // cleared when it was not.
+  ERR_PERSISTENCE_FAILED: 0x08
 } as const;
 
 export type AckResultCode = typeof ACK_RESULT[keyof typeof ACK_RESULT];

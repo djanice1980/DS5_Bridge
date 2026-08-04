@@ -4658,6 +4658,17 @@ export function App() {
     void runAction('forget-controllers', () => window.bridge.forgetControllerPairings());
   }
 
+  function forgetControllerPairing(mac: string, label: string) {
+    if (!snapshot) return;
+    const confirmed = window.confirm(
+      `Forget ${label} (${formatControllerMac(mac)})?\n\n`
+      + 'Only this controller is removed; any others stay paired. It will have to be paired '
+      + 'again (hold Create + PS, then press Pair Controller) before it can reconnect.'
+    );
+    if (!confirmed) return;
+    void runAction(`forget-controller-${mac}`, () => window.bridge.forgetControllerPairing(mac));
+  }
+
   function setAudioReactiveHapticsMode(mode: AudioReactiveHapticsMode) {
     if (!snapshot || mode === snapshot.settings.audioReactiveHapticsMode) return;
     void commitAudioReactiveHapticsConfig({ mode });
@@ -9396,6 +9407,19 @@ export function App() {
                         <span className="inline-state-badge">
                           {entry.lastBatteryPercent === null ? '--' : `${entry.lastBatteryPercent}%`}
                         </span>
+                        <button
+                          type="button"
+                          className="heading-icon-action"
+                          title={`Forget ${controllerTypeLabel(entry.controllerType)}`}
+                          aria-label={`Forget ${controllerTypeLabel(entry.controllerType)} ${formatControllerMac(entry.mac)}`}
+                          disabled={!connected || pendingAction !== null}
+                          onClick={() => forgetControllerPairing(
+                            entry.mac,
+                            controllerTypeLabel(entry.controllerType)
+                          )}
+                        >
+                          <Trash2 size={14} />
+                        </button>
                       </div>
                     ))}
                   </div>

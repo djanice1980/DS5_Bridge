@@ -136,6 +136,9 @@ const api = {
   forgetControllerPairings: (): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:forgetControllerPairings')
   ),
+  forgetControllerPairing: (mac: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:forgetControllerPairing', mac)
+  ),
   setSleepKeybindEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setSleepKeybindEnabled', value)
   ),

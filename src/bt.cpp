@@ -2231,7 +2231,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             // to KeyAccepted so a later failure does NOT roll back over a good key -- past
             // this point the rollback would destroy the pairing it is meant to protect.
             bd_addr_t addr;
-            hci_event_link_key_notification_get_bd_addr(packet, addr);
+            // BTstack has no ..._notification_ accessor for this; the address sits at the
+            // same offset as the request event, which is what upstream reads here too.
+            hci_event_link_key_request_get_bd_addr(packet, addr);
             if (!mark_pairing_transaction_key_accepted(addr)) {
                 // No matching record is normal for a first-time bond with nothing to roll
                 // back to. Only flag it when a record exists but could not be updated.
