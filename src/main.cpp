@@ -568,6 +568,12 @@ int main() {
     board_init();
     watchdog_telemetry_boot_capture(); // Before watchdog_enable() clobbers the reset marker.
     usb_device_stack_init_disconnected();
+#ifdef ENABLE_COMPANION
+    // Come up as the companion-only device so the app can reach the bridge before any
+    // controller has connected. A controller arriving cancels this and attaches the full
+    // device instead.
+    usb_attach_companion_only_idle();
+#endif
     board_init_after_tusb();
 
     if (cyw43_arch_init()) {

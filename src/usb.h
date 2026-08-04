@@ -21,6 +21,9 @@ extern uint32_t usb_host_volume_set_count[3];
 extern float usb_host_speaker_gain; // Host UAC speaker volume as linear gain.
 
 void usb_device_stack_init_disconnected();
+// Attach as the companion-only device (no controller yet), so the app can reach the bridge
+// from boot rather than only after a controller session has ended.
+void usb_attach_companion_only_idle();
 // True only while the TinyUSB device stack is initialised.
 //
 // The stack is no longer torn down at runtime -- a controller disconnect is a soft detach

@@ -902,11 +902,20 @@ uint8_t const desc_ms_os_20[] = {
 
 TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == VENDOR_MS_OS_20_DESC_LEN, "Incorrect MS OS 2.0 descriptor size");
 
-// Byte offset of bFirstInterface inside the function subset header: 10 bytes of set header
-// plus 8 of configuration subset header. Verified against the real array at runtime -- C
-// cannot index a non-constexpr array in a static assertion, so this cannot be a build-time
-// check.
-#define MS_OS_20_FUNCTION_INTERFACE_OFFSET 0x12
+// Offset of bFirstInterface within desc_ms_os_20, spelled out rather than hardcoded because
+// getting it wrong once already cost a release: the first attempt used 0x12, which is the
+// function subset header's wLength, not the interface byte four bytes later.
+//
+//   set header            10 bytes   [0..9]
+//   configuration subset   8 bytes   [10..17]
+//   function subset        8 bytes   [18..25]
+//     wLength         [18,19]
+//     wDescriptorType [20,21]
+//     bFirstInterface [22]  <- this one
+#define MS_OS_20_SET_HEADER_LEN 0x0A
+#define MS_OS_20_CONFIG_SUBSET_HEADER_LEN 0x08
+#define MS_OS_20_FUNCTION_INTERFACE_OFFSET \
+    (MS_OS_20_SET_HEADER_LEN + MS_OS_20_CONFIG_SUBSET_HEADER_LEN + 4)
 
 static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_idle[VENDOR_MS_OS_20_DESC_LEN];
 static bool desc_ms_os_20_idle_ready = false;

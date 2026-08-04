@@ -150,6 +150,20 @@ bool usb_device_stack_ready() {
     return tud_inited();
 }
 
+#ifdef ENABLE_COMPANION
+// Present the companion-only device without waiting for a controller to connect and
+// disconnect first. Without this the bridge is invisible to the app from boot until the
+// first controller session ends, which is the state the feature exists to cover.
+void usb_attach_companion_only_idle() {
+    if (usb_controller_transport_ready || usb_controller_transport_attached) {
+        return;
+    }
+    host_bridge_set_companion_only(true);
+    usb_idle_attach_pending = true;
+    usb_idle_attach_at_us = time_us_32() + USB_IDLE_ATTACH_DELAY_US;
+}
+#endif
+
 void usb_device_stack_init_disconnected() {
     const bool initialized_now = !tud_inited();
     if (!tud_inited()) {
@@ -181,7 +195,10 @@ static void usb_connect_controller_transport(uint32_t now) {
         host_bridge_set_companion_only(false);
         if (tud_inited()) {
             tud_disconnect();
-            sleep_ms(USB_IDLE_ATTACH_DELAY_US / 1000u);
+            // Long enough for the host to register the detach, short enough not to be a
+            // visible main-loop stall. The 400ms first used here showed up in the
+            // worst-phase tracker as "slowest usb-power 400ms".
+            sleep_ms(120);
         }
     }
 #endif
