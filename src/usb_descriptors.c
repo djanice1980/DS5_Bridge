@@ -26,7 +26,6 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "debug_config.h"
-#include "utils.h"
 #include "host_bridge.h"
 #include "persona/host_persona.h"
 
@@ -921,9 +920,9 @@ static uint8_t const *build_idle_ms_os_20_descriptor(void) {
         // rather than a subtly malformed one.
         if (desc_ms_os_20_idle[MS_OS_20_FUNCTION_INTERFACE_OFFSET] == VENDOR_BRIDGE_INTERFACE_NUMBER) {
             desc_ms_os_20_idle[MS_OS_20_FUNCTION_INTERFACE_OFFSET] = HOST_BRIDGE_IDLE_INTERFACE_NUMBER;
-        } else {
-            DS5_LOG("[USB] MS OS 2.0 interface byte moved; idle WinUSB binding not patched\n");
         }
+        // Else: left unpatched deliberately. No logging here -- this is a C translation unit
+        // and DS5_LOG lives in a C++ header.
         desc_ms_os_20_idle_ready = true;
     }
     return desc_ms_os_20_idle;
