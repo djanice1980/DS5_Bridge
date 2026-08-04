@@ -26,6 +26,7 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "debug_config.h"
+#include "utils.h"
 #include "host_bridge.h"
 #include "persona/host_persona.h"
 
