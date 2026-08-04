@@ -1480,6 +1480,15 @@ void bt_inquiry_loop() {
 // (press Forget again), or the key goes and the blacklist entry does not (it can re-pair).
 constexpr uint32_t BT_BLACKLIST_TLV_TAG = 0x424C434Bu; // 'BLCK'
 
+// Is current_device_addr meaningful right now? It is stale unless one of these says we are
+// mid-transaction with, or connected to, that address.
+static bool bt_current_address_known() {
+    return bt_is_controller_connected()
+        || device_found
+        || acl_connection_pending
+        || acl_handle != HCI_CON_HANDLE_INVALID;
+}
+
 static bd_addr_t cleared_controller_addrs[NVM_NUM_LINK_KEYS];
 static int cleared_controller_addr_count = 0;
 
