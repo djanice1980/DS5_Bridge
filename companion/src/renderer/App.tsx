@@ -9347,7 +9347,17 @@ export function App() {
                     </div>
                     <div className="settings-menu-row">
                       <div className="settings-menu-copy"><strong>Profile</strong></div>
-                      <span className="inline-state-badge">
+                      <span
+                        className="inline-state-badge wide"
+                        // Profile names are user-supplied and can outrun the badge, so the
+                        // full value stays reachable on hover once it truncates.
+                        title={profileDisplayName(
+                          snapshot.settings.controllerProfiles.find((profile) => (
+                            profile.id === snapshot.settings.controllerBindings[devicesCurrentEntry.mac]
+                          ))?.name,
+                          snapshot.settings.controllerBindings[devicesCurrentEntry.mac] ?? 'none'
+                        )}
+                      >
                         {profileDisplayName(
                           snapshot.settings.controllerProfiles.find((profile) => (
                             profile.id === snapshot.settings.controllerBindings[devicesCurrentEntry.mac]

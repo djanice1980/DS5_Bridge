@@ -3159,13 +3159,24 @@ button.overview-shortcut-chip {
   padding: 0 8px;
   border: 1px solid var(--surface-border-strong);
   border-radius: var(--control-radius);
-  display: inline-flex;
-  align-items: center;
+  /* inline-block, not inline-flex: text-overflow only applies to a block container's own
+     inline content, so a flex box cannot ellipsis its text. line-height does the vertical
+     centering that align-items used to. Every badge holds plain text, no icon children. */
+  display: inline-block;
   color: var(--text-secondary);
   background: var(--surface-control-muted);
   font-size: 11px;
-  line-height: 1;
+  line-height: 20px;
   white-space: nowrap;
+  /* Without these, a long value (a user-named controller profile) spilled past the border
+     instead of truncating. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* User-named values need more room than a MAC or a percentage. Still truncates, further out. */
+.inline-state-badge.wide {
+  max-width: 220px;
 }
 
 .inline-state-badge.warn {
