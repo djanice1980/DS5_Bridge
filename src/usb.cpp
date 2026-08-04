@@ -296,6 +296,15 @@ void usb_handle_controller_transport_ready() {
     if (usb_bus_suspended()) {
         usb_controller_transport_ready = true;
         usb_wake_host_if_suspended(); // Fallback wake in case the early link-connect signal was missed.
+#ifdef ENABLE_COMPANION
+        // Remote wakeup cannot rescue the companion-only device: its configuration does not
+        // declare the capability, and the host would have to re-enumerate anyway to see the
+        // full device. Publish the transition so usb_pm_poll re-attaches instead of waiting
+        // for a resume that never comes.
+        if (host_bridge_companion_only()) {
+            usb_controller_transport_transition_pending = true;
+        }
+#endif
         return;
     }
     usb_controller_transport_ready = true;
@@ -381,7 +390,20 @@ void usb_pm_poll() {
         usb_suspend_at_us = 0;
     }
 
-    if (usb_bus_suspended()) {
+    // A suspended bus normally means do nothing -- except when a controller has arrived and
+    // we are still presenting the companion-only device. That transition is a detach/attach
+    // cycle under a different product id, which the host notices regardless of suspend, and
+    // it is the ONLY way out: the idle configuration does not declare remote wakeup, so
+    // waiting to be resumed would wait forever.
+    const bool idle_transition_needed =
+#ifdef ENABLE_COMPANION
+        usb_controller_transport_transition_pending
+        && usb_controller_transport_ready
+        && host_bridge_companion_only();
+#else
+        false;
+#endif
+    if (usb_bus_suspended() && !idle_transition_needed) {
         return;
     }
 
