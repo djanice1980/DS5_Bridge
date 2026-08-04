@@ -2440,10 +2440,14 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
             DS5_LOG("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
             if ((cod & 0x000F00) == 0x000500) {
-                // A cleared controller must not silently return. Inbound only: an explicit
-                // pairing window drives an OUTBOUND connect, which is how the user
-                // deliberately brings one back.
-                if (bt_blacklist_contains(addr) && !pairing_window_active(time_us_32())) {
+                // A cleared controller must not silently return, and that holds even while a
+                // pairing window is open. The window is not consent for THIS controller: a
+                // bonded controller that was forgotten still has its own key and pages us
+                // unprompted, so it would walk back in during a window opened for some other
+                // controller entirely. Coming back deliberately means being put into pairing
+                // mode and found by the OUTBOUND inquiry the window drives -- that path is
+                // not gated here, and a successful authentication clears the entry.
+                if (bt_blacklist_contains(addr)) {
                     DS5_LOG("[BLACKLIST] Rejecting cleared controller %s until paired again\n",
                             bd_addr_to_str(addr));
                     break;

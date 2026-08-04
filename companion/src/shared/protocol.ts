@@ -1078,6 +1078,8 @@ export function ackUserMessage(result: number): string {
       return 'Invalid value';
     case ACK_RESULT.ERR_BAD_VERSION:
       return 'Firmware protocol mismatch';
+    case ACK_RESULT.ERR_PERSISTENCE_FAILED:
+      return 'The bridge could not durably record the change, so nothing was deleted';
     case ACK_RESULT.ERR_BAD_MAGIC:
     case ACK_RESULT.ERR_BAD_LENGTH:
     case ACK_RESULT.ERR_UNKNOWN_COMMAND:

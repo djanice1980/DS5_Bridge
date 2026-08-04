@@ -120,7 +120,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.41';
+const BUNDLED_FIRMWARE_VERSION = '1.6.42';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -4204,7 +4204,9 @@ export class BridgeService extends EventEmitter {
   // that previously required a flash nuke -- reflashing firmware does not wipe stored keys.
   // The companion-side history is cleared to match, since those pairings no longer exist.
   async forgetControllerPairings(): Promise<BridgeSnapshot> {
-    await this.sendCommand(COMMAND_ID.FORGET_CONTROLLER_PAIRINGS, 0, { throwOnCommandError: false });
+    // Same reasoning as the targeted forget: report a refusal instead of clearing the local
+    // history and claiming it worked.
+    await this.sendCommand(COMMAND_ID.FORGET_CONTROLLER_PAIRINGS, 0);
     this.bindingAppliedForMac = null;
     this.snapshot.settings = this.settingsStore.update({ controllerHistory: [] });
     this.emitSnapshot();
@@ -4219,10 +4221,11 @@ export class BridgeService extends EventEmitter {
     if (!address) {
       throw new Error(`Not a controller address: ${mac}`);
     }
-    await this.sendCommand(COMMAND_ID.FORGET_CONTROLLER_PAIRING, 0, {
-      extraPayload: address,
-      throwOnCommandError: false
-    });
+    // Deliberately NOT throwOnCommandError:false. This is destructive, and the firmware can
+    // legitimately refuse -- it declines to delete anything unless its durable blacklist
+    // write verifies. Swallowing that told the user a controller was cleared when it was
+    // still paired, and removed the row locally so the lie looked like the truth.
+    await this.sendCommand(COMMAND_ID.FORGET_CONTROLLER_PAIRING, 0, { extraPayload: address });
     if (this.connectedControllerMac === mac) {
       // Forgetting the attached controller drops it, so the bound-profile latch has to go
       // too or the next controller inherits its binding decision.
