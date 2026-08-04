@@ -1970,8 +1970,7 @@ bool bt_forget_pairings() {
     }
 
     if (!cancel_pairing_transaction_before_forget()) {
-        DS5_LOG("[PAIR] Forget all aborted: pairing transaction not durably settled
-");
+        DS5_LOG("[PAIR] Forget all aborted: pairing transaction not durably settled\n");
         return false;
     }
     if (acl_handle != HCI_CON_HANDLE_INVALID) {
@@ -2013,8 +2012,7 @@ bool bt_forget_pairing(const uint8_t address[6]) {
     }
 
     if (!cancel_pairing_transaction_before_forget()) {
-        DS5_LOG("[PAIR] Targeted forget aborted: pairing transaction not durably settled
-");
+        DS5_LOG("[PAIR] Targeted forget aborted: pairing transaction not durably settled\n");
         return false;
     }
     const bool targets_current_session =
@@ -2067,8 +2065,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 // A reset part-way through a re-pair is the case the transaction record
                 // exists for, so roll it back before any controller is accepted.
                 if (!recover_pairing_transaction_on_boot()) {
-                    DS5_LOG("[PAIR] Pairing transaction recovery incomplete at boot
-");
+                    DS5_LOG("[PAIR] Pairing transaction recovery incomplete at boot\n");
                 }
                 schedule_inquiry_retry(0);
                 start_inquiry_if_needed();
