@@ -203,7 +203,10 @@ describe('audio haptics session listing', () => {
 describe('audio helper command fallback', () => {
   it('reuses the candidate that worked instead of re-walking the fallback chain', async () => {
     const first = getDefaultRenderEndpointStatus();
-    expect(childProcessMock.spawn.mock.calls[0]![0]).toContain('AudioHelper.exe');
+    // The published launcher is tried before the `dotnet` fallback. Matched without a
+    // hardcoded extension: it is AudioHelper.exe on Windows and AudioHelper on Linux, and
+    // the point of the assertion is which CANDIDATE ran, not what the platform calls it.
+    expect(childProcessMock.spawn.mock.calls[0]![0]).toMatch(/AudioHelper(\.exe)?$/);
     childProcessMock.processes[0]!.emit('exit', 1, null);
     await flushMicrotasks();
 
