@@ -3623,19 +3623,26 @@ export function App() {
   // Devices tab: the newest history entry is the current controller when one is attached,
   // otherwise it is simply the last one we saw.
   const controllerHistory = snapshot?.settings.controllerHistory ?? [];
-  const devicesCurrentEntry = controllerHistory[0] ?? null;
+  // Requires the BRIDGE too: status is retained after the bridge goes away, so
+  // controllerConnected alone would keep claiming a controller is attached while the
+  // subtitle underneath said "Bridge offline".
+  const controllerAttached = connected && controllerConnected;
+  // The card is only the CONNECTED controller. With nothing attached it holds nothing, and
+  // every remembered controller belongs in the list -- previously slot 0 was reserved
+  // regardless, so the newest one was absent from Previously Seen and had no Forget button.
+  const devicesCurrentEntry = controllerAttached ? controllerHistory[0] ?? null : null;
   // While the controller is connected the live reading is authoritative; the stored value is
   // only a snapshot. Falling back to it keeps a meaningful "last seen" figure once it is gone.
-  const devicesCurrentBatteryPercent = controllerConnected
+  const devicesCurrentBatteryPercent = controllerAttached
     ? snapshot?.status?.batteryPercent ?? devicesCurrentEntry?.lastBatteryPercent ?? null
-    : devicesCurrentEntry?.lastBatteryPercent ?? null;
-  const devicesPreviousEntries = controllerHistory.slice(1);
+    : null;
+  const devicesPreviousEntries = controllerAttached ? controllerHistory.slice(1) : controllerHistory;
   const devicesCurrentSubtitle = !connected
     ? 'Bridge offline'
-    : controllerConnected
+    : controllerAttached
       ? 'Connected now'
-      : devicesCurrentEntry
-        ? `Last seen ${formatLastSeen(devicesCurrentEntry.lastSeenAt)}`
+      : controllerHistory.length > 0
+        ? `Last seen ${formatLastSeen(controllerHistory[0]!.lastSeenAt)}`
         : 'No controller paired';
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const audioReactiveHapticsEnabled = Boolean(snapshot?.settings.audioReactiveHapticsEnabled);
@@ -9330,11 +9337,11 @@ export function App() {
             <div className="feature-card-grid">
               <section className="feature-card">
                 <div className="feature-card-title">
-                  <span className={`feature-icon icon-compact ${controllerConnected ? 'active' : ''} ${!connected ? 'unavailable' : ''}`}>
+                  <span className={`feature-icon icon-compact ${controllerAttached ? 'active' : ''} ${!connected ? 'unavailable' : ''}`}>
                     <IconBluetooth size={20} />
                   </span>
                   <div className="title-copy">
-                    <h3>{controllerConnected ? 'Connected Controller' : 'Last Controller'}</h3>
+                    <h3>{controllerAttached ? 'Connected Controller' : 'No Controller Connected'}</h3>
                     <p>{devicesCurrentSubtitle}</p>
                   </div>
                 </div>
@@ -9380,9 +9387,9 @@ export function App() {
                   </div>
                 ) : (
                   <p className="feature-empty">
-                    No controller has paired with this bridge yet. Put a controller into pairing mode
-                    (hold Create + PS until the light bar double-flashes), then press Pair Controller
-                    or single-click the bridge's BOOTSEL button.
+                    {controllerHistory.length > 0
+                      ? 'No controller is connected. Everything this bridge remembers is listed under Previously Seen, where each one can be forgotten individually.'
+                      : `No controller has paired with this bridge yet. Put a controller into pairing mode (hold Create + PS until the light bar double-flashes), then press Pair Controller or single-click the bridge's BOOTSEL button.`}
                   </p>
                 )}
               </section>
@@ -9395,7 +9402,11 @@ export function App() {
                   </div>
                 </div>
                 {devicesPreviousEntries.length === 0 ? (
-                  <p className="feature-empty">Nothing else has connected through this app yet.</p>
+                  <p className="feature-empty">
+                    {controllerAttached
+                      ? 'Nothing else has connected through this app yet.'
+                      : 'No controllers remembered yet.'}
+                  </p>
                 ) : (
                   <div className="settings-menu-list">
                     {devicesPreviousEntries.map((entry) => (
