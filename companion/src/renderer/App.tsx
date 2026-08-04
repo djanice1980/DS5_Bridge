@@ -9388,7 +9388,7 @@ export function App() {
                 ) : (
                   <p className="feature-empty">
                     {controllerHistory.length > 0
-                      ? 'No controller is connected. Everything this bridge remembers is listed under Previously Seen, where each one can be forgotten individually.'
+                      ? 'No controller is connected.'
                       : `No controller has paired with this bridge yet. Put a controller into pairing mode (hold Create + PS until the light bar double-flashes), then press Pair Controller or single-click the bridge's BOOTSEL button.`}
                   </p>
                 )}
