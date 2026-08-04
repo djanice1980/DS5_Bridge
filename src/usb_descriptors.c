@@ -160,10 +160,76 @@ static tusb_desc_device_t const desc_device =
 };
 static tusb_desc_device_t desc_device_runtime;
 
+#ifdef ENABLE_COMPANION
+// Companion-only enumeration. Read during GET DESCRIPTOR, so it only takes effect on the
+// next attach -- usb.cpp detaches, flips this, and re-attaches.
+static bool host_bridge_companion_only_mode = false;
+
+void host_bridge_set_companion_only(bool enabled) {
+    host_bridge_companion_only_mode = enabled;
+}
+
+bool host_bridge_companion_only(void) {
+    return host_bridge_companion_only_mode;
+}
+
+// Just the configuration, one vendor interface, one bulk endpoint.
+#define CONFIG_TOTAL_LEN_IDLE (0x09 + 0x09 + 0x07)
+
+static const uint8_t descriptor_configuration_idle[] = {
+    // --- CONFIGURATION DESCRIPTOR ---
+    0x09, // bLength
+    0x02, // bDescriptorType (CONFIGURATION)
+    CONFIG_TOTAL_LEN_IDLE & 0xFF, (CONFIG_TOTAL_LEN_IDLE >> 8) & 0xFF,
+    0x01, // bNumInterfaces: 1 -- no gamepad, no audio
+    0x01, // bConfigurationValue
+    0x00, // iConfiguration
+    // Self-powered. NOT remote-wakeup: with no controller attached there is nothing to wake
+    // the host for, and claiming the capability without using it only confuses power policy.
+    0xC0,
+    0xFA, // bMaxPower: 500mA
+
+    // --- INTERFACE DESCRIPTOR (0.0): Vendor Bulk OUT (companion/control bridge) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    HOST_BRIDGE_IDLE_INTERFACE_NUMBER,
+    0x00, // bAlternateSetting
+    0x01, // bNumEndpoints
+    0xFF, // bInterfaceClass: Vendor Specific
+    0x00, // bInterfaceSubClass
+    0x00, // bInterfaceProtocol
+    0x07, // iInterface: DS5 Bridge Control
+
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    VENDOR_BRIDGE_EP_OUT,
+    0x02, // bmAttributes: Bulk
+    0x40, 0x00, // wMaxPacketSize: 64
+    0x00  // bInterval: ignored for bulk
+};
+
+TU_VERIFY_STATIC(
+    sizeof(descriptor_configuration_idle) == CONFIG_TOTAL_LEN_IDLE,
+    "Incorrect idle config descriptor size"
+);
+#endif
+
 // Invoked when received GET DEVICE DESCRIPTOR
 // Application return pointer to descriptor
 uint8_t const *tud_descriptor_device_cb(void) {
     desc_device_runtime = desc_device;
+#ifdef ENABLE_COMPANION
+    if (host_bridge_companion_only()) {
+        // A distinct product id so Windows installs this as its own device rather than
+        // caching one VID/PID against two different interface layouts. Personas are
+        // irrelevant here -- there is no gamepad in this configuration.
+        desc_device_runtime.idProduct = HOST_BRIDGE_IDLE_PRODUCT_ID;
+        desc_device_runtime.bDeviceClass = 0x00;
+        desc_device_runtime.bDeviceSubClass = 0x00;
+        desc_device_runtime.bDeviceProtocol = 0x00;
+        return (uint8_t const *) &desc_device_runtime;
+    }
+#endif
     if (host_persona_active() == HostPersonaModeXusb360) {
         desc_device_runtime.idVendor = XUSB360_VENDOR_ID;
         desc_device_runtime.idProduct = XUSB360_PRODUCT_ID;
@@ -758,6 +824,11 @@ static uint16_t build_xusb_configuration_descriptor(void) {
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void) index; // for multiple configurations
+#ifdef ENABLE_COMPANION
+    if (host_bridge_companion_only()) {
+        return descriptor_configuration_idle;
+    }
+#endif
     if (host_persona_active() == HostPersonaModeXusb360) {
         if (descriptor_configuration_xusb_len == 0) {
             (void)build_xusb_configuration_descriptor();
@@ -830,6 +901,27 @@ uint8_t const desc_ms_os_20[] = {
 };
 
 TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == VENDOR_MS_OS_20_DESC_LEN, "Incorrect MS OS 2.0 descriptor size");
+
+// Byte offset of bFirstInterface inside the function subset header: 10 bytes of set header
+// plus 8 of configuration subset header. Asserted below against the real array so a change
+// to either header cannot silently point this at the wrong byte.
+#define MS_OS_20_FUNCTION_INTERFACE_OFFSET 0x12
+TU_VERIFY_STATIC(
+    desc_ms_os_20[MS_OS_20_FUNCTION_INTERFACE_OFFSET] == VENDOR_BRIDGE_INTERFACE_NUMBER,
+    "MS OS 2.0 function-subset interface byte moved"
+);
+
+static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_idle[VENDOR_MS_OS_20_DESC_LEN];
+static bool desc_ms_os_20_idle_ready = false;
+
+static uint8_t const *build_idle_ms_os_20_descriptor(void) {
+    if (!desc_ms_os_20_idle_ready) {
+        memcpy(desc_ms_os_20_idle, desc_ms_os_20, sizeof(desc_ms_os_20));
+        desc_ms_os_20_idle[MS_OS_20_FUNCTION_INTERFACE_OFFSET] = HOST_BRIDGE_IDLE_INTERFACE_NUMBER;
+        desc_ms_os_20_idle_ready = true;
+    }
+    return desc_ms_os_20_idle;
+}
 
 static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_xusb[VENDOR_MS_OS_20_DESC_LEN_XUSB];
 static bool desc_ms_os_20_xusb_ready = false;
@@ -927,7 +1019,12 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
     if (request->bRequest == VENDOR_MS_OS_VENDOR_REQUEST && request->wIndex == 7) {
         uint8_t const *descriptor = desc_ms_os_20;
         uint16_t descriptor_len = VENDOR_MS_OS_20_DESC_LEN;
-        if (host_persona_active() == HostPersonaModeXusb360) {
+        if (host_bridge_companion_only()) {
+            // Same descriptor, one byte different: the function subset header names the
+            // interface WinUSB binds to, and companion-only renumbers it to 0. Patched at
+            // runtime rather than duplicated, so the GUID and layout cannot drift apart.
+            descriptor = build_idle_ms_os_20_descriptor();
+        } else if (host_persona_active() == HostPersonaModeXusb360) {
             descriptor_len = build_xusb_ms_os_20_descriptor();
             descriptor = desc_ms_os_20_xusb;
         }
@@ -940,7 +1037,12 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
         );
     }
 
-    if (request->wIndex != VENDOR_BRIDGE_INTERFACE_NUMBER) {
+    // Companion-only enumeration renumbers the bridge interface to 0, so requests arrive
+    // addressed to that instead.
+    if (
+        request->wIndex != VENDOR_BRIDGE_INTERFACE_NUMBER
+        && !(host_bridge_companion_only() && request->wIndex == HOST_BRIDGE_IDLE_INTERFACE_NUMBER)
+    ) {
         return false;
     }
 

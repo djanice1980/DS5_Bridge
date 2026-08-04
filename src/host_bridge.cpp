@@ -78,7 +78,12 @@ static void host_bridge_driver_reset(uint8_t rhport) {
 static uint16_t host_bridge_driver_open(uint8_t rhport, tusb_desc_interface_t const *desc_itf, uint16_t max_len) {
     if (
         desc_itf->bInterfaceClass != TUSB_CLASS_VENDOR_SPECIFIC
-        || desc_itf->bInterfaceNumber != HOST_BRIDGE_INTERFACE_NUMBER
+        || (
+            desc_itf->bInterfaceNumber != HOST_BRIDGE_INTERFACE_NUMBER
+            // Companion-only enumeration renumbers this interface to 0, so accept both
+            // rather than only the full-configuration number.
+            && desc_itf->bInterfaceNumber != HOST_BRIDGE_IDLE_INTERFACE_NUMBER
+        )
     ) {
         return 0;
     }

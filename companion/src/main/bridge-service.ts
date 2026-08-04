@@ -121,7 +121,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.42';
+const BUNDLED_FIRMWARE_VERSION = '1.6.43';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -152,7 +152,11 @@ const TRIGGER_EFFECT_STEP = 10;
 const AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT = 100;
 const AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG = 0x80;
 const SONY_VENDOR_ID = 0x054c;
-const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
+// 0x0ce7 is the bridge's companion-only ("idle") enumeration: with no controller attached it
+// presents just the vendor interface under its own product id, so the app can still reach it
+// -- which is exactly when Pair and Forget are wanted. A distinct id keeps Windows from
+// caching one VID/PID against two different interface layouts.
+const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2, 0x0ce7]);
 const WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH = path.join('tools', 'windows', 'clean-ds5bridge-devices.ps1');
 const POWERSHELL_ERROR_OUTPUT_MAX_CHARS = 8192;
 const CLEANUP_LOG_EXCERPT_MAX_CHARS = 3000;

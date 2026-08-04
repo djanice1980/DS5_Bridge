@@ -12,6 +12,9 @@
 #include "audio.h"
 #include "bt.h"
 #include "host_input.h"
+#ifdef ENABLE_COMPANION
+#include "host_bridge.h"
+#endif
 #include "usb.h"
 
 uint8_t mute[2]; // 0: speaker/LED fallback, 1: mic/idle-disconnect fallback
@@ -37,6 +40,14 @@ static bool usb_controller_transport_disconnect_pending = false;
 // usb_pm_poll(). Bluetooth callbacks only publish desired state -- they must never touch
 // the stack from inside cyw43_arch_poll() or a TinyUSB callback.
 static bool usb_controller_transport_attached = false;
+#ifdef ENABLE_COMPANION
+// Re-attach as the companion-only device shortly after a controller detach. Delayed so the
+// host registers the detach first; attaching again in the same breath can look like a glitch
+// rather than a new device.
+#define USB_IDLE_ATTACH_DELAY_US 400000u
+static bool usb_idle_attach_pending = false;
+static uint32_t usb_idle_attach_at_us = 0;
+#endif
 static bool usb_controller_transport_transition_pending = false;
 static volatile bool usb_mounted = false;
 static volatile bool usb_host_suspended = false;
@@ -162,6 +173,18 @@ static void usb_connect_controller_transport(uint32_t now) {
     if (usb_controller_transport_attached) {
         return;
     }
+#ifdef ENABLE_COMPANION
+    // A controller arrived, so the full device replaces the companion-only one. That is a
+    // different product id and interface layout, so the host must see a detach first.
+    usb_idle_attach_pending = false;
+    if (host_bridge_companion_only()) {
+        host_bridge_set_companion_only(false);
+        if (tud_inited()) {
+            tud_disconnect();
+            sleep_ms(USB_IDLE_ATTACH_DELAY_US / 1000u);
+        }
+    }
+#endif
     // init_disconnected() only does real work on the very first attach now, because the
     // stack is never torn down. That is what removes the 150ms sleep from every reconnect.
     usb_device_stack_init_disconnected();
@@ -376,6 +399,16 @@ void usb_pm_poll() {
             usb_mounted = false;
             usb_reset_audio_class_state();
             tud_disconnect();
+#ifdef ENABLE_COMPANION
+            // Come back as the companion-only device rather than staying dark, so the app
+            // can still reach the bridge with no controller attached -- which is exactly
+            // when Pair and Forget are wanted. Descriptors are read during enumeration, so
+            // the mode must be set while detached; the re-attach is scheduled rather than
+            // immediate to give the host time to notice the detach.
+            host_bridge_set_companion_only(true);
+            usb_idle_attach_pending = true;
+            usb_idle_attach_at_us = now + USB_IDLE_ATTACH_DELAY_US;
+#endif
         }
         return;
     }
@@ -386,6 +419,18 @@ void usb_pm_poll() {
         usb_controller_transport_transition_pending = true;
         return;
     }
+
+#ifdef ENABLE_COMPANION
+    if (usb_idle_attach_pending && time_reached(now, usb_idle_attach_at_us)) {
+        usb_idle_attach_pending = false;
+        // Only if nothing has arrived meanwhile: a controller connecting during the delay
+        // already switched the mode back and attached the full device.
+        if (!usb_controller_transport_ready && !usb_controller_transport_attached && tud_inited()) {
+            usb_mounted = false;
+            tud_connect();
+        }
+    }
+#endif
 
     if (usb_reconnect_connect_pending && time_reached(now, usb_reconnect_at_us)) {
         usb_reconnect_connect_pending = false;
