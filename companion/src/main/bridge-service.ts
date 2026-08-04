@@ -121,6 +121,7 @@ const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 const BUNDLED_FIRMWARE_VERSION = '1.6.38';
+const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -1230,6 +1231,9 @@ export class BridgeService extends EventEmitter {
   private connectedBridgeUniqueId: string | null = null;
   // BT address of the controller on the connected bridge (firmware 1.6.20+).
   private connectedControllerMac: string | null = null;
+  // Bounded so firmware that never reports a controller address (pre-1.6.20) does not cost a
+  // feature-report read on every single poll forever.
+  private identityRetriesRemaining = 0;
   // Last controller identity we ran binding application for (prevents
   // re-applying every poll; reset on device close).
   private bindingAppliedForMac: string | null = null;
@@ -3596,6 +3600,21 @@ export class BridgeService extends EventEmitter {
     };
     this.emitSnapshot();
     if (controllerJustConnected) {
+      // A fresh connect gets a fresh budget of identity retries -- see below.
+      this.identityRetriesRemaining = CONTROLLER_IDENTITY_RETRIES;
+      void this.applyControllerProfileBinding();
+    } else if (
+      status.controllerConnected
+      && !this.connectedControllerMac
+      && this.identityRetriesRemaining > 0
+    ) {
+      // The identity read at the connect transition can legitimately come back empty: the
+      // firmware only reports the controller address once bt_get_connected_controller_addr()
+      // succeeds, which is after the BT link is fully up. That used to be unrecoverable --
+      // the branch below requires connectedControllerMac, i.e. the very value that failed to
+      // be set -- so the controller was never recorded into history and the Devices tab kept
+      // showing the previous one until the user power-cycled the controller again.
+      this.identityRetriesRemaining -= 1;
       void this.applyControllerProfileBinding();
     } else if (
       status.controllerConnected
