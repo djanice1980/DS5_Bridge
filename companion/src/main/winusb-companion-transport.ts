@@ -41,6 +41,9 @@ type OpenOptions = {
   devicePath?: string;
 };
 
+// Round trip to an ALREADY-RUNNING helper. Startup is covered separately by
+// START_TIMEOUT_MS, which start() waits on before any request is issued, so this does not
+// need to absorb process launch. 1.5s is generous for a WinUSB transfer on a healthy machine.
 const REQUEST_TIMEOUT_MS = 1500;
 const START_TIMEOUT_MS = 2500;
 const DEFAULT_OPEN_RETRY_DELAY_MS = 50;
@@ -54,7 +57,13 @@ export class WinUsbCompanionTransport extends EventEmitter {
 
   private constructor(
     private readonly helper: ChildProcessWithoutNullStreams,
-    readonly path: string
+    readonly path: string,
+    // Overridable so tests that are not ABOUT the deadline do not race it. The integration
+    // test drives a real subprocess over real pipes; under a saturated CPU that subprocess
+    // can miss a 1.5s wall-clock deadline it never meant to be measured against, which
+    // showed up as an intermittent failure in tests asserting request-id matching and
+    // exit handling. Production keeps the default.
+    private readonly requestTimeoutMs: number = REQUEST_TIMEOUT_MS
   ) {
     super();
     helper.stdout.on('data', (chunk: Buffer) => this.handleStdout(chunk));
@@ -241,7 +250,7 @@ export class WinUsbCompanionTransport extends EventEmitter {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error('WinUSB bridge helper request timed out.'));
-      }, REQUEST_TIMEOUT_MS);
+      }, this.requestTimeoutMs);
       this.pending.set(id, { resolve, reject, timeout });
       this.helper.stdin.write(`${message}\n`, (error) => {
         if (!error) {

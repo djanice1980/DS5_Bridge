@@ -5,8 +5,15 @@ import { WinUsbCompanionTransport } from './winusb-companion-transport';
 
 type TransportConstructor = new (
   helper: ChildProcessWithoutNullStreams,
-  path: string
+  path: string,
+  requestTimeoutMs?: number
 ) => WinUsbCompanionTransport;
+
+// These tests assert request-id matching and exit handling, NOT the request deadline. They
+// drive a real subprocess over real pipes, so under a saturated CPU (the whole suite running
+// in parallel) the helper can miss production's 1.5s wall-clock deadline through no fault of
+// the behaviour under test. Give them room; the deadline itself is not what is being checked.
+const TEST_REQUEST_TIMEOUT_MS = 30_000;
 
 const fakeHelperPath = fileURLToPath(new URL('./test-fixtures/fake-winusb-helper.cjs', import.meta.url));
 const liveTransports: WinUsbCompanionTransport[] = [];
@@ -18,7 +25,7 @@ function createFakeTransport(): WinUsbCompanionTransport {
     windowsHide: true
   });
   const Transport = WinUsbCompanionTransport as unknown as TransportConstructor;
-  const transport = new Transport(helper, 'fake-winusb://bridge');
+  const transport = new Transport(helper, 'fake-winusb://bridge', TEST_REQUEST_TIMEOUT_MS);
   liveHelpers.push(helper);
   liveTransports.push(transport);
   return transport;
