@@ -255,3 +255,106 @@ These are how the Windows features were re-implemented on Linux; they don't appl
 ---
 
 *Generated for the Linux port at companion 1.6.18 / firmware 1.6.13. Commit range: `99611b5..HEAD`.*
+
+---
+
+# Addendum — findings from the 2026-08-03/04 crash investigation
+
+Added at companion 1.6.43 / firmware 1.6.38. Everything below was found while chasing a
+reconnect crash in the Linux fork; this section lists only what we believe affects
+**SundayMoments/DS5_Bridge** as it stands today, plus one item that does *not* but is worth
+knowing about.
+
+## 1. Devices tab: Pair / Forget are unusable in the state they exist for — ✅ Yes
+
+**Symptom.** With no controller connected, **Pair Controller** and **Forget Controllers**
+are greyed out and cannot be pressed.
+
+**Root cause.** A controller disconnect soft-detaches the whole USB device
+(`tud_disconnect()` in the `usb_pm_poll()` reconciliation). That removes *every* interface,
+including the companion/vendor HID the app talks over — so the app has no bridge to reach,
+the snapshot state is not `connected`, and both buttons disable. `tud_connect()` is only
+called from the controller-driven attach path, and there is no idle/companion-only
+descriptor set.
+
+**Why it matters.** It inverts both buttons. Pairing is most needed when nothing is
+attached; forgetting a stale pairing is most needed when a controller *won't* connect. In
+our fork the empty-state text under them ("...then press Pair Controller") describes a flow
+that cannot happen. BOOTSEL still covers pairing, so the genuinely unreachable function is
+**Forget Controllers**, whose only fallback is a flash nuke — the very thing the button was
+added to replace.
+
+**Fix direction (not yet implemented on our side either).** Present a **companion-only
+configuration while idle**: the vendor interface without the gamepad/audio interfaces, so
+the app can always reach the bridge but the host never sees a phantom controller. Note the
+MS OS 2.0 descriptor keys WinUSB binding to the interface *number*
+(`VENDOR_BRIDGE_INTERFACE_NUMBER` in the function subset header), so a reduced configuration
+needs its MS OS 2.0 descriptor rebuilt to match — the xusb360 persona already does exactly
+this at runtime (`build_xusb_configuration_descriptor` / `build_xusb_ms_os_20_descriptor`),
+so the pattern exists to copy.
+
+## 2. TinyUSB endpoint desync panic — ⚠️ Latent, shared
+
+**Symptom.** Rare, non-reproducible "the bridge rebooted" during controller reconnect.
+
+**Root cause.** TinyUSB's `panic("ep %02X was already available")` in
+`_hw_endpoint_buffer_control_update32`, reached from `tud_hid_report()` when software
+endpoint state says free while hardware still has `USB_BUF_CTRL_AVAIL` set. The enabling gap
+is upstream TinyUSB's: `rp2040_usb.h`'s `hw_endpoint_lock_update()` is an **empty inline**
+whose comment reads *"todo add critsec as necessary to prevent issues between worker and
+IRQ"*. Calling `tud_hid_report()` from the main loop alongside the USB ISR is precisely that
+worker-vs-IRQ case, and both codebases do it.
+
+**Why it is easy to miss.** `panic()` is `noreturn` and spins with interrupts off, so the
+watchdog reset is its only exit — from outside it is indistinguishable from a main-loop
+stall. We chased it as a "hang" for several builds.
+
+We saw it once, on our last firmware that still deinitialised the stack, and not since
+adopting soft detach. That is *consistent with* the teardown being the trigger, but one
+non-recurrence is not proof, and the underlying race is untouched either way.
+
+## 3. `tud_deinit()` stale state → NULL-mutex hard fault — ❌ Not applicable to you
+
+Recorded only so nobody reintroduces the pattern.
+
+TinyUSB **0.20.0**'s `tud_deinit()` sets `_usbd_mutex = NULL` but does not clear
+`_usbd_dev`. Since `tud_mounted()` is `return _usbd_dev.cfg_num ? true : false`, and the HID
+class driver has no `deinit` to clear `_hidd_itf`, **`tud_hid_ready()` keeps returning true
+after deinit** — so the documented check-then-send contract dereferences a NULL mutex and
+hard faults.
+
+**You are not exposed:** commit `628436a` ("Defer controller USB transport transitions")
+removed `tusb_deinit` in favour of the attached-flag soft detach, so the window does not
+exist in your tree. Our fork kept the deinit from the shared ancestor and hit this. If a
+deinit is ever reintroduced (for persona switching or suspend), gate every device-stack call
+on `tud_inited()` as well as the class ready predicate — the class predicate alone is not
+sufficient on 0.20.0. TinyUSB fixed it in **0.21.0** (`tu_varclr(&_usbd_dev)` in
+`tud_deinit()`); we pin 0.20.0 explicitly, so it is worth checking what your build resolves
+to.
+
+## 4. Technique worth stealing: make a crash stop looking like a hang
+
+The single biggest time sink above was that **two separate layers disguise a crash as a
+stall**:
+
+- A watchdog reset looks like a hang regardless of what caused it.
+- The Pico SDK's default `isr_hardfault` is a **breakpoint**, which with no debugger attached
+  simply locks the core until the watchdog fires.
+
+Three cheap changes turned a mystery reboot into a named function and address, and they cost
+nothing until something goes wrong:
+
+1. **Override the fault vectors** (`isr_hardfault`/`isr_memmanage`/`isr_busfault`/
+   `isr_usagefault`, all weak in `crt0.S`). Naked handlers, capture the exception frame
+   (`frame[6]` is the faulting PC), read `CFSR`/`HFSR`/`BFAR`, stash it somewhere that
+   survives a reset.
+2. **`-Wl,--wrap=panic`** so a `panic()` records its caller instead of silently spinning.
+   Verification trick: if the wrap took, the SDK's real panic body is no longer referenced
+   and its `"*** PANIC ***"` string disappears from the linked image.
+3. **Publish the `.elf.map` as a CI artifact** so a reported PC can be resolved to a symbol.
+   Resolve against the map from the *same* build — layout shifts between builds, and
+   comparing a PC against a different build's map cost us one wrong conclusion.
+
+Watchdog scratch registers survive the reset and are a convenient place to put the record.
+Full inventory of what we built, with removal steps, is in
+[`docs/diagnostic-scaffolding.md`](diagnostic-scaffolding.md).
