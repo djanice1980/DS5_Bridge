@@ -1931,6 +1931,19 @@ bool bt_request_pairing() {
     return true;
 }
 
+static bool bt_has_stored_link_key() {
+    btstack_link_key_iterator_t iterator;
+    if (!gap_link_key_iterator_init(&iterator)) {
+        return false;
+    }
+    bd_addr_t addr;
+    link_key_t key;
+    link_key_type_t type;
+    const bool has_key = gap_link_key_iterator_get_next(&iterator, addr, key, &type);
+    gap_link_key_iterator_done(&iterator);
+    return has_key;
+}
+
 // Every address we currently hold a key for, so a forget-all also blocks each of them from
 // walking straight back in.
 static bool bt_blacklist_add_stored_link_keys() {
@@ -1980,6 +1993,9 @@ bool bt_forget_pairings() {
     // reflashing firmware does NOT wipe them, because they live in a flash region that
     // survives a reflash.
     gap_delete_all_link_keys();
+    // Nothing is paired any more, so the only useful next state is pairing. Matches
+    // upstream, and saves the user pressing Pair Controller immediately afterwards.
+    open_pairing_window();
     return true;
 }
 
@@ -2020,6 +2036,12 @@ bool bt_forget_pairing(const uint8_t address[6]) {
     gap_drop_link_key_for_bd_addr(addr);
     if (targets_current_session && acl_handle != HCI_CON_HANDLE_INVALID) {
         bt_disconnect();
+    }
+    // Only when that was the LAST pairing. Unlike forget-all, a targeted forget usually
+    // leaves other controllers bonded, and opening a pairing window then would start an
+    // inquiry nobody asked for while one of them is still in use.
+    if (!bt_has_stored_link_key()) {
+        open_pairing_window();
     }
     return true;
 }
