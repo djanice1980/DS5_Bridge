@@ -12,6 +12,7 @@ import {
   REPORT_ID,
   REPORT_LENGTH,
   WATCHDOG_PHASE_NAMES,
+  PAIRING_BREADCRUMB_PHASE_DISAGREEMENT_STAGE,
   isFaultPhase,
   CHORD_FUNCTION_EVENT_BASE,
   MAX_CHORD_ASSIGNMENTS,
@@ -312,6 +313,7 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     protocolVersion: null,
     uptimeSeconds: null,
     lastWatchdogHang: null,
+    pairingBreadcrumbs: null,
     settingsRevision: null,
     lastAck: null,
     lastError: null,
@@ -3518,6 +3520,7 @@ export class BridgeService extends EventEmitter {
           uptimeSeconds: status.uptimeSeconds,
           settingsRevision: status.settingsRevision,
           lastWatchdogHang: this.snapshot.diagnostics.lastWatchdogHang,
+          pairingBreadcrumbs: this.snapshot.diagnostics.pairingBreadcrumbs,
           lastAck: this.snapshot.diagnostics.lastAck,
           lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to ${MIN_SUPPORTED_FIRMWARE_VERSION} or newer.`,
           firmwareUpdateAvailable: null,
@@ -3590,6 +3593,7 @@ export class BridgeService extends EventEmitter {
         uptimeSeconds: status.uptimeSeconds,
         settingsRevision: status.settingsRevision,
         lastWatchdogHang: this.snapshot.diagnostics.lastWatchdogHang,
+        pairingBreadcrumbs: this.snapshot.diagnostics.pairingBreadcrumbs,
         lastAck: this.snapshot.diagnostics.lastAck,
         lastError: null,
         firmwareUpdateAvailable: firmwareUpdateAvailable(status.firmwareVersion),
@@ -4057,6 +4061,15 @@ export class BridgeService extends EventEmitter {
       // Always report something on firmware that supports it. Showing nothing after a hang is
       // indistinguishable from the telemetry being broken -- which is exactly what happened the
       // first time this shipped.
+      // Pairing breadcrumbs. Stage 12 is a connection-phase disagreement, which is the
+      // evidence the phase-machine migration is gated on -- flagged so it cannot be missed
+      // in a row of otherwise unremarkable stage/status pairs.
+      this.snapshot.diagnostics.pairingBreadcrumbs = identity.pairingEvents.length === 0
+        ? null
+        : identity.pairingEvents.map((event) => `${event.stage}/${event.status}`).join(' ')
+          + (identity.pairingEvents.some(
+            (event) => event.stage === PAIRING_BREADCRUMB_PHASE_DISAGREEMENT_STAGE
+          ) ? '  <- PHASE DISAGREEMENT (stage 12)' : '');
       const wdt = identity.watchdog;
       this.snapshot.diagnostics.lastWatchdogHang = wdt === null
         ? null

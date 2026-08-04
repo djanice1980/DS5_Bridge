@@ -1170,6 +1170,22 @@ export function isFaultPhase(phase: number): boolean {
   return phase >= 23 && phase <= 27;
 }
 
+/**
+ * A firmware pairing breadcrumb. The firmware has always emitted these -- payload [22] is the
+ * count and [23..42] are up to ten {stage, status} pairs -- but nothing parsed them, so the
+ * phase-machine migration sat blocked on evidence that could not be read.
+ *
+ * Stage 12 is the one that matters for that: a connection-phase disagreement between the
+ * tracked phase and the phase derived from the shadow booleans.
+ */
+export interface PairingBreadcrumb {
+  stage: number;
+  status: number;
+}
+
+export const PAIRING_BREADCRUMB_MAX = 10;
+export const PAIRING_BREADCRUMB_PHASE_DISAGREEMENT_STAGE = 12;
+
 export interface DeviceIdentityPayload {
   uniqueId: string | null;
   // BT address of the currently connected controller (firmware 1.6.20+),
@@ -1177,6 +1193,8 @@ export interface DeviceIdentityPayload {
   controllerMac: string | null;
   /** Firmware 1.6.26+: watchdog telemetry retained from the previous boot. */
   watchdog: WatchdogTelemetryPayload | null;
+  /** Firmware pairing breadcrumbs, oldest first. Empty when the ring is empty. */
+  pairingEvents: PairingBreadcrumb[];
 }
 
 // Firmware 1.6.19+: stable physical identity (RP2350 unique board ID);
@@ -1224,5 +1242,15 @@ export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIden
       flashOpCount: (report[59] ?? 0) | ((report[60] ?? 0) << 8)
     };
   }
-  return { uniqueId, controllerMac, watchdog };
+  // Payload [22] count, [23..42] pairs -- i.e. report[23] and report[24..43] once the
+  // report-ID byte is accounted for.
+  const pairingEvents: PairingBreadcrumb[] = [];
+  const pairingCount = Math.min(report[23] ?? 0, PAIRING_BREADCRUMB_MAX);
+  for (let index = 0; index < pairingCount; index += 1) {
+    pairingEvents.push({
+      stage: report[24 + index * 2] ?? 0,
+      status: report[25 + index * 2] ?? 0
+    });
+  }
+  return { uniqueId, controllerMac, watchdog, pairingEvents };
 }

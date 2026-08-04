@@ -9174,6 +9174,12 @@ export function App() {
                             <dd>{snapshot.diagnostics.lastWatchdogHang}</dd>
                           </div>
                         ) : null}
+                        {snapshot.diagnostics.pairingBreadcrumbs ? (
+                          <div>
+                            <dt>Pairing</dt>
+                            <dd>{snapshot.diagnostics.pairingBreadcrumbs}</dd>
+                          </div>
+                        ) : null}
                         <div><dt>Last ACK</dt><dd>{ackText}</dd></div>
                         <div><dt>HID Path</dt><dd>{snapshot.diagnostics.hidPath ?? '--'}</dd></div>
                         <div>
