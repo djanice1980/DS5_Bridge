@@ -45,8 +45,16 @@ static bool usb_controller_transport_attached = false;
 // host registers the detach first; attaching again in the same breath can look like a glitch
 // rather than a new device.
 #define USB_IDLE_ATTACH_DELAY_US 400000u
+// How long the pull-up stays down when swapping between the two product ids. Only needs to
+// be long enough for the host to see a disconnect, not the 400ms originally slept through.
+#define USB_MODE_SWITCH_DETACH_US 120000u
 static bool usb_idle_attach_pending = false;
 static uint32_t usb_idle_attach_at_us = 0;
+// Going the other way -- companion-only back to the full device -- needs the same gap so the
+// host registers the detach before a different product id attaches. Scheduled rather than
+// slept through: blocking the main loop for it showed up in the worst-phase tracker.
+static bool usb_full_attach_pending = false;
+static uint32_t usb_full_attach_at_us = 0;
 #endif
 static bool usb_controller_transport_transition_pending = false;
 static volatile bool usb_mounted = false;
@@ -189,16 +197,18 @@ static void usb_connect_controller_transport(uint32_t now) {
     }
 #ifdef ENABLE_COMPANION
     // A controller arrived, so the full device replaces the companion-only one. That is a
-    // different product id and interface layout, so the host must see a detach first.
+    // different product id and interface layout, so the host must see a detach first --
+    // detach now, attach on a later poll. Returning here leaves attached=false, so the
+    // scheduled attach below is the one that completes the transition.
     usb_idle_attach_pending = false;
     if (host_bridge_companion_only()) {
         host_bridge_set_companion_only(false);
         if (tud_inited()) {
             tud_disconnect();
-            // Long enough for the host to register the detach, short enough not to be a
-            // visible main-loop stall. The 400ms first used here showed up in the
-            // worst-phase tracker as "slowest usb-power 400ms".
-            sleep_ms(120);
+            usb_mounted = false;
+            usb_full_attach_pending = true;
+            usb_full_attach_at_us = time_us_32() + USB_MODE_SWITCH_DETACH_US;
+            return;
         }
     }
 #endif
@@ -414,9 +424,10 @@ void usb_pm_poll() {
     // waiting to be resumed would wait forever.
     const bool idle_transition_needed =
 #ifdef ENABLE_COMPANION
-        usb_controller_transport_transition_pending
-        && usb_controller_transport_ready
-        && host_bridge_companion_only();
+        usb_full_attach_pending
+        || (usb_controller_transport_transition_pending
+            && usb_controller_transport_ready
+            && host_bridge_companion_only());
 #else
         false;
 #endif
@@ -460,6 +471,17 @@ void usb_pm_poll() {
     }
 
 #ifdef ENABLE_COMPANION
+    // Second half of the companion-only -> full device switch: the detach has now been
+    // visible for long enough, so bring the full device up.
+    if (usb_full_attach_pending && time_reached(now, usb_full_attach_at_us)) {
+        usb_full_attach_pending = false;
+        if (usb_controller_transport_ready && !usb_controller_transport_attached) {
+            usb_device_stack_init_disconnected();
+            tud_connect();
+            usb_controller_transport_attached = true;
+        }
+    }
+
     if (usb_idle_attach_pending && time_reached(now, usb_idle_attach_at_us)) {
         usb_idle_attach_pending = false;
         // Only if nothing has arrived meanwhile: a controller connecting during the delay
