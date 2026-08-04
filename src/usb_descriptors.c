@@ -903,13 +903,10 @@ uint8_t const desc_ms_os_20[] = {
 TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == VENDOR_MS_OS_20_DESC_LEN, "Incorrect MS OS 2.0 descriptor size");
 
 // Byte offset of bFirstInterface inside the function subset header: 10 bytes of set header
-// plus 8 of configuration subset header. Asserted below against the real array so a change
-// to either header cannot silently point this at the wrong byte.
+// plus 8 of configuration subset header. Verified against the real array at runtime -- C
+// cannot index a non-constexpr array in a static assertion, so this cannot be a build-time
+// check.
 #define MS_OS_20_FUNCTION_INTERFACE_OFFSET 0x12
-TU_VERIFY_STATIC(
-    desc_ms_os_20[MS_OS_20_FUNCTION_INTERFACE_OFFSET] == VENDOR_BRIDGE_INTERFACE_NUMBER,
-    "MS OS 2.0 function-subset interface byte moved"
-);
 
 static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_idle[VENDOR_MS_OS_20_DESC_LEN];
 static bool desc_ms_os_20_idle_ready = false;
@@ -917,7 +914,15 @@ static bool desc_ms_os_20_idle_ready = false;
 static uint8_t const *build_idle_ms_os_20_descriptor(void) {
     if (!desc_ms_os_20_idle_ready) {
         memcpy(desc_ms_os_20_idle, desc_ms_os_20, sizeof(desc_ms_os_20));
-        desc_ms_os_20_idle[MS_OS_20_FUNCTION_INTERFACE_OFFSET] = HOST_BRIDGE_IDLE_INTERFACE_NUMBER;
+        // If either MS OS 2.0 header ever changes size this offset stops naming the
+        // interface byte. Patching regardless would corrupt the descriptor; leaving it
+        // unpatched instead means WinUSB simply does not bind, which is a visible failure
+        // rather than a subtly malformed one.
+        if (desc_ms_os_20_idle[MS_OS_20_FUNCTION_INTERFACE_OFFSET] == VENDOR_BRIDGE_INTERFACE_NUMBER) {
+            desc_ms_os_20_idle[MS_OS_20_FUNCTION_INTERFACE_OFFSET] = HOST_BRIDGE_IDLE_INTERFACE_NUMBER;
+        } else {
+            DS5_LOG("[USB] MS OS 2.0 interface byte moved; idle WinUSB binding not patched\n");
+        }
         desc_ms_os_20_idle_ready = true;
     }
     return desc_ms_os_20_idle;
