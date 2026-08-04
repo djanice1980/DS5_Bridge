@@ -456,7 +456,13 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         pm_poll.find("USB_SUSPEND_POWEROFF_DEBOUNCE_US") == std::string::npos
         || pm_poll.find("bt_power_off_controller();") == std::string::npos
         || pm_poll.find("usb_note_reconnect_disconnect(now);") == std::string::npos
-        || pm_poll.find("if (usb_bus_suspended())") == std::string::npos
+        // The suspend guard still exists, but now has exactly one documented exception:
+        // a controller arriving while the companion-only device is presented. That
+        // transition is a detach/attach under a different product id -- which the host acts
+        // on regardless of suspend -- and it is the only exit, because the companion-only
+        // configuration deliberately does not declare remote wakeup. Without the exception
+        // the bridge stayed idle-shaped forever with the controller connected over BT.
+        || pm_poll.find("usb_bus_suspended() && !idle_transition_needed") == std::string::npos
     ) {
         throw std::runtime_error("USB PM poll must commit debounced power-off and defer reconnect work while suspended");
     }
