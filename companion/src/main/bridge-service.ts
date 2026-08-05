@@ -1272,6 +1272,9 @@ export class BridgeService extends EventEmitter {
   private sessionKey: string | null = null;
   private sessionPath: string | null = null;
   private reappliedSessionKey: string | null = null;
+  // An apply was skipped because no controller was attached, so the next controller to
+  // connect has to receive it.
+  private settingsApplyDeferred = false;
   private controllerConnectedSince = 0;
   private reapplyAttempt = 0;
   private nextReapplyAt = 0;
@@ -3064,12 +3067,8 @@ export class BridgeService extends EventEmitter {
       // A manual pick satisfies this identity; no auto-apply needed after.
       this.bindingAppliedForMac = this.connectedControllerMac;
     }
-    // Only push with a controller attached. applyCurrentSettings sends controller-only
-    // commands -- SET_LIGHTBAR_COLOR among them -- and the firmware refuses those with
-    // ERR_NOT_CONNECTED *without storing them*, so picking a profile with the controller off
-    // surfaced "Controller not connected" and dropped the setting. The connect path re-pushes
-    // everything to a newly attached controller, so nothing is lost by waiting.
-    if (this.snapshot.state === 'connected' && this.connectedControllerMac) {
+    // applyCurrentSettings waits for a controller itself -- see the note there.
+    if (this.snapshot.state === 'connected') {
       await this.applyCurrentSettings(this.snapshot.settings, false);
     }
     await this.updateTouchpadInhibitEngine();
@@ -3684,11 +3683,14 @@ export class BridgeService extends EventEmitter {
     if (controllerJustConnected) {
       // A fresh connect gets a fresh budget of identity retries -- see below.
       this.identityRetriesRemaining = CONTROLLER_IDENTITY_RETRIES;
-      // Re-push settings to THIS controller. The reapply latch is per bridge session, so
-      // without clearing it a controller attached later in the session would never receive
-      // the controller-only settings (lightbar) that the firmware refuses to store while no
-      // controller is present.
-      this.reappliedSessionKey = null;
+      // Only when an apply was actually skipped for want of a controller. The reapply latch
+      // is per bridge SESSION, so a controller attached later would otherwise never receive
+      // those settings. Clearing it unconditionally would re-push everything on every
+      // controller connect -- a bigger change than the problem warrants.
+      if (this.settingsApplyDeferred) {
+        this.settingsApplyDeferred = false;
+        this.reappliedSessionKey = null;
+      }
       void this.applyControllerProfileBinding();
     } else if (
       status.controllerConnected
@@ -3915,6 +3917,20 @@ export class BridgeService extends EventEmitter {
   }
 
   private async applyCurrentSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    // Guarded HERE rather than at each call site. This sends controller-only commands, the
+    // firmware refuses those with ERR_NOT_CONNECTED *without storing them*, and there are four
+    // callers -- selecting a profile, deleting one, applying a preset, and the reapply loop.
+    // Guarding them one at a time is how "Controller not connected" kept reappearing from a
+    // different button each time.
+    //
+    // Keyed on the firmware's controllerConnected, NOT on connectedControllerMac: the address
+    // read can legitimately come back empty while a controller is attached (hence
+    // identityRetriesRemaining), and refusing to apply settings to a controller we simply
+    // have not identified yet would be wrong.
+    if (this.snapshot.status?.controllerConnected !== true) {
+      this.settingsApplyDeferred = true;
+      return;
+    }
     await this.applyLightbarSettings(settings, expectSettingsRevisionChange);
     await this.sendCommand(COMMAND_ID.SET_MUTE_BUTTON_ACTION, muteButtonModeValue(settings.muteButtonMode), {
       expectSettingsRevisionChange,
@@ -4015,6 +4031,13 @@ export class BridgeService extends EventEmitter {
   }
 
   private async applyLightbarSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    // SET_LIGHTBAR_COLOR is one of the commands the firmware refuses without a controller, and
+    // this has callers that do not go through applyCurrentSettings (setLightbarEnabled, the
+    // colour picker, the power-saving recalculation).
+    if (this.snapshot.status?.controllerConnected !== true) {
+      this.settingsApplyDeferred = true;
+      return;
+    }
     const color = settings.lightbarEnabled ? parseHexColor(settings.lightbarColor) : { red: 0, green: 0, blue: 0 };
     await this.sendCommand(
       COMMAND_ID.SET_LIGHTBAR_COLOR,

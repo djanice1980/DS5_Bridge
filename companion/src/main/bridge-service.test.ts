@@ -1376,9 +1376,11 @@ describe('BridgeService', () => {
       [COMMAND_ID.SET_HAPTICS_GAIN, 60],
       [COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, 60],
       [COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, 60],
-      [COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS, 0],
-      [COMMAND_ID.SET_LIGHTBAR_COLOR, 60],
-      [COMMAND_ID.SET_LIGHTBAR_OVERRIDE, 0]
+      [COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS, 0]
+      // No lightbar commands: this fixture has no controller attached, and the firmware
+      // refuses SET_LIGHTBAR_COLOR without one (it returns ERR_NOT_CONNECTED and does not
+      // store it), so the app now waits rather than erroring. The capping under test is
+      // unaffected.
     ]);
     expect(service.getSnapshot().settings).toMatchObject({
       hapticsGainPercent: 100,
@@ -1394,9 +1396,7 @@ describe('BridgeService', () => {
       [COMMAND_ID.SET_HAPTICS_GAIN, 100],
       [COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, 120],
       [COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, 80],
-      [COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS, 0],
-      [COMMAND_ID.SET_LIGHTBAR_COLOR, 90],
-      [COMMAND_ID.SET_LIGHTBAR_OVERRIDE, 0]
+      [COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS, 0]
     ]);
   });
 
@@ -2751,6 +2751,33 @@ describe('BridgeService', () => {
 
     await service.deleteControllerProfile('profile-a');
     expect(service.getSnapshot().settings.controllerBindings[mac]).toBeUndefined();
+  });
+
+  it('deletes an assigned profile with no controller attached', async () => {
+    // Deleting applies the fallback profile, which is another route into the controller-only
+    // commands -- it raised "Controller not connected" even after the profile-select path was
+    // guarded. That is why the guard now lives inside applyCurrentSettings instead.
+    const service = serviceFixture({
+      controllerProfiles: [
+        { id: DEFAULT_CONTROLLER_PROFILE_ID, name: 'Default', settings: {} },
+        { id: 'profile-a', name: 'Racing', settings: {} }
+      ]
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    await poll(service);
+    await service.setControllerBinding('aabbccddeeff', 'profile-a');
+    // The real firmware NACKs controller-only commands with ERR_NOT_CONNECTED; the mock ACKs
+    // everything OK by default, so without this the test cannot see the failure at all.
+    device.ackResults = [ACK_RESULT.ERR_NOT_CONNECTED];
+
+    await expect(service.deleteControllerProfile('profile-a')).resolves.toBeDefined();
+
+    const settings = service.getSnapshot().settings;
+    expect(settings.controllerProfiles.some((p) => p.id === 'profile-a')).toBe(false);
+    expect(settings.controllerBindings['aabbccddeeff']).toBeUndefined();
   });
 
   it('does not push controller settings while no controller is attached', async () => {
