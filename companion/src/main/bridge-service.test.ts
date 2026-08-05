@@ -2603,6 +2603,38 @@ describe('BridgeService', () => {
     expect(restartedService.getSnapshot().settings.selectedPresetId).toBe('balanced');
   });
 
+  it('binds a controller that is not attached, and clears the binding again', async () => {
+    // The reason this exists: selectControllerProfile infers the address from the live
+    // connection, so a binding could only ever be created for the controller in your hand,
+    // never changed remotely, and never removed.
+    const service = serviceFixture({
+      controllerProfiles: [
+        { id: 'profile-a', name: 'Racing', settings: {} },
+        { id: 'profile-b', name: 'Shooter', settings: {} }
+      ]
+    });
+    const absent = 'aabbccddeeff';
+
+    let snapshot = await service.setControllerBinding(absent, 'profile-b');
+    expect(snapshot.settings.controllerBindings[absent]).toBe('profile-b');
+
+    snapshot = await service.setControllerBinding(absent, null);
+    expect(snapshot.settings.controllerBindings[absent]).toBeUndefined();
+  });
+
+  it('accepts a formatted address and refuses an unknown profile', async () => {
+    const service = serviceFixture({
+      controllerProfiles: [{ id: 'profile-a', name: 'Racing', settings: {} }]
+    });
+
+    const snapshot = await service.setControllerBinding('AA:BB:CC:DD:EE:FF', 'profile-a');
+    expect(snapshot.settings.controllerBindings['aabbccddeeff']).toBe('profile-a');
+
+    // A binding pointing at a profile that does not exist would silently never apply.
+    await expect(service.setControllerBinding('aabbccddeeff', 'profile-missing')).rejects.toThrow();
+    await expect(service.setControllerBinding('nonsense', 'profile-a')).rejects.toThrow();
+  });
+
   it('adds the protected default controller profile without changing the selected profile', () => {
     const fixture = createService();
     tempDirs.push(fixture.tempDir);

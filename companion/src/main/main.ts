@@ -1067,6 +1067,7 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:selectControllerProfile', (_event, profileId: string) => (
     service.selectControllerProfile(profileId)
   ));
+  ipcMain.handle('bridge:setControllerBinding', (_event, mac: string, profileId: string | null) => service.setControllerBinding(mac, profileId));
   ipcMain.handle('bridge:saveControllerProfile', (_event, name?: string) => service.saveControllerProfile(name));
   ipcMain.handle('bridge:updateControllerProfile', (_event, profileId: string) => (
     service.updateControllerProfile(profileId)

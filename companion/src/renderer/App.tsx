@@ -4699,6 +4699,39 @@ export function App() {
     void runAction('forget-controllers', () => window.bridge.forgetControllerPairings());
   }
 
+  // Bind a controller to a profile by ADDRESS. Deliberately not gated on `connected`: the
+  // whole point is to set a binding for a controller that is not here, which was previously
+  // impossible -- the only way to bind was to attach the controller and pick a profile, so a
+  // binding could never be created in advance, changed remotely, or removed at all.
+  function setControllerBinding(mac: string, profileId: string | null) {
+    if (!snapshot) return;
+    void runAction(`bind-${mac}`, () => window.bridge.setControllerBinding(mac, profileId));
+  }
+
+  // '' is the sentinel for "no profile" because CustomSelect carries string values; the
+  // service takes null to mean clear.
+  const controllerBindingOptions: Array<[string, string]> = [
+    ['No profile', ''],
+    ...(snapshot?.settings.controllerProfiles.map((profile): [string, string] => [
+      profileDisplayName(profile.name, profile.id),
+      profile.id
+    ]) ?? [])
+  ];
+
+  function renderControllerBinding(mac: string, label: string) {
+    return (
+      <CustomSelect
+        className="controller-binding-select"
+        value={snapshot?.settings.controllerBindings[mac] ?? ''}
+        options={controllerBindingOptions}
+        disabled={pendingAction !== null}
+        ariaLabel={`Profile for ${label}`}
+        floatingMenu
+        onChange={(profileId) => setControllerBinding(mac, profileId === '' ? null : profileId)}
+      />
+    );
+  }
+
   function forgetControllerPairing(mac: string, label: string) {
     if (!snapshot) return;
     const confirmed = window.confirm(
@@ -9410,24 +9443,10 @@ export function App() {
                     </div>
                     <div className="settings-menu-row">
                       <div className="settings-menu-copy"><strong>Profile</strong></div>
-                      <span
-                        className="inline-state-badge wide"
-                        // Profile names are user-supplied and can outrun the badge, so the
-                        // full value stays reachable on hover once it truncates.
-                        title={profileDisplayName(
-                          snapshot.settings.controllerProfiles.find((profile) => (
-                            profile.id === snapshot.settings.controllerBindings[devicesCurrentEntry.mac]
-                          ))?.name,
-                          snapshot.settings.controllerBindings[devicesCurrentEntry.mac] ?? 'none'
-                        )}
-                      >
-                        {profileDisplayName(
-                          snapshot.settings.controllerProfiles.find((profile) => (
-                            profile.id === snapshot.settings.controllerBindings[devicesCurrentEntry.mac]
-                          ))?.name,
-                          snapshot.settings.controllerBindings[devicesCurrentEntry.mac] ?? 'none'
-                        )}
-                      </span>
+                      {renderControllerBinding(
+                        devicesCurrentEntry.mac,
+                        controllerTypeLabel(devicesCurrentEntry.controllerType)
+                      )}
                     </div>
                   </div>
                 ) : (
@@ -9463,6 +9482,10 @@ export function App() {
                         <span className="inline-state-badge">
                           {entry.lastBatteryPercent === null ? '--' : `${entry.lastBatteryPercent}%`}
                         </span>
+                        {renderControllerBinding(
+                          entry.mac,
+                          controllerTypeLabel(entry.controllerType)
+                        )}
                         <button
                           type="button"
                           className="heading-icon-action"

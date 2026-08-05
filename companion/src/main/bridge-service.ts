@@ -4277,6 +4277,44 @@ export class BridgeService extends EventEmitter {
     await this.selectControllerProfile(boundProfileId, { recordBinding: false });
   }
 
+  // Bind ANY controller to a profile by address, attached or not.
+  //
+  // selectControllerProfile can only ever bind the controller currently in your hand, because
+  // it infers the address from the live connection. That made a binding impossible to set for
+  // a controller that is not present, impossible to change without physically connecting the
+  // controller, and impossible to remove at all. Passing null clears the binding.
+  async setControllerBinding(mac: string, profileId: string | null): Promise<BridgeSnapshot> {
+    const normalized = mac.trim().toLowerCase().replace(/[^0-9a-f]/g, '');
+    if (normalized.length !== 12) {
+      throw new Error(`Not a controller address: ${mac}`);
+    }
+    if (profileId !== null
+        && !this.settingsStore.get().controllerProfiles.some((p) => p.id === profileId)) {
+      throw new Error(`No such controller profile: ${profileId}`);
+    }
+
+    const bindings = { ...this.settingsStore.get().controllerBindings };
+    if (profileId === null) {
+      delete bindings[normalized];
+    } else {
+      bindings[normalized] = profileId;
+    }
+    this.snapshot.settings = this.settingsStore.update({ controllerBindings: bindings });
+
+    // Binding the ATTACHED controller should take effect now rather than on its next
+    // connect -- otherwise the row claims a profile the controller is not actually running.
+    if (profileId !== null && this.connectedControllerMac === normalized) {
+      return await this.selectControllerProfile(profileId, { recordBinding: false });
+    }
+    // Clearing the attached controller's binding must also release the once-per-identity
+    // latch, or re-binding it in this same session would silently not re-apply.
+    if (profileId === null && this.connectedControllerMac === normalized) {
+      this.bindingAppliedForMac = null;
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   // Devices tab: remember every controller this companion has seen, newest first.
   // Kept companion-side because the bridge only knows the controller currently attached
   // to it, and this should survive a reflash and follow the user across bridges.
