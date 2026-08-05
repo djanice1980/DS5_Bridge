@@ -4751,6 +4751,14 @@ export function App() {
 
   // Two pickers, because button remapping is a separate profile system: a controller profile
   // does not capture which remap profile is selected, so one binding cannot cover both.
+  // Belt to the store's braces: assignments are pruned when a profile is deleted, but an
+  // assignment naming a profile that is not in the list must never render as that name --
+  // CustomSelect would show a value with no matching option, as "custom" did after its
+  // profile was deleted.
+  function resolveBinding(bound: string | undefined, known: Array<[string, string]>, fallback: string) {
+    return bound && known.some(([, id]) => id === bound) ? bound : fallback;
+  }
+
   function renderControllerBinding(mac: string, label: string) {
     return (
       <>
@@ -4759,7 +4767,11 @@ export function App() {
           // Unbound resolves to Default, and the service applies Default on connect for an
           // unbound controller, so the row cannot claim a profile the controller is not
           // actually running.
-          value={snapshot?.settings.controllerBindings[mac] ?? DEFAULT_CONTROLLER_PROFILE_ID}
+          value={resolveBinding(
+            snapshot?.settings.controllerBindings[mac],
+            controllerBindingOptions,
+            DEFAULT_CONTROLLER_PROFILE_ID
+          )}
           options={controllerBindingOptions}
           disabled={pendingAction !== null}
           ariaLabel={`Controller profile for ${label}`}
@@ -4768,9 +4780,11 @@ export function App() {
         />
         <CustomSelect
           className="controller-binding-select"
-          value={
-            snapshot?.settings.buttonRemappingBindings[mac] ?? DEFAULT_BUTTON_REMAP_PROFILE_ID
-          }
+          value={resolveBinding(
+            snapshot?.settings.buttonRemappingBindings[mac],
+            remapBindingOptions,
+            DEFAULT_BUTTON_REMAP_PROFILE_ID
+          )}
           options={remapBindingOptions}
           disabled={pendingAction !== null}
           ariaLabel={`Button remapping profile for ${label}`}

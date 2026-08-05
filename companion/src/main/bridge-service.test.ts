@@ -10,6 +10,7 @@ import {
   COMMAND_ID,
   COMPANION_USAGE,
   COMPANION_USAGE_PAGE,
+  DEFAULT_BUTTON_REMAP_PROFILE_ID,
   DEFAULT_CONTROLLER_PROFILE_ID,
   MAGIC,
   PROTOCOL_MAJOR,
@@ -2724,6 +2725,57 @@ describe('BridgeService', () => {
     const settings = service.getSnapshot().settings;
     expect(settings.selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
     expect(settings.controllerBindings['aa1122334455']).toBeUndefined();
+  });
+
+  it('drops controller assignments when their profile is deleted', async () => {
+    // A deleted profile left its assignment behind, so the Devices row kept naming a profile
+    // that no longer existed ("custom" after the remap profile was deleted).
+    const service = serviceFixture({
+      buttonRemappingProfiles: [
+        { id: DEFAULT_BUTTON_REMAP_PROFILE_ID, name: 'Default', mappings: {} },
+        { id: 'remap-a', name: 'custom', mappings: {} }
+      ],
+      controllerProfiles: [
+        { id: DEFAULT_CONTROLLER_PROFILE_ID, name: 'Default', settings: {} },
+        { id: 'profile-a', name: 'Racing', settings: {} }
+      ]
+    });
+    const mac = 'aabbccddeeff';
+    await service.setButtonRemappingBinding(mac, 'remap-a');
+    await service.setControllerBinding(mac, 'profile-a');
+
+    await service.deleteButtonRemappingProfile('remap-a');
+    expect(service.getSnapshot().settings.buttonRemappingBindings[mac]).toBeUndefined();
+    // Deleting one kind of profile must not disturb the other assignment.
+    expect(service.getSnapshot().settings.controllerBindings[mac]).toBe('profile-a');
+
+    await service.deleteControllerProfile('profile-a');
+    expect(service.getSnapshot().settings.controllerBindings[mac]).toBeUndefined();
+  });
+
+  it('does not push controller settings while no controller is attached', async () => {
+    // applyCurrentSettings sends controller-only commands; the firmware refuses those with
+    // ERR_NOT_CONNECTED and does not store them, which surfaced as an error to the user.
+    const service = serviceFixture({
+      controllerProfiles: [
+        { id: DEFAULT_CONTROLLER_PROFILE_ID, name: 'Default', settings: {} },
+        { id: 'profile-a', name: 'Racing', settings: {} }
+      ]
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    await poll(service);
+    device.sentReports.length = 0;
+
+    await service.selectControllerProfile('profile-a');
+
+    expect(service.getSnapshot().settings.selectedControllerProfileId).toBe('profile-a');
+    const lightbarCommands = device.sentReports.filter(
+      (report) => report[7] === COMMAND_ID.SET_LIGHTBAR_COLOR
+    );
+    expect(lightbarCommands).toHaveLength(0);
   });
 
   it('binds a button remapping profile independently of the controller profile', async () => {

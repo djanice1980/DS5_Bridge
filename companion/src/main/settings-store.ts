@@ -1184,6 +1184,13 @@ export class SettingsStore {
     return this.update({
       selectedControllerProfileId: fallback.id,
       controllerProfiles: profiles,
+      // Same reasoning as the remap profiles: an assignment outliving its profile leaves the
+      // Devices row naming something that no longer exists.
+      controllerBindings: dropBindingsTo(this.settings.controllerBindings, profileId),
+      pendingControllerProfileAssignment:
+        this.settings.pendingControllerProfileAssignment === profileId
+          ? null
+          : this.settings.pendingControllerProfileAssignment,
       ...fallback.settings
     });
   }
@@ -1274,7 +1281,14 @@ export class SettingsStore {
     return this.update({
       selectedButtonRemappingProfileId: fallback.id,
       buttonRemappingProfiles: profiles,
-      buttonRemappingDraft: fallback.mappings
+      buttonRemappingDraft: fallback.mappings,
+      // Controllers assigned to the deleted profile fall back to Default. Leaving the
+      // assignment behind left the Devices row naming a profile that no longer exists.
+      buttonRemappingBindings: dropBindingsTo(this.settings.buttonRemappingBindings, profileId),
+      pendingButtonRemappingAssignment:
+        this.settings.pendingButtonRemappingAssignment === profileId
+          ? null
+          : this.settings.pendingButtonRemappingAssignment
     });
   }
 
@@ -1408,6 +1422,17 @@ function normalizeControllerHistory(value: unknown): ControllerHistoryEntry[] {
     }
   }
   return result;
+}
+
+// Drop every controller assigned to a profile that is going away, so no assignment can name a
+// profile that no longer exists. Unassigned means Default, which is the desired fallback.
+function dropBindingsTo(
+  bindings: Record<string, string>,
+  profileId: string
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(bindings).filter(([, boundId]) => boundId !== profileId)
+  );
 }
 
 function normalizeOptionalProfileId(value: unknown): string | null {

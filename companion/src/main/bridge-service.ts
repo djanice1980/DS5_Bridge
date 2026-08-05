@@ -3064,7 +3064,12 @@ export class BridgeService extends EventEmitter {
       // A manual pick satisfies this identity; no auto-apply needed after.
       this.bindingAppliedForMac = this.connectedControllerMac;
     }
-    if (this.snapshot.state === 'connected') {
+    // Only push with a controller attached. applyCurrentSettings sends controller-only
+    // commands -- SET_LIGHTBAR_COLOR among them -- and the firmware refuses those with
+    // ERR_NOT_CONNECTED *without storing them*, so picking a profile with the controller off
+    // surfaced "Controller not connected" and dropped the setting. The connect path re-pushes
+    // everything to a newly attached controller, so nothing is lost by waiting.
+    if (this.snapshot.state === 'connected' && this.connectedControllerMac) {
       await this.applyCurrentSettings(this.snapshot.settings, false);
     }
     await this.updateTouchpadInhibitEngine();
@@ -3679,6 +3684,11 @@ export class BridgeService extends EventEmitter {
     if (controllerJustConnected) {
       // A fresh connect gets a fresh budget of identity retries -- see below.
       this.identityRetriesRemaining = CONTROLLER_IDENTITY_RETRIES;
+      // Re-push settings to THIS controller. The reapply latch is per bridge session, so
+      // without clearing it a controller attached later in the session would never receive
+      // the controller-only settings (lightbar) that the firmware refuses to store while no
+      // controller is present.
+      this.reappliedSessionKey = null;
       void this.applyControllerProfileBinding();
     } else if (
       status.controllerConnected
