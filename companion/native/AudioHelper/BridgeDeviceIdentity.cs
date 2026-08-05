@@ -33,7 +33,7 @@ static class BridgeDeviceIdentity
         {
             foreach (var path in NativeMethods.EnumerateDeviceInterfacePaths(interfaceGuid))
             {
-                if (!path.Contains("mi_05", StringComparison.OrdinalIgnoreCase))
+                if (!WinUsbBridgeTransport.IsBridgeInterfacePath(path))
                 {
                     continue;
                 }
@@ -60,7 +60,7 @@ static class BridgeDeviceIdentity
         {
             foreach (var path in NativeMethods.EnumerateDeviceInterfacePaths(interfaceGuid))
             {
-                if (!path.Contains("mi_05", StringComparison.OrdinalIgnoreCase)
+                if (!WinUsbBridgeTransport.IsBridgeInterfacePath(path)
                     || !seenPaths.Add(path))
                 {
                     continue;

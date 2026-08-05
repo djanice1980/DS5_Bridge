@@ -7,6 +7,8 @@ sealed class WinUsbBridgeTransport : IDisposable
     private const byte ControlGetReport = 0x31;
     private const byte ControlSetReport = 0x32;
     private const ushort BridgeInterfaceNumber = 0x0005;
+    // Companion-only (PID 0x0CE7) presents the bridge as the sole interface, number 0.
+    private const ushort CompanionOnlyInterfaceNumber = 0x0000;
     private const string BridgeInterfaceMarker = "mi_05";
     private const int ReportBytes = 64;
     private const uint BridgeOutTransferTimeoutMs = 35;
@@ -140,7 +142,7 @@ sealed class WinUsbBridgeTransport : IDisposable
             RequestType = 0xC1,
             Request = ControlGetReport,
             Value = reportId,
-            Index = BridgeInterfaceNumber,
+            Index = BridgeInterfaceIndexFor(DevicePath),
             Length = ReportBytes
         };
         if (!NativeMethods.WinUsb_ControlTransfer(
@@ -205,7 +207,7 @@ sealed class WinUsbBridgeTransport : IDisposable
             RequestType = 0x41,
             Request = ControlSetReport,
             Value = report[0],
-            Index = BridgeInterfaceNumber,
+            Index = BridgeInterfaceIndexFor(DevicePath),
             Length = ReportBytes
         };
         if (!NativeMethods.WinUsb_ControlTransfer(
@@ -261,9 +263,33 @@ sealed class WinUsbBridgeTransport : IDisposable
         return false;
     }
 
-    private static bool IsBridgeInterfacePath(string path)
+    // The interface GUID already says "this is our bridge"; the mi_05 marker only
+    // disambiguates WHICH interface of a COMPOSITE device to use. The companion-only bridge
+    // (PID 0x0CE7, no controller attached) has a single interface, so Windows creates no
+    // usbccgp children and its path carries no mi_ segment at all -- e.g.
+    //   \\?\usb#vid_054c&pid_0ce7#7&dd2a026&0&3#{e4c8b2a9-...}
+    // Requiring mi_05 filtered that device out entirely, which is why the app could not see
+    // the bridge with no controller attached even though Windows had bound WinUSB to it.
+    public static bool IsBridgeInterfacePath(string path)
     {
-        return path.Contains(BridgeInterfaceMarker, StringComparison.OrdinalIgnoreCase);
+        if (path.Contains(BridgeInterfaceMarker, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        // Non-composite: no interface segment to choose between.
+        return !path.Contains("&mi_", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // wIndex for the vendor control requests. The bridge interface is number 5 on the
+    // composite device and renumbered to 0 when companion-only. The firmware accepts 5 in
+    // both shapes, but WinUSB is the one being asked to address an interface, so send the
+    // number the device is actually presenting rather than relying on a stale index passing
+    // through untouched.
+    private static ushort BridgeInterfaceIndexFor(string path)
+    {
+        return path.Contains(BridgeInterfaceMarker, StringComparison.OrdinalIgnoreCase)
+            ? BridgeInterfaceNumber
+            : CompanionOnlyInterfaceNumber;
     }
 }
 
