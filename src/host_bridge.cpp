@@ -12,10 +12,18 @@
 static uint8_t host_bridge_ep_out = 0;
 static CFG_TUD_MEM_ALIGN uint8_t host_bridge_rx_buffer[64];
 
+static uint32_t host_bridge_rx_report_count = 0;
+static uint32_t host_bridge_arm_fail_count = 0;
+
 static void host_bridge_process_report(uint8_t const *report, uint32_t len) {
     if (report == nullptr || len == 0) {
         return;
     }
+    // Counted HERE, not in the bulk callback, because the two inbound paths carry different
+    // traffic: audio arrives over bulk OUT, commands arrive over control SET_REPORT. Counting
+    // only bulk would have read ~zero for commands even when they were working perfectly --
+    // telemetry that answers a different question than the one being asked.
+    host_bridge_rx_report_count++;
 
     const uint8_t report_id = report[0];
     if (report_id == 0x07) {
@@ -32,9 +40,6 @@ static void host_bridge_process_report(uint8_t const *report, uint32_t len) {
 
     companion_set_report(report_id, HID_REPORT_TYPE_OUTPUT, payload, payload_len);
 }
-
-static uint32_t host_bridge_rx_report_count = 0;
-static uint32_t host_bridge_arm_fail_count = 0;
 
 static bool host_bridge_arm_out(uint8_t rhport) {
     if (host_bridge_ep_out == 0) {
@@ -189,7 +194,6 @@ static bool host_bridge_driver_xfer_cb(
     }
 
     if (result == XFER_RESULT_SUCCESS && xferred_bytes > 0) {
-        host_bridge_rx_report_count++;
         host_bridge_process_report(host_bridge_rx_buffer, xferred_bytes);
     }
     (void)host_bridge_arm_out(rhport);

@@ -37,10 +37,11 @@ bool host_bridge_companion_only(void);
 // (control transfers) keep working and the app still looks connected.
 void host_bridge_service(void);
 
-// rx_reports: bulk OUT reports actually received since boot. arm_failures: times the endpoint
-// could not be armed. Zero received while the app is sending is the signature of the failure
-// above; it is the difference between "the command was refused" and "the command never
-// arrived", which are indistinguishable from the app side.
+// rx_reports: reports received from the app since boot, over EITHER inbound path (audio over
+// bulk OUT, commands over control SET_REPORT). arm_failures: times the bulk endpoint could not
+// be armed. Zero received while the app is sending distinguishes "the command was refused"
+// from "the command never arrived" -- indistinguishable from the app side, and the difference
+// between a real refusal and a dropped one.
 void host_bridge_get_link_counters(uint32_t *rx_reports, uint32_t *arm_failures);
 
 #ifdef __cplusplus

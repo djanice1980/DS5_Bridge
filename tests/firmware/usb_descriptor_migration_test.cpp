@@ -782,6 +782,33 @@ void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root)
     }
 }
 
+// The bridge interface is number 5 composite and 0 companion-only, so every wIndex gate in
+// tud_vendor_control_xfer_cb must accept both. When the ACK-stage dispatch checked only 5
+// while the SETUP-stage gate accepted both, the payload was received and buffered and then
+// silently discarded -- the app read status perfectly and every command vanished. One shared
+// predicate, so the two cannot drift apart again.
+void assert_vendor_control_gates_share_one_interface_predicate(std::filesystem::path const &root) {
+    const auto source = remove_comments(read_text(root / "src" / "usb_descriptors.c"));
+    const std::string body = extract_between(
+        source,
+        "bool tud_vendor_control_xfer_cb(",
+        "\n}\n"
+    );
+    if (body.find("vendor_bridge_interface_matches(request->wIndex)") == std::string::npos) {
+        throw std::runtime_error(
+            "tud_vendor_control_xfer_cb must gate wIndex through vendor_bridge_interface_matches"
+        );
+    }
+    // A bare equality test against the composite interface number is the exact bug: it looks
+    // correct, and it drops every companion-only command on the floor.
+    if (body.find("request->wIndex == VENDOR_BRIDGE_INTERFACE_NUMBER") != std::string::npos) {
+        throw std::runtime_error(
+            "wIndex must not be compared directly to VENDOR_BRIDGE_INTERFACE_NUMBER; "
+            "companion-only renumbers the bridge interface to 0"
+        );
+    }
+}
+
 int main() {
     try {
         const auto source_root = std::filesystem::path(DS5_SOURCE_ROOT);
@@ -799,6 +826,7 @@ int main() {
         assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(source_root);
         assert_mic_pass_through_defaults_to_enabled(source_root);
         assert_hid_channel_close_notes_the_phase(source_root);
+        assert_vendor_control_gates_share_one_interface_predicate(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

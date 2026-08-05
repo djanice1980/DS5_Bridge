@@ -1023,6 +1023,18 @@ TU_VERIFY_STATIC(sizeof(desc_xusb_ms_os_compat_id) == 0x28, "Incorrect XUSB MS O
 static CFG_TUD_MEM_ALIGN uint8_t vendor_bridge_control_buffer[64];
 static uint16_t vendor_bridge_control_len = 0;
 
+// The bridge interface is number 5 on the composite device and renumbered to 0 when
+// companion-only, so EVERY gate on wIndex has to accept both. Missing one of them is not a
+// loud failure: the SETUP stage still accepts the payload and buffers it, and only the
+// dispatch is skipped, so the command is received and then silently discarded. From the app
+// that looks like a bridge which reads status perfectly and ignores every command.
+static bool vendor_bridge_interface_matches(uint16_t w_index) {
+    if (w_index == VENDOR_BRIDGE_INTERFACE_NUMBER) {
+        return true;
+    }
+    return host_bridge_companion_only() && w_index == HOST_BRIDGE_IDLE_INTERFACE_NUMBER;
+}
+
 bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
     if (request == NULL || request->bmRequestType_bit.type != TUSB_REQ_TYPE_VENDOR) {
         return false;
@@ -1031,7 +1043,7 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
     if (
         stage == CONTROL_STAGE_ACK
         && request->bRequest == VENDOR_BRIDGE_CONTROL_SET_REPORT
-        && request->wIndex == VENDOR_BRIDGE_INTERFACE_NUMBER
+        && vendor_bridge_interface_matches(request->wIndex)
         && request->bmRequestType_bit.direction == TUSB_DIR_OUT
     ) {
         host_bridge_set_report(vendor_bridge_control_buffer, vendor_bridge_control_len);
@@ -1081,11 +1093,9 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
     }
 
     // Companion-only enumeration renumbers the bridge interface to 0, so requests arrive
-    // addressed to that instead.
-    if (
-        request->wIndex != VENDOR_BRIDGE_INTERFACE_NUMBER
-        && !(host_bridge_companion_only() && request->wIndex == HOST_BRIDGE_IDLE_INTERFACE_NUMBER)
-    ) {
+    // addressed to that instead. Same predicate as the ACK-stage dispatch above, deliberately
+    // -- when these two disagreed, commands were accepted and then thrown away.
+    if (!vendor_bridge_interface_matches(request->wIndex)) {
         return false;
     }
 
