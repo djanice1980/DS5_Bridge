@@ -573,6 +573,29 @@ describe('companion protocol', () => {
     expect(debug.events.map((event) => event.sequence)).toEqual([7, 8, 9]);
   });
 
+  it('parses the mixed-report split counters', () => {
+    const report = baseReport(REPORT_ID.AUDIO_STATUS);
+    writeU32(report, 17, 1234);
+    writeU32(report, 21, 56789);
+
+    expect(parseAudioStatusReport(report)).toMatchObject({
+      mixed0x31SplitCount: 1234,
+      normal0x31RxCount: 56789
+    });
+  });
+
+  it('reports the split counters as null, not zero, on firmware that cannot send them', () => {
+    // The whole point of the measurement is "how often does splitting happen". Firmware that
+    // predates the counters must not be indistinguishable from firmware reporting zero.
+    const report = baseReport(REPORT_ID.AUDIO_STATUS);
+    report[6] = 16;
+
+    expect(parseAudioStatusReport(report)).toMatchObject({
+      mixed0x31SplitCount: null,
+      normal0x31RxCount: null
+    });
+  });
+
   it('parses Pico-local audio mic concealment counters', () => {
     const report = baseReport(REPORT_ID.AUDIO_STATUS);
     report[7] = 1;

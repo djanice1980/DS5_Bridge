@@ -1859,6 +1859,23 @@ function hexByte(value: number): string {
   return value.toString(16).padStart(2, '0').toUpperCase();
 }
 
+// How often the host packs audio and controller state into one report and we split them into
+// two Bluetooth packets. If this is rare, splitting costs almost nothing and the interleave
+// scheduler is cheap insurance; if it is the common case, we are routinely re-serialising
+// work the host had already combined. "unsupported" is deliberately distinct from 0% --
+// firmware older than protocol 1.17 cannot report this, and reading that as "never happens"
+// is the exact mistake this measurement exists to avoid.
+function formatMixedSplitRate(splitCount: number | null, rxCount: number | null): string {
+  if (splitCount === null || rxCount === null) {
+    return 'unsupported (firmware predates protocol 1.17)';
+  }
+  if (rxCount === 0) {
+    return `${splitCount}/0 (no 0x31 reports yet)`;
+  }
+  const percent = (splitCount / rxCount) * 100;
+  return `${splitCount}/${rxCount} (${percent.toFixed(1)}%)`;
+}
+
 function normalizeAudioDeviceLabel(label: string): string {
   return label
     .toLowerCase()
@@ -2924,6 +2941,12 @@ export function App() {
   const [edgeRemapControlLayout, setEdgeRemapControlLayout] = useState<Record<DualSenseEdgeRemapButtonId, EdgeRemapControlLayout> | null>(null);
   const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  // Why a failed action must say so: runAction used to swallow the rejection and silently
+  // re-read state, so a firmware refusal looked exactly like "the button does nothing". The
+  // forget commands are the worst case -- the service deliberately does NOT swallow a refusal
+  // (it would claim a controller was cleared while it was still paired), and that care was
+  // being undone one layer up.
+  const [actionError, setActionError] = useState<string | null>(null);
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
   const [settingsFocusTarget, setSettingsFocusTarget] = useState<SettingsFocusTarget | null>(null);
   const [notificationFocusTarget, setNotificationFocusTarget] = useState<NotificationFocusTarget | null>(null);
@@ -4171,7 +4194,8 @@ export function App() {
         `micLastDecodedSamples=${audio.micLastDecodedSamples}`,
         `micLastWrittenBytes=${audio.micLastWrittenBytes}`,
         `micPeakPermille=${audio.micPeakPermille}`,
-        `micUsbStreaming=${audio.micUsbStreaming ? 'true' : 'false'}`
+        `micUsbStreaming=${audio.micUsbStreaming ? 'true' : 'false'}`,
+        `mixed0x31Split=${formatMixedSplitRate(audio.mixed0x31SplitCount, audio.normal0x31RxCount)}`
       );
     }
     if (stats) {
@@ -4221,10 +4245,14 @@ export function App() {
       return;
     }
     setPendingAction(label);
+    setActionError(null);
     try {
       const next = await action();
       setSnapshot(next);
-    } catch {
+    } catch (error) {
+      // Report it, then still re-read state so the UI reflects what the bridge actually did
+      // (which, for a refused destructive command, is nothing).
+      setActionError(error instanceof Error ? error.message : String(error));
       const next = await window.bridge.getStatus();
       setSnapshot(next);
     } finally {
@@ -6769,7 +6797,7 @@ export function App() {
                   <button
                     type="button"
                     className={overviewSleepConfirmVisible ? 'confirm' : undefined}
-                    disabled={!connected || !sleepControllerSupported || !controllerConnected || pendingAction !== null}
+                    disabled={!controllerAttached || !sleepControllerSupported || !controllerConnected || pendingAction !== null}
                     onClick={handleOverviewSleepController}
                   >
                     <Moon size={15} />
@@ -6832,7 +6860,7 @@ export function App() {
                         max={hapticsSliderMax}
                         step={HAPTICS_STEP}
                         value={hapticsValue}
-                        disabled={!connected || !snapshot.settings.hapticsEnabled}
+                        disabled={!controllerAttached || !snapshot.settings.hapticsEnabled}
                         style={{ '--range-fill': `${(hapticsValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                         onPointerDown={() => {
                           hapticsEditingRef.current = true;
@@ -6871,7 +6899,7 @@ export function App() {
                         max="100"
                         step={SPEAKER_VOLUME_STEP}
                         value={speakerVolumeValue}
-                        disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
+                        disabled={!controllerAttached || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
                         style={{ '--range-fill': `${speakerVolumeValue}%` } as CSSProperties}
                         onPointerDown={() => {
                           speakerVolumeEditingRef.current = true;
@@ -6907,7 +6935,7 @@ export function App() {
                         max="100"
                         step={MIC_VOLUME_STEP}
                         value={micVolumeValue}
-                        disabled={!connected || !duplexMicEnabled || micVolumeCommitPending}
+                        disabled={!controllerAttached || !duplexMicEnabled || micVolumeCommitPending}
                         style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
                         onPointerDown={() => {
                           micVolumeEditingRef.current = true;
@@ -6943,7 +6971,7 @@ export function App() {
                         max={percentSliderMax}
                         step={LIGHTBAR_BRIGHTNESS_STEP}
                         value={lightbarBrightnessValue}
-                        disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled || lightbarCommitPending}
+                        disabled={!controllerAttached || !lightbarSupported || !snapshot.settings.lightbarEnabled || lightbarCommitPending}
                         style={{ '--range-fill': `${(lightbarBrightnessValue / percentSliderMax) * 100}%` } as CSSProperties}
                         onPointerDown={() => {
                           lightbarBrightnessEditingRef.current = true;
@@ -7152,7 +7180,7 @@ export function App() {
                             max={hapticsSliderMax}
                             step={HAPTICS_STEP}
                             value={hapticsValue}
-                            disabled={!connected || !snapshot.settings.hapticsEnabled || hapticsCommitPending}
+                            disabled={!controllerAttached || !snapshot.settings.hapticsEnabled || hapticsCommitPending}
                             style={{ '--range-fill': `${(hapticsValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                             aria-label="Haptics gain"
                             onPointerDown={() => {
@@ -7193,7 +7221,7 @@ export function App() {
                             key={label}
                             type="button"
                             className={hapticsValue === presetValue ? 'active' : ''}
-                            disabled={!connected || !snapshot.settings.hapticsEnabled || hapticsCommitPending}
+                            disabled={!controllerAttached || !snapshot.settings.hapticsEnabled || hapticsCommitPending}
                             onClick={() => setHapticsPreset(presetValue)}
                           >
                             {label}
@@ -7377,7 +7405,7 @@ export function App() {
                             max={hapticsSliderMax}
                             step={HAPTICS_STEP}
                             value={classicRumbleValue}
-                            disabled={!connected || !snapshot.settings.classicRumbleEnabled}
+                            disabled={!controllerAttached || !snapshot.settings.classicRumbleEnabled}
                             style={{ '--range-fill': `${(classicRumbleValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                             onPointerDown={() => {
                               classicRumbleEditingRef.current = true;
@@ -7406,7 +7434,7 @@ export function App() {
                             max={hapticsSliderMax}
                             step={HAPTICS_STEP}
                             value={hapticsValue}
-                            disabled={!connected || !snapshot.settings.hapticsEnabled}
+                            disabled={!controllerAttached || !snapshot.settings.hapticsEnabled}
                             style={{ '--range-fill': `${(hapticsValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                             onPointerDown={() => {
                               hapticsEditingRef.current = true;
@@ -7476,7 +7504,7 @@ export function App() {
                       aria-checked={feedbackBoostEnabled}
                       aria-label={feedbackBoostEnabled ? 'Disable feedback boost' : 'Enable feedback boost'}
                       className={`switch ${feedbackBoostEnabled ? 'on' : ''}`}
-                      disabled={!connected || pendingAction !== null || feedbackBoostCommitPending}
+                      disabled={!controllerAttached || pendingAction !== null || feedbackBoostCommitPending}
                       onClick={toggleFeedbackBoostEnabled}
                     >
                       <span />
@@ -7494,7 +7522,7 @@ export function App() {
                         aria-checked={classicRumbleV1Enabled}
                         aria-label={classicRumbleV1Enabled ? 'Disable v1 rumble mode' : 'Enable v1 rumble mode'}
                         className={`switch ${classicRumbleV1Enabled ? 'on' : ''}`}
-                        disabled={!connected || pendingAction !== null || classicRumbleV1CommitPending}
+                        disabled={!controllerAttached || pendingAction !== null || classicRumbleV1CommitPending}
                         onClick={toggleClassicRumbleV1Enabled}
                       >
                         <span />
@@ -7670,7 +7698,7 @@ export function App() {
                             max="100"
                             step={MIC_VOLUME_STEP}
                             value={micVolumeValue}
-                            disabled={!connected || !duplexMicEnabled || micVolumeCommitPending}
+                            disabled={!controllerAttached || !duplexMicEnabled || micVolumeCommitPending}
                             style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
                             aria-label="Microphone level"
                             onPointerDown={() => {
@@ -7697,7 +7725,7 @@ export function App() {
                             max="100"
                             step={SPEAKER_VOLUME_STEP}
                             value={speakerVolumeValue}
-                            disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled}
+                            disabled={!controllerAttached || !speakerVolumeSupported || !snapshot.settings.speakerEnabled}
                             style={{ '--range-fill': `${speakerVolumeValue}%` } as CSSProperties}
                             onPointerDown={() => {
                               speakerVolumeEditingRef.current = true;
@@ -7734,7 +7762,7 @@ export function App() {
                             key={label}
                             type="button"
                             className={micVolumeValue === value ? 'active' : ''}
-                            disabled={!connected || !duplexMicEnabled || micVolumeCommitPending}
+                            disabled={!controllerAttached || !duplexMicEnabled || micVolumeCommitPending}
                             onClick={() => setMicPreset(Number(value))}
                           >
                             {label}
@@ -7746,7 +7774,7 @@ export function App() {
                           type="button"
                           className={snapshot.settings.micMuted ? 'active danger' : ''}
                           aria-pressed={snapshot.settings.micMuted}
-                          disabled={!connected || !duplexMicEnabled || pendingAction !== null}
+                          disabled={!controllerAttached || !duplexMicEnabled || pendingAction !== null}
                           onClick={toggleMicMute}
                         >
                           <VolumeX size={15} />
@@ -7762,7 +7790,7 @@ export function App() {
                             key={label}
                             type="button"
                             className={speakerVolumeValue === value ? 'active' : ''}
-                            disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
+                            disabled={!controllerAttached || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
                             onClick={() => setSpeakerPreset(Number(value))}
                           >
                             {label}
@@ -7982,7 +8010,7 @@ export function App() {
                           max={percentSliderMax}
                           step={TRIGGER_EFFECT_STEP}
                           value={triggerEffectIntensityValue}
-                          disabled={!connected || !adaptiveTriggersSupported || !snapshot.settings.adaptiveTriggersEnabled}
+                          disabled={!controllerAttached || !adaptiveTriggersSupported || !snapshot.settings.adaptiveTriggersEnabled}
                           style={{ '--range-fill': `${(triggerEffectIntensityValue / percentSliderMax) * 100}%` } as CSSProperties}
                           onPointerDown={() => {
                             triggerEffectEditingRef.current = true;
@@ -8018,7 +8046,7 @@ export function App() {
                         key={label}
                         type="button"
                         className={triggerEffectIntensityValue === value ? 'active' : ''}
-                        disabled={!connected || !adaptiveTriggersSupported || !snapshot.settings.adaptiveTriggersEnabled || pendingAction !== null}
+                        disabled={!controllerAttached || !adaptiveTriggersSupported || !snapshot.settings.adaptiveTriggersEnabled || pendingAction !== null}
                         onClick={() => setTriggerIntensityPreset(Number(value))}
                       >
                         {label}
@@ -8057,7 +8085,7 @@ export function App() {
                             key={value}
                             type="button"
                             className={triggerTarget === value ? 'active' : ''}
-                            disabled={!connected || !adaptiveTriggersSupported || adaptiveTriggerOutputActive}
+                            disabled={!controllerAttached || !adaptiveTriggersSupported || adaptiveTriggerOutputActive}
                             onClick={() => setTriggerTarget(value)}
                           >
                             {label}
@@ -8078,7 +8106,7 @@ export function App() {
                     <button
                       className="secondary-action"
                       type="button"
-                      disabled={!connected || !adaptiveTriggersSupported || adaptiveTriggerOutputActive || pendingAction !== null}
+                      disabled={!controllerAttached || !adaptiveTriggersSupported || adaptiveTriggerOutputActive || pendingAction !== null}
                       onClick={resetAdaptiveTriggers}
                     >
                       <RefreshCcw size={14} />
@@ -8151,7 +8179,7 @@ export function App() {
                           max={percentSliderMax}
                           step={LIGHTBAR_BRIGHTNESS_STEP}
                           value={lightbarBrightnessValue}
-                          disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled}
+                          disabled={!controllerAttached || !lightbarSupported || !snapshot.settings.lightbarEnabled}
                           style={{ '--range-fill': `${(lightbarBrightnessValue / percentSliderMax) * 100}%` } as CSSProperties}
                           onPointerDown={() => {
                             lightbarBrightnessEditingRef.current = true;
@@ -8185,7 +8213,7 @@ export function App() {
                         key={label}
                         type="button"
                         className={lightbarBrightnessValue === value ? 'active' : ''}
-                        disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled}
+                        disabled={!controllerAttached || !lightbarSupported || !snapshot.settings.lightbarEnabled}
                         onClick={() => setLightbarPreset(value)}
                       >
                         {label}
@@ -8211,7 +8239,7 @@ export function App() {
                       role="switch"
                       aria-checked={snapshot.settings.lightbarOverrideEnabled}
                       className={`switch ${snapshot.settings.lightbarOverrideEnabled ? 'on' : ''}`}
-                      disabled={!connected || !lightbarOverrideSupported || !snapshot.settings.lightbarEnabled}
+                      disabled={!controllerAttached || !lightbarOverrideSupported || !snapshot.settings.lightbarEnabled}
                       onClick={() => void runAction('lightbar-override', () => (
                         window.bridge.setLightbarOverrideEnabled(!snapshot.settings.lightbarOverrideEnabled)
                       ))}
@@ -8229,7 +8257,7 @@ export function App() {
                           title={`${lightbarColorName(color)} ${color.toUpperCase()}`}
                           className={normalizedLightbarColor === color ? 'active' : ''}
                           style={{ '--swatch-color': color } as CSSProperties}
-                          disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled}
+                          disabled={!controllerAttached || !lightbarSupported || !snapshot.settings.lightbarEnabled}
                           onClick={() => selectLightbarColor(color)}
                         />
                       ))}
@@ -9340,6 +9368,11 @@ export function App() {
                 </button>
               </div>
             </div>
+            {actionError && (
+              <p className="action-error" role="alert">
+                {actionError}
+              </p>
+            )}
             <div className="feature-card-grid">
               <section className="feature-card">
                 <div className="feature-card-title">

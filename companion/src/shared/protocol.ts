@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 16;
+export const PROTOCOL_MINOR = 17;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -589,6 +589,11 @@ export interface AudioStatusPayload {
   micLastWrittenBytes: number;
   micPeakPermille: number;
   micUsbStreaming: boolean;
+  // How many host 0x31 reports arrived with audio and controller state packed together and
+  // had to be split into two Bluetooth packets, against the total 0x31 reports received.
+  // null on firmware older than protocol 1.17, which is NOT the same as zero.
+  mixed0x31SplitCount: number | null;
+  normal0x31RxCount: number | null;
   protocolVersion: string;
 }
 
@@ -974,6 +979,11 @@ export function parseAudioStatusReport(report: ArrayLike<number>): AudioStatusPa
     micUsbWriteShort: readU32(report, 45),
     micUsbConcealCount: readU32(report, 49),
     micPlcCount: readU32(report, 53),
+    // Mixed-report split rate (firmware protocol 1.17+). null means the firmware predates
+    // the counters -- which must NOT read as "zero splits", since that is the very thing
+    // being measured.
+    mixed0x31SplitCount: protocolMinor >= 17 ? readU32(report, 17) : null,
+    normal0x31RxCount: protocolMinor >= 17 ? readU32(report, 21) : null,
     micLastDecodedSamples: readU16(report, 57),
     micLastWrittenBytes: readU16(report, 59),
     micPeakPermille: readU16(report, 61),

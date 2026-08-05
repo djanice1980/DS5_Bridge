@@ -25,11 +25,11 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 16;
+constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 48;
+constexpr uint8_t kFirmwarePatch = 49;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1764,6 +1764,13 @@ uint16_t build_audio_status(uint8_t *buffer, uint16_t reqlen) {
 
     audio_status status{};
     audio_get_status(&status);
+    // Mixed-report split rate. Lives here rather than in build_audio_stats because that
+    // report only exists in diagnostics builds, and this ratio has to be readable on the
+    // release firmware people actually run.
+    bt_output_debug_stats output_stats{};
+    bt_get_output_debug_stats(&output_stats);
+    write_u32(buffer + 16, output_stats.mixed_0x31_split_count);
+    write_u32(buffer + 20, output_stats.normal_0x31_rx_count);
     buffer[8] = (status.duplex_requested ? 0x10 : 0x00)
         | (status.duplex_active ? 0x20 : 0x00)
         | (status.controller_state_ready ? 0x40 : 0x00)

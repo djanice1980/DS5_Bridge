@@ -228,6 +228,7 @@ struct output_scheduler_counters {
     uint32_t audio_0x36_enqueued_count;
     uint32_t normal_0x31_rx_count;
     uint32_t normal_0x31_sent_count;
+    uint32_t mixed_0x31_split_count;
     uint32_t non_audio_reports_between_audio_max;
     uint32_t bt_send_gap_max_us;
 };
@@ -3891,6 +3892,7 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     uint8_t trace_transform_flags = 0;
     if (split_state) {
         trace_transform_flags |= OutputTraceTransformSplitState;
+        output_counters.mixed_0x31_split_count++;
     }
     if (audio_protected) {
         trace_transform_flags |= OutputTraceTransformAudioProtected;
@@ -4055,6 +4057,8 @@ void bt_get_output_debug_stats(bt_output_debug_stats *stats) {
     stats->bt_audio_queue_depth_max = output_counters.audio_queue_max_depth;
     stats->audio_0x36_enqueued_count = output_counters.audio_0x36_enqueued_count;
     stats->audio_0x36_sent_count = output_counters.audio_0x36_sent_count;
+    stats->mixed_0x31_split_count = output_counters.mixed_0x31_split_count;
+    stats->normal_0x31_rx_count = output_counters.normal_0x31_rx_count;
     critical_section_exit(&queue_lock);
 }
 

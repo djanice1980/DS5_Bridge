@@ -3320,6 +3320,19 @@ button.overview-shortcut-chip {
   background: #ffffff;
 }
 
+/* A failed action has to be visible. Silent failure on a destructive command reads as
+   "the button is broken" and, worse, is indistinguishable from "it worked". */
+.action-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: 8px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .feature-card-grid {
   display: grid;
   grid-template-columns: var(--feature-left-column) var(--feature-right-column);
