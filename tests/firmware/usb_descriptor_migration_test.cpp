@@ -759,6 +759,29 @@ void assert_mic_pass_through_defaults_to_enabled(std::filesystem::path const &ro
 
 } // namespace
 
+// Every path that changes the HID-channel ready flags must tell the phase machine, or
+// connection_phase drifts away from the state it is supposed to describe. Losing ONE channel
+// was the path that did not: it cleared the ready flag, scheduled recovery, and left the phase
+// at Ready, which is what the tracked=Ready / derived=HidOpening breadcrumb (12/67) reported
+// from hardware. The phase is still bookkeeping-only, so a drift like this is silent until
+// something starts gating on it -- hence a guard rather than trust.
+void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root) {
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const std::string closed = extract_between(
+        bt_cpp,
+        "case L2CAP_EVENT_CHANNEL_CLOSED: {",
+        "case L2CAP_EVENT_CAN_SEND_NOW:"
+    );
+    const auto recovery = closed.find("schedule_hid_channel_recovery();");
+    const auto phase = closed.find("note_connection_phase(BtConnectionPhase::HidOpening);");
+    if (recovery == std::string::npos || phase == std::string::npos || phase > recovery) {
+        throw std::runtime_error(
+            "Losing one HID channel must move the connection phase out of Ready before "
+            "scheduling recovery, or tracked and derived phases disagree"
+        );
+    }
+}
+
 int main() {
     try {
         const auto source_root = std::filesystem::path(DS5_SOURCE_ROOT);
@@ -775,6 +798,7 @@ int main() {
         assert_mute_keyboard_chord_starter_is_deferred(source_root);
         assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(source_root);
         assert_mic_pass_through_defaults_to_enabled(source_root);
+        assert_hid_channel_close_notes_the_phase(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

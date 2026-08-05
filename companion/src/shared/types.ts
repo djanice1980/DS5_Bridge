@@ -48,8 +48,13 @@ export interface CompanionSettings {
   speakerVolumePercent: number;
   speakerGainLevel: number;
   // Multi-bridge: companion interface path of the bridge this app manages;
-  // null = first available.
+  // null = first available. This is a CACHE, not the identity -- the path embeds the
+  // product id (pid_0ce6 vs pid_0ce7), so it changes shape whenever the bridge switches
+  // between companion-only and full. selectedBridgeUniqueId is the durable preference.
   selectedBridgePath: string | null;
+  // Multi-bridge: RP2350 unique board id of the bridge this app manages. Survives the
+  // companion-only/full PID switch, which selectedBridgePath does not.
+  selectedBridgeUniqueId: string | null;
   // Stable bridge identities: unique board id -> label + last-seen container.
   bridgeIdentities: Record<string, BridgeIdentityRecord>;
   // Profile-follows-controller: controller BT address (hex) -> profile id.

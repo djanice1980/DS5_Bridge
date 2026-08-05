@@ -43,7 +43,17 @@ const hidMock = vi.hoisted(() => {
 });
 
 const winUsbTransportMock = vi.hoisted(() => ({
-  open: vi.fn(async () => {
+  open: vi.fn(async (options: { devicePath?: string } = {}) => {
+    // Honour devicePath the way the real transport does: a path that is not present fails,
+    // rather than quietly handing back some other bridge. Bridge selection depends on that
+    // distinction -- a stale path MUST fail so the fallback and reconciliation run.
+    if (options.devicePath) {
+      const requested = hidMock.state.openDevices.get(options.devicePath);
+      if (!requested) {
+        throw new Error(`No WinUSB bridge transport at ${options.devicePath}`);
+      }
+      return requested;
+    }
     const listedPath = hidMock.state.devicesList[0]?.path;
     const device = (typeof listedPath === 'string' ? hidMock.state.openDevices.get(listedPath) : null)
       ?? hidMock.state.openDevices.values().next().value;
@@ -167,6 +177,9 @@ class MockHidDevice extends EventEmitter {
   closeCount = 0;
   settingsRevision = 0;
   fixedAckRevision: number | null = null;
+  // Null means firmware that does not answer DEVICE_IDENTITY, which is the default so that
+  // tests written before bridge selection was keyed on the board id keep their old behaviour.
+  uniqueId: string | null = null;
 
   constructor() {
     super();
@@ -212,6 +225,12 @@ class MockHidDevice extends EventEmitter {
     if (reportId === REPORT_ID.AUDIO_STATUS) {
       return [...(this.audioStatusReports.shift() ?? audioStatusReport())];
     }
+    if (reportId === REPORT_ID.DEVICE_IDENTITY) {
+      if (!this.uniqueId) {
+        throw new Error('Device identity unsupported');
+      }
+      return deviceIdentityReport(this.uniqueId);
+    }
     if (reportId === REPORT_ID.INPUT) {
       if (this.shortcutReadError) {
         throw this.shortcutReadError;
@@ -246,6 +265,23 @@ class MockHidDevice extends EventEmitter {
   close(): void {
     this.closeCount += 1;
   }
+}
+
+// Minimal DEVICE_IDENTITY report: enough for the board id, which is what bridge selection
+// is keyed on. Everything past the id stays zero, which parses as "no controller, no
+// watchdog telemetry" -- exactly what older firmware looks like.
+function deviceIdentityReport(uniqueId: string): number[] {
+  const report = new Array<number>(REPORT_LENGTH).fill(0);
+  report[0] = REPORT_ID.DEVICE_IDENTITY;
+  writeMagic(report);
+  report[5] = PROTOCOL_MAJOR;
+  report[6] = PROTOCOL_MINOR;
+  const bytes = uniqueId.match(/../g) ?? [];
+  report[7] = bytes.length;
+  bytes.forEach((byte, index) => {
+    report[8 + index] = Number.parseInt(byte, 16);
+  });
+  return report;
 }
 
 function companionDeviceInfo(devicePath = 'companion-path') {
@@ -707,7 +743,7 @@ describe('BridgeService', () => {
     expect(snapshot.diagnostics.lastError).toBeNull();
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toEqual({
       currentVersion: '1.6.2',
-      availableVersion: '1.6.47'
+      availableVersion: '1.6.48'
     });
   });
 
@@ -736,10 +772,118 @@ describe('BridgeService', () => {
     expect(snapshot.bridgeDevices?.directControllers[0]?.product).toBe('DualSense Wireless Controller');
   });
 
+  it('re-points the pinned bridge at its new path when the product id changes', async () => {
+    // The bridge was pinned while a controller was attached (composite, pid_0ce6). The
+    // controller powers off, the bridge re-enumerates companion-only under pid_0ce7, and the
+    // remembered path stops existing. The board id has not changed, so it is still our bridge.
+    const fullPath = String.raw`\\?\usb#vid_054c&pid_0ce6&mi_05#8&aaaa&1&0005#{guid}`;
+    const idlePath = String.raw`\\?\usb#vid_054c&pid_0ce7#8&aaaa&0&3#{guid}`;
+    const service = serviceFixture({
+      selectedBridgePath: fullPath,
+      selectedBridgeUniqueId: 'aabbccddeeff0011'
+    });
+
+    const device = new MockHidDevice();
+    device.path = idlePath;
+    device.uniqueId = 'aabbccddeeff0011';
+    hidMock.state.devicesList = [companionDeviceInfo(idlePath)];
+    hidMock.state.openDevices.set(idlePath, device);
+
+    await poll(service);
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.state).toBe('connected');
+    expect(snapshot.settings.selectedBridgeUniqueId).toBe('aabbccddeeff0011');
+    expect(snapshot.settings.selectedBridgePath).toBe(idlePath);
+  });
+
+  it('opens the pinned bridge rather than whichever bridge answers first', async () => {
+    // Two bridges present. The pinned one changed product id, so its remembered path fails and
+    // the fallback opens the other one. Without reconciliation the app would silently manage
+    // the wrong bridge -- which is the whole failure mode multi-bridge has to avoid.
+    const stalePath = String.raw`\\?\usb#vid_054c&pid_0ce6&mi_05#8&aaaa&1&0005#{guid}`;
+    const pinnedPath = String.raw`\\?\usb#vid_054c&pid_0ce7#8&aaaa&0&3#{guid}`;
+    const otherPath = String.raw`\\?\usb#vid_054c&pid_0ce6&mi_05#8&bbbb&1&0005#{guid}`;
+    const service = serviceFixture({
+      selectedBridgePath: stalePath,
+      selectedBridgeUniqueId: 'aabbccddeeff0011'
+    });
+
+    const other = new MockHidDevice();
+    other.path = otherPath;
+    other.uniqueId = '9988776655443322';
+    const pinned = new MockHidDevice();
+    pinned.path = pinnedPath;
+    pinned.uniqueId = 'aabbccddeeff0011';
+
+    // The wrong bridge is listed first, so the fallback reaches it first.
+    hidMock.state.devicesList = [companionDeviceInfo(otherPath), companionDeviceInfo(pinnedPath)];
+    hidMock.state.openDevices.set(otherPath, other);
+    hidMock.state.openDevices.set(pinnedPath, pinned);
+    audioHelperMock.listBridges.mockResolvedValue({
+      bridges: [
+        { path: otherPath, containerId: null },
+        { path: pinnedPath, containerId: null }
+      ],
+      hidDevices: []
+    });
+
+    await poll(service);
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.settings.selectedBridgePath).toBe(pinnedPath);
+    expect(snapshot.settings.selectedBridgeUniqueId).toBe('aabbccddeeff0011');
+    expect(other.closeCount).toBeGreaterThan(0);
+  });
+
+  it('adopts the board id of a bridge that was pinned by path alone', async () => {
+    // Settings written by a build that predated board-id selection carry a path and no id.
+    // Opening that bridge should upgrade the preference rather than leave it path-only.
+    const path = String.raw`\\?\usb#vid_054c&pid_0ce6&mi_05#8&aaaa&1&0005#{guid}`;
+    const service = serviceFixture({ selectedBridgePath: path });
+
+    const device = new MockHidDevice();
+    device.path = path;
+    device.uniqueId = 'aabbccddeeff0011';
+    hidMock.state.devicesList = [companionDeviceInfo(path)];
+    hidMock.state.openDevices.set(path, device);
+
+    await poll(service);
+
+    expect(service.getSnapshot().settings.selectedBridgeUniqueId).toBe('aabbccddeeff0011');
+  });
+
+  it('leaves the preference alone when the pinned bridge is absent', async () => {
+    // A different bridge is plugged in. Serving it beats showing nothing, but the preference
+    // must survive so the pinned bridge is re-adopted when it comes back.
+    const pinnedPath = String.raw`\\?\usb#vid_054c&pid_0ce6&mi_05#8&aaaa&1&0005#{guid}`;
+    const otherPath = String.raw`\\?\usb#vid_054c&pid_0ce6&mi_05#8&bbbb&1&0005#{guid}`;
+    const service = serviceFixture({
+      selectedBridgePath: pinnedPath,
+      selectedBridgeUniqueId: 'aabbccddeeff0011'
+    });
+
+    const other = new MockHidDevice();
+    other.path = otherPath;
+    other.uniqueId = '9988776655443322';
+    hidMock.state.devicesList = [companionDeviceInfo(otherPath)];
+    hidMock.state.openDevices.set(otherPath, other);
+    audioHelperMock.listBridges.mockResolvedValue({
+      bridges: [{ path: otherPath, containerId: null }],
+      hidDevices: []
+    });
+
+    await poll(service);
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.settings.selectedBridgePath).toBe(pinnedPath);
+    expect(snapshot.settings.selectedBridgeUniqueId).toBe('aabbccddeeff0011');
+  });
+
   it('does not surface an available update for the bundled bridge firmware', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
-    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 47 });
+    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 48 });
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
@@ -747,7 +891,7 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('connected');
-    expect(snapshot.status?.firmwareVersion).toBe('1.6.47');
+    expect(snapshot.status?.firmwareVersion).toBe('1.6.48');
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toBeNull();
   });
 

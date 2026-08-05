@@ -171,6 +171,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   // so a given gain level sounds the same on Linux as on Windows.
   speakerGainLevel: 4,
   selectedBridgePath: null,
+  selectedBridgeUniqueId: null,
   bridgeIdentities: {},
   controllerBindings: {},
   controllerHistory: [],
@@ -944,6 +945,10 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     selectedBridgePath: typeof value?.selectedBridgePath === 'string' && value.selectedBridgePath.length > 0
       ? value.selectedBridgePath
       : null,
+    selectedBridgeUniqueId:
+      typeof value?.selectedBridgeUniqueId === 'string' && value.selectedBridgeUniqueId.length > 0
+        ? value.selectedBridgeUniqueId
+        : null,
     bridgeIdentities: normalizeBridgeIdentities(value?.bridgeIdentities),
     controllerBindings: normalizeControllerBindings(value?.controllerBindings),
     controllerHistory: normalizeControllerHistory(value?.controllerHistory),

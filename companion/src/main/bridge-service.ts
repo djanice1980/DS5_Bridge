@@ -121,7 +121,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.47';
+const BUNDLED_FIRMWARE_VERSION = '1.6.48';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -3700,13 +3700,14 @@ export class BridgeService extends EventEmitter {
           if (!preferredPath) {
             throw error;
           }
-          // Preferred bridge unavailable (unplugged / moved): fall back to any
+          // Preferred bridge unavailable (unplugged / moved / changed PID): fall back to any
           // present bridge. The preference persists for when it returns.
           this.device = await WinUsbCompanionTransport.open({
             retryTimeoutMs: this.isHostPersonaTransitionActive() ? HOST_PERSONA_TRANSITION_OPEN_RETRY_MS : 0
           });
         }
         await this.readBridgeIdentity();
+        await this.reconcileSelectedBridge();
         this.syncAudioHelperBridgeTarget();
         const openedDevice = this.device;
         this.device.on('error', (error: Error) => this.publishError(error));
@@ -4031,6 +4032,92 @@ export class BridgeService extends EventEmitter {
     this.syncAudioHelperBridgeTarget();
   }
 
+  // Multi-bridge selection is keyed on the RP2350 board id, not the device path.
+  //
+  // The path embeds the product id -- `...pid_0ce6&mi_05...` when a controller is attached,
+  // `...pid_0ce7...` when the bridge is companion-only -- so a remembered path goes stale
+  // every time the bridge changes shape. With one bridge that is invisible, because the open
+  // falls back to whatever is present. With two it silently opens the WRONG bridge.
+  //
+  // So the board id decides which bridge is ours, and the path is re-cached to match whatever
+  // shape it currently has. The container id is no help: a product-id change generally yields
+  // a new container, so it goes stale in exactly the same way.
+  private async reconcileSelectedBridge(): Promise<void> {
+    const opened = this.device;
+    if (!opened) {
+      return;
+    }
+    const settings = this.settingsStore.get();
+    const wanted = settings.selectedBridgeUniqueId;
+    const openedId = this.connectedBridgeUniqueId;
+
+    if (!wanted) {
+      // Either nothing is pinned (open whatever is present -- correct), or a path was pinned
+      // by a build that predates the board id. Upgrade that preference in place.
+      if (settings.selectedBridgePath && openedId) {
+        this.snapshot.settings = this.settingsStore.update({
+          selectedBridgeUniqueId: openedId,
+          selectedBridgePath: opened.path
+        });
+      }
+      return;
+    }
+
+    if (openedId === wanted) {
+      if (!BridgeService.bridgePathsEqual(settings.selectedBridgePath, opened.path)) {
+        // Right bridge, new shape. Re-cache the path so the next open hits directly.
+        this.snapshot.settings = this.settingsStore.update({ selectedBridgePath: opened.path });
+      }
+      return;
+    }
+
+    // Wrong bridge -- the fallback opened whichever one answered first. Probe the others.
+    const matched = await this.openBridgeByUniqueId(wanted, opened.path);
+    if (!matched) {
+      // The pinned bridge is not present. Keep serving the one we have rather than showing
+      // nothing, but leave the preference alone so it re-binds when that bridge returns.
+      return;
+    }
+    this.closeDevice();
+    this.device = matched;
+    await this.readBridgeIdentity();
+    this.snapshot.settings = this.settingsStore.update({ selectedBridgePath: matched.path });
+  }
+
+  // Open each present bridge in turn and return the one whose board id matches. Only runs
+  // when the pinned bridge was not the one that answered, so the cost is bounded and rare.
+  private async openBridgeByUniqueId(
+    uniqueId: string,
+    skipPath: string
+  ): Promise<WinUsbCompanionTransport | null> {
+    await this.refreshBridgeCensus();
+    const candidates = (this.bridgeCensus?.bridges ?? [])
+      .map((bridge) => bridge.path)
+      .filter((path) => !BridgeService.bridgePathsEqual(path, skipPath));
+
+    for (const path of candidates) {
+      let probe: WinUsbCompanionTransport | null = null;
+      try {
+        probe = await WinUsbCompanionTransport.open({ devicePath: path });
+        const report = await probe.getFeatureReport(REPORT_ID.DEVICE_IDENTITY, REPORT_LENGTH);
+        if (parseDeviceIdentityReport(report).uniqueId === uniqueId) {
+          return probe;
+        }
+      } catch {
+        // A bridge that will not open or answer is not the one we are looking for.
+      }
+      if (probe) {
+        try {
+          probe.removeAllListeners();
+          probe.close();
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+    return null;
+  }
+
   // The bridge the app is (or will be) acting on: the open transport's path,
   // else the persisted preference.
   private activeBridgePath(): string | null {
@@ -4312,6 +4399,25 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  // Best-effort board id for a bridge we may not have open. Exact for the connected bridge;
+  // for the others it goes through the last-seen container, which is stale after a product-id
+  // change -- good enough for labelling the selector, never trusted for choosing a bridge.
+  private uniqueIdForBridgePath(bridgePath: string, containerId?: string | null): string | null {
+    if (BridgeService.bridgePathsEqual(bridgePath, this.device?.path ?? null)
+        && this.connectedBridgeUniqueId) {
+      return this.connectedBridgeUniqueId;
+    }
+    const container = containerId !== undefined
+      ? containerId
+      : this.bridgeCensus?.bridges.find((bridge) =>
+          BridgeService.bridgePathsEqual(bridge.path, bridgePath))?.containerId ?? null;
+    if (!container) {
+      return null;
+    }
+    return Object.entries(this.settingsStore.get().bridgeIdentities)
+      .find(([, record]) => record.containerId === container)?.[0] ?? null;
+  }
+
   private bridgeDevicesSnapshot(): BridgeDeviceCensus | null {
     if (!this.bridgeCensus) {
       return null;
@@ -4319,19 +4425,9 @@ export class BridgeService extends EventEmitter {
     const selectedPath = this.settingsStore.get().selectedBridgePath;
     const activePath = this.device?.path ?? null;
     const identities = this.settingsStore.get().bridgeIdentities;
-    const uniqueIdForBridge = (bridgePath: string, containerId: string | null): string | null => {
-      if (BridgeService.bridgePathsEqual(bridgePath, activePath) && this.connectedBridgeUniqueId) {
-        return this.connectedBridgeUniqueId;
-      }
-      if (!containerId) {
-        return null;
-      }
-      return Object.entries(identities)
-        .find(([, record]) => record.containerId === containerId)?.[0] ?? null;
-    };
     return {
       bridges: this.bridgeCensus.bridges.map((bridge) => {
-        const uniqueId = uniqueIdForBridge(bridge.path, bridge.containerId);
+        const uniqueId = this.uniqueIdForBridgePath(bridge.path, bridge.containerId);
         return {
           path: bridge.path,
           containerId: bridge.containerId,
@@ -4355,8 +4451,15 @@ export class BridgeService extends EventEmitter {
   }
 
   async selectBridge(devicePath: string | null): Promise<BridgeSnapshot> {
+    // Pin the board id, not just the path -- see reconcileSelectedBridge. If the id is not
+    // known yet (the bridge has never been opened by this app) it is left null and filled in
+    // on the next successful open, which will use the path we just stored.
+    const uniqueId = devicePath === null
+      ? null
+      : this.uniqueIdForBridgePath(devicePath);
     this.snapshot.settings = this.settingsStore.update({
-      selectedBridgePath: devicePath
+      selectedBridgePath: devicePath,
+      selectedBridgeUniqueId: uniqueId
     });
     if (this.device && devicePath
         && !BridgeService.bridgePathsEqual(this.device.path, devicePath)) {

@@ -2873,6 +2873,11 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (hid_control_cid == 0 && hid_interrupt_cid == 0) {
                 bt_disconnect();
             } else {
+                // One channel is gone and we are about to re-open it, so the connection is no
+                // longer Ready. This was the ONE path that changed the HID-channel state
+                // without telling the phase machine, which is what produced the tracked=Ready
+                // / derived=HidOpening disagreement (breadcrumb 12/67).
+                note_connection_phase(BtConnectionPhase::HidOpening);
                 schedule_hid_channel_recovery();
             }
             break;
