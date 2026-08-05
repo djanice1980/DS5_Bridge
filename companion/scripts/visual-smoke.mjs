@@ -6,7 +6,9 @@ import { _electron as electron } from 'playwright';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const outputDir = path.join(root, 'artifacts', 'ui');
-const tabs = ['Overview', 'Audio', 'Haptics', 'Triggers', 'Lighting', 'Button Remapping', 'Chords', 'System'];
+// Devices is included because it is the one tab whose controls are meant to stay usable with
+// no controller attached, so it is the tab most likely to be looked at in that state.
+const tabs = ['Overview', 'Devices', 'Audio', 'Haptics', 'Triggers', 'Lighting', 'Button Remapping', 'Chords', 'System'];
 const remapProfileName = process.env.VISUAL_SMOKE_REMAP_PROFILE?.trim();
 
 await mkdir(outputDir, { recursive: true });

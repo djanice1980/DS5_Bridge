@@ -3089,6 +3089,18 @@ button.overview-shortcut-chip {
   box-shadow: var(--shadow-panel);
 }
 
+/* audio-heading-controls is a control STRIP: the border, fill and shadow exist to group the
+   inline switches on the Audio tab into one surface. Devices reuses the class purely for its
+   flex layout, and there it wraps two ordinary buttons that already carry their own borders --
+   so the strip chrome reads as a stray outline drawn around them. Keep the layout, drop the
+   surface. */
+.devices-page .audio-heading-controls {
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
 .audio-heading-actions {
   min-width: 0;
   display: flex;
