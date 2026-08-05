@@ -208,6 +208,10 @@ const api = {
   selectButtonRemappingProfile: (profileId: string): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:selectButtonRemappingProfile', profileId)
   ),
+  // profileId null clears the binding. mac need not be the attached controller.
+  setButtonRemappingBinding: (mac: string, profileId: string | null): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setButtonRemappingBinding', mac, profileId)
+  ),
   saveButtonRemappingProfile: (name?: string): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:saveButtonRemappingProfile', name)
   ),

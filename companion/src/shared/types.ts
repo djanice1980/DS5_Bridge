@@ -59,6 +59,12 @@ export interface CompanionSettings {
   bridgeIdentities: Record<string, BridgeIdentityRecord>;
   // Profile-follows-controller: controller BT address (hex) -> profile id.
   controllerBindings: Record<string, string>;
+  // Button remapping is a SEPARATE profile system from controllerProfiles -- a controller
+  // profile does not capture selectedButtonRemappingProfileId -- so it needs its own
+  // controller binding. Kept parallel rather than folded into controller profiles so that
+  // what an already-saved controller profile captures does not change underneath anyone.
+  // Controller BT address (hex) -> button remapping profile id.
+  buttonRemappingBindings: Record<string, string>;
   // Devices tab: controllers seen by this companion, newest first.
   controllerHistory: ControllerHistoryEntry[];
   micVolumePercent: number;

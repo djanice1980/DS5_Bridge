@@ -3103,16 +3103,31 @@ button.overview-shortcut-chip {
 .devices-page .settings-menu-list .settings-menu-row {
   flex-wrap: wrap;
   row-gap: 8px;
+  /* Tighter than the default 16px: the controls line carries a battery badge, TWO profile
+     pickers and the forget button, and at 16px the button was pushed onto a third line. */
+  column-gap: 8px;
+  justify-content: flex-start;
 }
 
+/* Identity and battery share the first line; the pickers get the full width below. */
 .devices-page .settings-menu-list .settings-menu-copy {
-  flex: 1 1 100%;
-}
-
-.devices-page .controller-binding-select {
   flex: 1 1 auto;
   min-width: 0;
-  max-width: 180px;
+}
+
+.devices-page .devices-row-controls {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* flex-basis 0 so both pickers share the leftover width evenly and shrink together as the
+   row narrows, rather than one fixed width deciding whether the forget button still fits. */
+.devices-page .controller-binding-select {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 150px;
 }
 
 /* The battery badge is a fixed, tiny value; it should never absorb the shrink. */

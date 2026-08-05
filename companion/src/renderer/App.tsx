@@ -4708,6 +4708,13 @@ export function App() {
     void runAction(`bind-${mac}`, () => window.bridge.setControllerBinding(mac, profileId));
   }
 
+  function setButtonRemappingBinding(mac: string, profileId: string | null) {
+    if (!snapshot) return;
+    void runAction(`remap-bind-${mac}`, () => (
+      window.bridge.setButtonRemappingBinding(mac, profileId)
+    ));
+  }
+
   // '' is the sentinel for "no profile" because CustomSelect carries string values; the
   // service takes null to mean clear.
   const controllerBindingOptions: Array<[string, string]> = [
@@ -4718,17 +4725,40 @@ export function App() {
     ]) ?? [])
   ];
 
+  const remapBindingOptions: Array<[string, string]> = [
+    ['No remap', ''],
+    ...(snapshot?.settings.buttonRemappingProfiles.map((profile): [string, string] => [
+      profileDisplayName(profile.name, profile.id),
+      profile.id
+    ]) ?? [])
+  ];
+
+  // Two pickers, because button remapping is a separate profile system: a controller profile
+  // does not capture which remap profile is selected, so one binding cannot cover both.
   function renderControllerBinding(mac: string, label: string) {
     return (
-      <CustomSelect
-        className="controller-binding-select"
-        value={snapshot?.settings.controllerBindings[mac] ?? ''}
-        options={controllerBindingOptions}
-        disabled={pendingAction !== null}
-        ariaLabel={`Profile for ${label}`}
-        floatingMenu
-        onChange={(profileId) => setControllerBinding(mac, profileId === '' ? null : profileId)}
-      />
+      <>
+        <CustomSelect
+          className="controller-binding-select"
+          value={snapshot?.settings.controllerBindings[mac] ?? ''}
+          options={controllerBindingOptions}
+          disabled={pendingAction !== null}
+          ariaLabel={`Controller profile for ${label}`}
+          floatingMenu
+          onChange={(profileId) => setControllerBinding(mac, profileId === '' ? null : profileId)}
+        />
+        <CustomSelect
+          className="controller-binding-select"
+          value={snapshot?.settings.buttonRemappingBindings[mac] ?? ''}
+          options={remapBindingOptions}
+          disabled={pendingAction !== null}
+          ariaLabel={`Button remapping profile for ${label}`}
+          floatingMenu
+          onChange={(profileId) => (
+            setButtonRemappingBinding(mac, profileId === '' ? null : profileId)
+          )}
+        />
+      </>
     );
   }
 
@@ -9482,23 +9512,28 @@ export function App() {
                         <span className="inline-state-badge">
                           {entry.lastBatteryPercent === null ? '--' : `${entry.lastBatteryPercent}%`}
                         </span>
-                        {renderControllerBinding(
-                          entry.mac,
-                          controllerTypeLabel(entry.controllerType)
-                        )}
-                        <button
-                          type="button"
-                          className="heading-icon-action"
-                          title={`Forget ${controllerTypeLabel(entry.controllerType)}`}
-                          aria-label={`Forget ${controllerTypeLabel(entry.controllerType)} ${formatControllerMac(entry.mac)}`}
-                          disabled={!connected || pendingAction !== null}
-                          onClick={() => forgetControllerPairing(
+                        {/* Own line: the two pickers plus forget cannot share the row with the
+                            identity and battery at this width without truncating the profile
+                            names to the point of being unreadable. */}
+                        <div className="devices-row-controls">
+                          {renderControllerBinding(
                             entry.mac,
                             controllerTypeLabel(entry.controllerType)
                           )}
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                          <button
+                            type="button"
+                            className="heading-icon-action"
+                            title={`Forget ${controllerTypeLabel(entry.controllerType)}`}
+                            aria-label={`Forget ${controllerTypeLabel(entry.controllerType)} ${formatControllerMac(entry.mac)}`}
+                            disabled={!connected || pendingAction !== null}
+                            onClick={() => forgetControllerPairing(
+                              entry.mac,
+                              controllerTypeLabel(entry.controllerType)
+                            )}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>

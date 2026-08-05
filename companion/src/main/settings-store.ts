@@ -174,6 +174,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   selectedBridgeUniqueId: null,
   bridgeIdentities: {},
   controllerBindings: {},
+  buttonRemappingBindings: {},
   controllerHistory: [],
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
@@ -951,6 +952,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
         : null,
     bridgeIdentities: normalizeBridgeIdentities(value?.bridgeIdentities),
     controllerBindings: normalizeControllerBindings(value?.controllerBindings),
+    buttonRemappingBindings: normalizeControllerBindings(value?.buttonRemappingBindings),
     controllerHistory: normalizeControllerHistory(value?.controllerHistory),
     micVolumePercent: Number.isFinite(value?.micVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))

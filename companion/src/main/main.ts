@@ -1225,6 +1225,7 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:selectButtonRemappingProfile', (_event, profileId: string) => (
     service.selectButtonRemappingProfile(profileId)
   ));
+  ipcMain.handle('bridge:setButtonRemappingBinding', (_event, mac: string, profileId: string | null) => service.setButtonRemappingBinding(mac, profileId));
   ipcMain.handle('bridge:saveButtonRemappingProfile', (_event, name?: string) => (
     service.saveButtonRemappingProfile(name)
   ));

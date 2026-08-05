@@ -1243,6 +1243,7 @@ export class BridgeService extends EventEmitter {
   // Last controller identity we ran binding application for (prevents
   // re-applying every poll; reset on device close).
   private bindingAppliedForMac: string | null = null;
+  private remapBindingAppliedForMac: string | null = null;
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hostPersonaTransitionPollTimer: NodeJS.Timeout | null = null;
@@ -3098,10 +3099,56 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
-  async selectButtonRemappingProfile(profileId: string): Promise<BridgeSnapshot> {
+  async selectButtonRemappingProfile(
+    profileId: string,
+    options: { recordBinding?: boolean } = {}
+  ): Promise<BridgeSnapshot> {
     this.snapshot.settings = this.settingsStore.selectButtonRemappingProfile(profileId);
+    // Picking a remap profile while a controller is attached makes it that controller's
+    // default, mirroring how controller profiles already behave. recordBinding is false only
+    // when WE are applying an existing binding, which must not rewrite it.
+    if (options.recordBinding !== false && this.connectedControllerMac) {
+      const bindings = this.settingsStore.get().buttonRemappingBindings;
+      if (bindings[this.connectedControllerMac] !== profileId) {
+        this.snapshot.settings = this.settingsStore.update({
+          buttonRemappingBindings: { ...bindings, [this.connectedControllerMac]: profileId }
+        });
+      }
+      this.remapBindingAppliedForMac = this.connectedControllerMac;
+    }
     if (this.snapshot.state === 'connected') {
       await this.applyButtonRemapping(this.snapshot.settings, true);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  // Bind ANY controller to a button remapping profile by address; null clears it.
+  // Same shape as setControllerBinding -- remapping is a separate profile system, so a
+  // controller profile binding cannot carry it.
+  async setButtonRemappingBinding(mac: string, profileId: string | null): Promise<BridgeSnapshot> {
+    const normalized = mac.trim().toLowerCase().replace(/[^0-9a-f]/g, '');
+    if (normalized.length !== 12) {
+      throw new Error(`Not a controller address: ${mac}`);
+    }
+    if (profileId !== null
+        && !this.settingsStore.get().buttonRemappingProfiles.some((p) => p.id === profileId)) {
+      throw new Error(`No such button remapping profile: ${profileId}`);
+    }
+
+    const bindings = { ...this.settingsStore.get().buttonRemappingBindings };
+    if (profileId === null) {
+      delete bindings[normalized];
+    } else {
+      bindings[normalized] = profileId;
+    }
+    this.snapshot.settings = this.settingsStore.update({ buttonRemappingBindings: bindings });
+
+    if (profileId !== null && this.connectedControllerMac === normalized) {
+      return await this.selectButtonRemappingProfile(profileId, { recordBinding: false });
+    }
+    if (profileId === null && this.connectedControllerMac === normalized) {
+      this.remapBindingAppliedForMac = null;
     }
     this.emitSnapshot();
     return this.getSnapshot();
@@ -4266,6 +4313,7 @@ export class BridgeService extends EventEmitter {
     }
     this.bindingAppliedForMac = mac;
     this.recordControllerHistory(mac);
+    await this.applyBoundButtonRemappingProfile(mac);
     const settings = this.settingsStore.get();
     const boundProfileId = settings.controllerBindings[mac];
     if (!boundProfileId || boundProfileId === settings.selectedControllerProfileId) {
@@ -4275,6 +4323,25 @@ export class BridgeService extends EventEmitter {
       return;
     }
     await this.selectControllerProfile(boundProfileId, { recordBinding: false });
+  }
+
+  // Tracked separately from bindingAppliedForMac: the two bindings are independent, so a
+  // controller can have a remap binding and no controller-profile binding, or the reverse.
+  private async applyBoundButtonRemappingProfile(mac: string): Promise<void> {
+    if (this.remapBindingAppliedForMac === mac) {
+      return;
+    }
+    this.remapBindingAppliedForMac = mac;
+    const settings = this.settingsStore.get();
+    const boundProfileId = settings.buttonRemappingBindings[mac];
+    if (!boundProfileId || boundProfileId === settings.selectedButtonRemappingProfileId) {
+      return;
+    }
+    // A binding pointing at a deleted profile is ignored rather than applied blindly.
+    if (!settings.buttonRemappingProfiles.some((profile) => profile.id === boundProfileId)) {
+      return;
+    }
+    await this.selectButtonRemappingProfile(boundProfileId, { recordBinding: false });
   }
 
   // Bind ANY controller to a profile by address, attached or not.
@@ -4350,6 +4417,7 @@ export class BridgeService extends EventEmitter {
     // history and claiming it worked.
     await this.sendCommand(COMMAND_ID.FORGET_CONTROLLER_PAIRINGS, 0);
     this.bindingAppliedForMac = null;
+    this.remapBindingAppliedForMac = null;
     this.snapshot.settings = this.settingsStore.update({ controllerHistory: [] });
     this.emitSnapshot();
     return this.getSnapshot();
@@ -4372,6 +4440,7 @@ export class BridgeService extends EventEmitter {
       // Forgetting the attached controller drops it, so the bound-profile latch has to go
       // too or the next controller inherits its binding decision.
       this.bindingAppliedForMac = null;
+      this.remapBindingAppliedForMac = null;
     }
     this.snapshot.settings = this.settingsStore.update({
       controllerHistory: this.settingsStore.get().controllerHistory
@@ -4522,6 +4591,7 @@ export class BridgeService extends EventEmitter {
     this.connectedBridgeUniqueId = null;
     this.connectedControllerMac = null;
     this.bindingAppliedForMac = null;
+    this.remapBindingAppliedForMac = null;
     this.syncAudioHelperBridgeTarget();
     if (device) {
       try {

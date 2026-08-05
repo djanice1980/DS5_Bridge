@@ -2622,6 +2622,31 @@ describe('BridgeService', () => {
     expect(snapshot.settings.controllerBindings[absent]).toBeUndefined();
   });
 
+  it('binds a button remapping profile independently of the controller profile', async () => {
+    // Remapping is a separate profile system -- a controller profile does not capture
+    // selectedButtonRemappingProfileId -- so the two bindings must not interfere.
+    const service = serviceFixture({
+      controllerProfiles: [{ id: 'profile-a', name: 'Racing', settings: {} }],
+      buttonRemappingProfiles: [{ id: 'remap-a', name: 'Southpaw', assignments: {} }]
+    });
+    const mac = 'aabbccddeeff';
+
+    let snapshot = await service.setButtonRemappingBinding(mac, 'remap-a');
+    expect(snapshot.settings.buttonRemappingBindings[mac]).toBe('remap-a');
+    expect(snapshot.settings.controllerBindings[mac]).toBeUndefined();
+
+    snapshot = await service.setControllerBinding(mac, 'profile-a');
+    expect(snapshot.settings.buttonRemappingBindings[mac]).toBe('remap-a');
+    expect(snapshot.settings.controllerBindings[mac]).toBe('profile-a');
+
+    snapshot = await service.setButtonRemappingBinding(mac, null);
+    expect(snapshot.settings.buttonRemappingBindings[mac]).toBeUndefined();
+    // Clearing one must not clear the other.
+    expect(snapshot.settings.controllerBindings[mac]).toBe('profile-a');
+
+    await expect(service.setButtonRemappingBinding(mac, 'remap-missing')).rejects.toThrow();
+  });
+
   it('accepts a formatted address and refuses an unknown profile', async () => {
     const service = serviceFixture({
       controllerProfiles: [{ id: 'profile-a', name: 'Racing', settings: {} }]
