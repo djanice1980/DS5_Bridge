@@ -3649,7 +3649,10 @@ export function App() {
   // Requires the BRIDGE too: status is retained after the bridge goes away, so
   // controllerConnected alone would keep claiming a controller is attached while the
   // subtitle underneath said "Bridge offline".
-  const controllerAttached = connected && controllerConnected;
+  // Same condition as controllerControlsAvailable, deliberately aliased rather than
+  // redefined: two independent spellings of "a controller is attached" is how half the
+  // controller-facing controls ended up gated on the bridge instead.
+  const controllerAttached = controllerControlsAvailable;
   // The card is only the CONNECTED controller. With nothing attached it holds nothing, and
   // every remembered controller belongs in the list -- previously slot 0 was reserved
   // regardless, so the newest one was absent from Previously Seen and had no Forget button.
@@ -3794,14 +3797,14 @@ export function App() {
     || audioInterleaveCommitPending;
   const activeInterleavePreset = audioInterleaveActivePreset(audioInterleaveRun, audioInterleaveAgeUs);
   const audioReactiveHapticsRouteSupported = audioReactiveHapticsSupported;
-  const audioReactiveHapticsBlocked = !connected
+  const audioReactiveHapticsBlocked = !controllerControlsAvailable
     || !audioReactiveHapticsSupported
     || !audioReactiveHapticsRouteSupported
     || !hapticsEnabled;
   // The on/off switch stays live even when Haptics is off -- toggling Audio Haptics on
   // turns Haptics on for you (see toggleAudioReactiveHapticsEnabled) rather than leaving
   // an inert switch. The config controls below still require Haptics to be on.
-  const audioReactiveHapticsControlDisabled = !connected
+  const audioReactiveHapticsControlDisabled = !controllerControlsAvailable
     || !audioReactiveHapticsSupported
     || pendingAction !== null
     || audioReactiveHapticsCommitPending;
@@ -3841,7 +3844,7 @@ export function App() {
       ? 'Mic Standby'
       : 'Off';
   const speakerOutputMissing = false;
-  const testHapticsUnavailable = !connected
+  const testHapticsUnavailable = !controllerControlsAvailable
     || !hapticsEnabled
     || pendingAction !== null
     || speakerVolumeCommitPending
@@ -3849,7 +3852,7 @@ export function App() {
     || testLocked
     || Boolean(snapshot?.status?.testHapticsBusy)
     || Boolean(snapshot?.status?.testHapticsCooldown);
-  const testRumbleUnavailable = !connected
+  const testRumbleUnavailable = !controllerControlsAvailable
     || !classicRumbleEnabled
     || pendingAction !== null
     || speakerVolumeCommitPending
@@ -3888,7 +3891,7 @@ export function App() {
   const activeFeedbackTestUnavailable = showClassicRumbleControl ? testRumbleUnavailable : testHapticsUnavailable;
   const activeFeedbackStatusLabel = showClassicRumbleControl ? rumbleStatusLabel : hapticsStatusLabel;
   const activeFeedbackStatusTone = showClassicRumbleControl ? rumbleStatusTone : hapticsStatusTone;
-  const testSpeakerUnavailable = !connected
+  const testSpeakerUnavailable = !controllerControlsAvailable
     || !speakerVolumeSupported
     || !speakerEnabled
     || pendingAction !== null
@@ -3897,7 +3900,7 @@ export function App() {
     || speakerTestLocked
     || gameStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy);
-  const testMicUnavailable = !connected
+  const testMicUnavailable = !controllerControlsAvailable
     || !duplexMicEnabled
     || pendingAction !== null
     || micVolumeCommitPending
@@ -4073,7 +4076,7 @@ export function App() {
       ? 'Active'
       : 'Enabled'
     : 'Off';
-  const testTriggersUnavailable = !connected
+  const testTriggersUnavailable = !controllerControlsAvailable
     || !adaptiveTriggersSupported
     || !adaptiveTriggersEnabled
     || pendingAction !== null
@@ -4137,7 +4140,8 @@ export function App() {
   const normalizedLightbarColor = normalizeHexColor(lightbarColor);
   const customSwatchColor = customLightbarColor ?? LIGHTBAR_DEFAULT_CUSTOM_COLOR;
   const customSwatchSelected = Boolean(customLightbarColor && normalizedLightbarColor === customLightbarColor);
-  const customColorPickerDisabled = !connected || !lightbarSupported || !lightbarEnabled;
+  const customColorPickerDisabled =
+    !controllerControlsAvailable || !lightbarSupported || !lightbarEnabled;
   const diagnosticsVisible = activeControlTab === 'system' && showDiagnostics;
   const ackText = useMemo(() => {
     if (!diagnosticsVisible) return '';
@@ -6239,7 +6243,7 @@ export function App() {
     const glyphUrl = side === 'l2' ? l2GlyphUrl : r2GlyphUrl;
     const targetLabel = side.toUpperCase();
     const active = triggerLabActiveForSide(side);
-    const labActionDisabled = !connected
+    const labActionDisabled = !controllerControlsAvailable
       || !adaptiveTriggersSupported
       || !adaptiveTriggersEnabled
       || pendingAction !== null;
