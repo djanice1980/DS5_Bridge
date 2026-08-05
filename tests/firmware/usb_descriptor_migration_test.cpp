@@ -793,6 +793,25 @@ void assert_connection_target_state_moves_the_phase(std::filesystem::path const 
     }
 }
 
+// bt_set_lightbar_color() overwrites saved_lightbar_*, so calling it with a literal colour on
+// connect does not just tint the controller -- it discards whatever the user configured, and
+// the scheduled restore then restores the literal. That is why a red lightbar came back blue
+// after every controller power cycle.
+void assert_connect_does_not_overwrite_the_saved_lightbar(std::filesystem::path const &root) {
+    const auto bt_cpp = remove_comments(read_text(root / "src" / "bt.cpp"));
+    const std::string connect = extract_between(
+        bt_cpp,
+        "reset_lightbar_setup();",
+        "bt_schedule_lightbar_restore("
+    );
+    if (connect.find("bt_set_lightbar_color(") != std::string::npos) {
+        throw std::runtime_error(
+            "Controller connect must not call bt_set_lightbar_color with a literal colour; "
+            "it overwrites the saved colour that the scheduled restore then replays"
+        );
+    }
+}
+
 void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const std::string closed = extract_between(
@@ -856,6 +875,7 @@ int main() {
         assert_hid_channel_close_notes_the_phase(source_root);
         assert_vendor_control_gates_share_one_interface_predicate(source_root);
         assert_connection_target_state_moves_the_phase(source_root);
+        assert_connect_does_not_overwrite_the_saved_lightbar(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

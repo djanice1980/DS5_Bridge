@@ -2849,7 +2849,15 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
                     init_feature();
                     reset_lightbar_setup();
-                    bt_set_lightbar_color(0x00, 0x00, 0xff, 100);
+                    // No hardcoded colour here. bt_set_lightbar_color() does not just write to
+                    // the controller, it OVERWRITES saved_lightbar_* -- so setting blue on
+                    // every connect destroyed the configured colour, and the restore below
+                    // then faithfully restored blue. A user's red came back blue after every
+                    // power cycle and no amount of re-sending from the app could win, because
+                    // the bridge clobbered it again on the next connect.
+                    //
+                    // The saved colour survives a controller disconnect (it is bridge RAM), so
+                    // the scheduled restore is what should decide the colour.
                     bt_schedule_lightbar_restore(250);
 
                 } else {
