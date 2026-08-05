@@ -3654,6 +3654,12 @@ export class BridgeService extends EventEmitter {
       && this.snapshot.status?.controllerConnected === true;
     if (controllerJustDisconnected) {
       this.connectedControllerMac = null;
+      // Release the once-per-identity latches. They exist to stop the SAME attached
+      // controller being reconfigured every poll, not to stop it being configured again after
+      // a power cycle -- and the same controller reconnecting keeps the same address, so
+      // without this it matched the latch and was skipped entirely.
+      this.bindingAppliedForMac = null;
+      this.remapBindingAppliedForMac = null;
     }
 
     this.snapshot = {
@@ -4386,10 +4392,14 @@ export class BridgeService extends EventEmitter {
       settings.controllerBindings,
       DEFAULT_CONTROLLER_PROFILE_ID
     );
-    if (boundProfileId === this.settingsStore.get().selectedControllerProfileId) {
-      return;
-    }
-    if (!settings.controllerProfiles.some((profile) => profile.id === boundProfileId)) {
+    const alreadySelected = boundProfileId === this.settingsStore.get().selectedControllerProfileId;
+    const known = settings.controllerProfiles.some((profile) => profile.id === boundProfileId);
+    if (alreadySelected || !known) {
+      // The assignment is already the selected profile, so there is nothing to switch -- but
+      // this controller has just powered on and holds NONE of these settings. Returning here
+      // is why a red lightbar came back blue after a power cycle: the profile was correct and
+      // simply never sent. The controller, not the app, is what needs convincing.
+      await this.applyCurrentSettings(this.settingsStore.get(), false);
       return;
     }
     await this.selectControllerProfile(boundProfileId, { recordBinding: false });
@@ -4446,11 +4456,15 @@ export class BridgeService extends EventEmitter {
       settings.buttonRemappingBindings,
       DEFAULT_BUTTON_REMAP_PROFILE_ID
     );
-    if (boundProfileId === this.settingsStore.get().selectedButtonRemappingProfileId) {
-      return;
-    }
+    const alreadySelected =
+      boundProfileId === this.settingsStore.get().selectedButtonRemappingProfileId;
     // A binding pointing at a deleted profile is ignored rather than applied blindly.
-    if (!settings.buttonRemappingProfiles.some((profile) => profile.id === boundProfileId)) {
+    const known = settings.buttonRemappingProfiles.some((profile) => profile.id === boundProfileId);
+    if (alreadySelected || !known) {
+      // Same reasoning as the controller profile: a controller that just powered on holds no
+      // remapping, so the right profile being selected already is not the same as it having
+      // been sent.
+      await this.applyButtonRemapping(this.settingsStore.get(), false);
       return;
     }
     await this.selectButtonRemappingProfile(boundProfileId, { recordBinding: false });

@@ -2649,11 +2649,14 @@ describe('BridgeService', () => {
 
     await poll(service);
 
-    const settings = service.getSnapshot().settings;
-    expect(settings.selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
+    // The connect path is dispatched with void, so poll() returns before it has finished.
+    await vi.waitFor(() => {
+      expect(service.getSnapshot().settings.selectedControllerProfileId)
+        .toBe(DEFAULT_CONTROLLER_PROFILE_ID);
+    });
     // Applying the implicit default must NOT write a binding -- that would silently pin a
     // controller the user never assigned.
-    expect(settings.controllerBindings['d42f4b857317']).toBeUndefined();
+    expect(service.getSnapshot().settings.controllerBindings['d42f4b857317']).toBeUndefined();
   });
 
   it('assigns a profile picked while nothing was attached to the next controller', async () => {
@@ -2677,10 +2680,13 @@ describe('BridgeService', () => {
 
     await poll(service);
 
+    // Wait on the BINDING, not the selection: the profile was picked while disconnected, so
+    // the selection already matches and would satisfy a wait immediately -- before adoption.
+    await vi.waitFor(() => {
+      expect(service.getSnapshot().settings.controllerBindings['d42f4b857317']).toBe('profile-a');
+    });
     const settings = service.getSnapshot().settings;
     expect(settings.selectedControllerProfileId).toBe('profile-a');
-    // Adopted, not merely inherited: the controller keeps it from now on.
-    expect(settings.controllerBindings['d42f4b857317']).toBe('profile-a');
     // Consumed, so a SECOND controller does not also pick it up.
     expect(settings.pendingControllerProfileAssignment).toBeNull();
   });
@@ -2704,7 +2710,9 @@ describe('BridgeService', () => {
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', first);
     await poll(service);
-    expect(service.getSnapshot().settings.selectedControllerProfileId).toBe('profile-a');
+    await vi.waitFor(() => {
+      expect(service.getSnapshot().settings.selectedControllerProfileId).toBe('profile-a');
+    });
 
     // A different controller arrives with no assignment of its own. Identity is read when the
     // transport is OPENED, not every poll, so this has to be a real disconnect/reconnect --
@@ -2722,9 +2730,11 @@ describe('BridgeService', () => {
     hidMock.state.openDevices.set('companion-path', second);
     await poll(service);
 
-    const settings = service.getSnapshot().settings;
-    expect(settings.selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
-    expect(settings.controllerBindings['aa1122334455']).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(service.getSnapshot().settings.selectedControllerProfileId)
+        .toBe(DEFAULT_CONTROLLER_PROFILE_ID);
+    });
+    expect(service.getSnapshot().settings.controllerBindings['aa1122334455']).toBeUndefined();
   });
 
   it('drops controller assignments when their profile is deleted', async () => {
@@ -2751,6 +2761,46 @@ describe('BridgeService', () => {
 
     await service.deleteControllerProfile('profile-a');
     expect(service.getSnapshot().settings.controllerBindings[mac]).toBeUndefined();
+  });
+
+  it('re-sends settings when a controller with an already-selected profile reconnects', async () => {
+    // A red lightbar came back blue after a power cycle. The assignment was correct and the
+    // profile was already selected, so the connect path had "nothing to switch" and returned
+    // without sending anything -- but the controller had just powered on holding none of it.
+    const service = serviceFixture({
+      controllerBindings: { d42f4b857317: 'profile-a' },
+      selectedControllerProfileId: 'profile-a',
+      lightbarEnabled: true,
+      lightbarColor: '#ff0000',
+      controllerProfiles: [
+        { id: DEFAULT_CONTROLLER_PROFILE_ID, name: 'Default', settings: {} },
+        { id: 'profile-a', name: 'Racing', settings: {} }
+      ]
+    });
+
+    const device = new MockHidDevice();
+    device.uniqueId = 'aabbccddeeff0011';
+    device.controllerMac = 'd42f4b857317';
+    device.status = statusReport({ controllerConnected: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    await poll(service);
+
+    // Power the controller off, then on again -- same controller, same address.
+    device.status = statusReport({ controllerConnected: false });
+    await poll(service);
+    device.sentReports = [];
+    device.status = statusReport({ controllerConnected: true });
+    await poll(service);
+
+    // The connect path is dispatched with void, so poll() returns before it has sent
+    // anything -- asserting immediately would pass or fail on timing rather than behaviour.
+    await vi.waitFor(() => {
+      const lightbar = device.sentReports.filter(
+        (report) => report[7] === COMMAND_ID.SET_LIGHTBAR_COLOR
+      );
+      expect(lightbar.length).toBeGreaterThan(0);
+    });
   });
 
   it('deletes an assigned profile with no controller attached', async () => {
