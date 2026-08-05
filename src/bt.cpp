@@ -255,6 +255,7 @@ static bool output_report_payload(
     uint16_t &payload_len
 );
 static void mirror_pending_classic_rumble_locked(uint8_t const *data, uint16_t len);
+static void note_connection_phase_connecting_if_idle();
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
@@ -425,6 +426,9 @@ static void clear_acl_connection_pending() {
 static void mark_acl_connection_pending() {
     acl_connection_pending = true;
     acl_connection_pending_at_us = time_us_32();
+    // See note_connection_target_found: the phase follows the state that derives it, at the
+    // point that state changes, rather than at whichever call site remembers to say so.
+    note_connection_phase_connecting_if_idle();
 }
 
 static void clear_outbound_inquiry_target() {
@@ -453,6 +457,23 @@ static void note_connection_phase(BtConnectionPhase next) {
     }
     connection_phase = next;
     phase_disagreement_reported = false; // Re-arm reporting for the new phase.
+}
+
+// derive_connection_phase() calls it Connecting as soon as device_found or
+// acl_connection_pending is set with no ACL handle yet. The tracked phase only moved at
+// begin_connection_attempt(), which runs on INQUIRY_COMPLETE -- but the target is latched
+// earlier, on the inquiry RESULT, and gap_inquiry_stop() is asynchronous. That gap is a real
+// window in which the two disagree, and it is what breadcrumb 12/1 (tracked Listening,
+// derived Connecting) reported from hardware.
+//
+// Rather than add another call site that has to remember, the phase now follows the state
+// that derives it. Guarded on the handle because Connecting is only the right answer while
+// there is no ACL connection -- with one up, the phase belongs to Securing or later.
+static void note_connection_phase_connecting_if_idle() {
+    if (acl_handle != HCI_CON_HANDLE_INVALID) {
+        return;
+    }
+    note_connection_phase(BtConnectionPhase::Connecting);
 }
 
 static void begin_connection_attempt() {
@@ -2129,6 +2150,10 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 DS5_LOG("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
                 bd_addr_copy(current_device_addr, addr);
                 device_found = true;
+                // Committed to this target: the inquiry is being stopped and the address is
+                // latched, so the connection is under way even though INQUIRY_COMPLETE (and
+                // begin_connection_attempt) has not arrived yet.
+                note_connection_phase_connecting_if_idle();
                 inquiry_active = false;
                 gap_inquiry_stop();
             }

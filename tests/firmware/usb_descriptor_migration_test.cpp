@@ -765,6 +765,34 @@ void assert_mic_pass_through_defaults_to_enabled(std::filesystem::path const &ro
 // at Ready, which is what the tracked=Ready / derived=HidOpening breadcrumb (12/67) reported
 // from hardware. The phase is still bookkeeping-only, so a drift like this is silent until
 // something starts gating on it -- hence a guard rather than trust.
+// derive_connection_phase() reads device_found and acl_connection_pending, so whatever sets
+// them has to move the tracked phase in the same breath. Setting one without the other is a
+// silent disagreement -- breadcrumb 12/1 (tracked Listening, derived Connecting) came from
+// latching the inquiry target on the inquiry RESULT while the phase waited for
+// INQUIRY_COMPLETE. Both setters go through the same helper so a new call site cannot
+// reintroduce the gap by forgetting.
+void assert_connection_target_state_moves_the_phase(std::filesystem::path const &root) {
+    const auto bt_cpp = remove_comments(read_text(root / "src" / "bt.cpp"));
+
+    const std::string pending = extract_between(
+        bt_cpp,
+        "static void mark_acl_connection_pending()",
+        "\n}\n"
+    );
+    if (pending.find("note_connection_phase_connecting_if_idle();") == std::string::npos) {
+        throw std::runtime_error(
+            "mark_acl_connection_pending must move the connection phase to Connecting"
+        );
+    }
+
+    const std::string found = extract_between(bt_cpp, "device_found = true;", "gap_inquiry_stop();");
+    if (found.find("note_connection_phase_connecting_if_idle();") == std::string::npos) {
+        throw std::runtime_error(
+            "Latching an inquiry target must move the connection phase to Connecting"
+        );
+    }
+}
+
 void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const std::string closed = extract_between(
@@ -827,6 +855,7 @@ int main() {
         assert_mic_pass_through_defaults_to_enabled(source_root);
         assert_hid_channel_close_notes_the_phase(source_root);
         assert_vendor_control_gates_share_one_interface_predicate(source_root);
+        assert_connection_target_state_moves_the_phase(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex
