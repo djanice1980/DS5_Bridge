@@ -2655,6 +2655,77 @@ describe('BridgeService', () => {
     expect(settings.controllerBindings['d42f4b857317']).toBeUndefined();
   });
 
+  it('assigns a profile picked while nothing was attached to the next controller', async () => {
+    const service = serviceFixture({
+      controllerProfiles: [
+        { id: DEFAULT_CONTROLLER_PROFILE_ID, name: 'Default', settings: {} },
+        { id: 'profile-a', name: 'Racing', settings: {} }
+      ]
+    });
+    // Picked with no controller attached -- this is the "chose it for the controller before
+    // plugging it in" case.
+    await service.selectControllerProfile('profile-a');
+    expect(service.getSnapshot().settings.pendingControllerProfileAssignment).toBe('profile-a');
+
+    const device = new MockHidDevice();
+    device.uniqueId = 'aabbccddeeff0011';
+    device.controllerMac = 'd42f4b857317';
+    device.status = statusReport({ controllerConnected: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const settings = service.getSnapshot().settings;
+    expect(settings.selectedControllerProfileId).toBe('profile-a');
+    // Adopted, not merely inherited: the controller keeps it from now on.
+    expect(settings.controllerBindings['d42f4b857317']).toBe('profile-a');
+    // Consumed, so a SECOND controller does not also pick it up.
+    expect(settings.pendingControllerProfileAssignment).toBeNull();
+  });
+
+  it('does not leak one controller\'s assignment to the next controller', async () => {
+    // The distinction that makes this more than "inherit whatever is selected": applying an
+    // existing assignment changes the selection too, and that must not follow the next
+    // controller to connect.
+    const service = serviceFixture({
+      controllerBindings: { d42f4b857317: 'profile-a' },
+      controllerProfiles: [
+        { id: DEFAULT_CONTROLLER_PROFILE_ID, name: 'Default', settings: {} },
+        { id: 'profile-a', name: 'Racing', settings: {} }
+      ]
+    });
+
+    const first = new MockHidDevice();
+    first.uniqueId = 'aabbccddeeff0011';
+    first.controllerMac = 'd42f4b857317';
+    first.status = statusReport({ controllerConnected: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', first);
+    await poll(service);
+    expect(service.getSnapshot().settings.selectedControllerProfileId).toBe('profile-a');
+
+    // A different controller arrives with no assignment of its own. Identity is read when the
+    // transport is OPENED, not every poll, so this has to be a real disconnect/reconnect --
+    // and the service only drops a transport it already holds when a read fails, so emptying
+    // the device list is not enough on its own.
+    first.emit('close');
+    hidMock.state.openDevices.clear();
+    hidMock.state.devicesList = [];
+
+    const second = new MockHidDevice();
+    second.uniqueId = 'aabbccddeeff0011';
+    second.controllerMac = 'aa1122334455';
+    second.status = statusReport({ controllerConnected: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', second);
+    await poll(service);
+
+    const settings = service.getSnapshot().settings;
+    expect(settings.selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
+    expect(settings.controllerBindings['aa1122334455']).toBeUndefined();
+  });
+
   it('binds a button remapping profile independently of the controller profile', async () => {
     // Remapping is a separate profile system -- a controller profile does not capture
     // selectedButtonRemappingProfileId -- so the two bindings must not interfere.

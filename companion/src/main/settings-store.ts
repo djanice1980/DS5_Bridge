@@ -175,6 +175,8 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   bridgeIdentities: {},
   controllerBindings: {},
   buttonRemappingBindings: {},
+  pendingControllerProfileAssignment: null,
+  pendingButtonRemappingAssignment: null,
   controllerHistory: [],
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
@@ -953,6 +955,8 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     bridgeIdentities: normalizeBridgeIdentities(value?.bridgeIdentities),
     controllerBindings: normalizeControllerBindings(value?.controllerBindings),
     buttonRemappingBindings: normalizeControllerBindings(value?.buttonRemappingBindings),
+    pendingControllerProfileAssignment: normalizeOptionalProfileId(value?.pendingControllerProfileAssignment),
+    pendingButtonRemappingAssignment: normalizeOptionalProfileId(value?.pendingButtonRemappingAssignment),
     controllerHistory: normalizeControllerHistory(value?.controllerHistory),
     micVolumePercent: Number.isFinite(value?.micVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))
@@ -1404,6 +1408,10 @@ function normalizeControllerHistory(value: unknown): ControllerHistoryEntry[] {
     }
   }
   return result;
+}
+
+function normalizeOptionalProfileId(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 function normalizeControllerBindings(value: unknown): Record<string, string> {

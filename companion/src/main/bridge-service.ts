@@ -3046,6 +3046,14 @@ export class BridgeService extends EventEmitter {
     options: { recordBinding?: boolean } = {}
   ): Promise<BridgeSnapshot> {
     this.snapshot.settings = this.settingsStore.selectControllerProfile(profileId);
+    // Picked with nothing attached: hold it for the next controller to connect, which adopts
+    // it as its own assignment. recordBinding false means WE applied an existing assignment,
+    // which must never become a pending pick for a different controller.
+    if (options.recordBinding !== false && !this.connectedControllerMac) {
+      this.snapshot.settings = this.settingsStore.update({
+        pendingControllerProfileAssignment: profileId
+      });
+    }
     if (options.recordBinding !== false && this.connectedControllerMac) {
       const bindings = this.settingsStore.get().controllerBindings;
       if (bindings[this.connectedControllerMac] !== profileId) {
@@ -3106,6 +3114,11 @@ export class BridgeService extends EventEmitter {
     options: { recordBinding?: boolean } = {}
   ): Promise<BridgeSnapshot> {
     this.snapshot.settings = this.settingsStore.selectButtonRemappingProfile(profileId);
+    if (options.recordBinding !== false && !this.connectedControllerMac) {
+      this.snapshot.settings = this.settingsStore.update({
+        pendingButtonRemappingAssignment: profileId
+      });
+    }
     // Picking a remap profile while a controller is attached makes it that controller's
     // default, mirroring how controller profiles already behave. recordBinding is false only
     // when WE are applying an existing binding, which must not rewrite it.
@@ -3285,6 +3298,13 @@ export class BridgeService extends EventEmitter {
       if (!this.device) {
         throw new Error('No companion bridge is connected.');
       }
+      // Hold the transport for the whole exchange. this.device is nulled the moment the
+      // transport closes, and a disconnect mid-command lands BETWEEN the write and the ACK
+      // read -- dereferencing this.device there threw a TypeError, which
+      // isBridgeTransportError cannot classify, so allowAckTransportLoss (the path that
+      // exists for exactly this) could never absorb it. Using the closed transport instead
+      // raises a real transport error.
+      const device = this.device;
 
       const sequence = this.nextSequence();
       const protocolMinor = this.commandProtocolMinorFor(options);
@@ -3293,7 +3313,7 @@ export class BridgeService extends EventEmitter {
         const commandReport = protocolMinor === undefined
           ? buildCommandReport(commandId, sequence, value, options.extraPayload)
           : buildCommandReport(commandId, sequence, value, options.extraPayload, { protocolMinor });
-        await this.device.sendFeatureReport(commandReport);
+        await device.sendFeatureReport(commandReport);
       } catch (error) {
         if (!options.allowAckTransportLoss || !isBridgeTransportError(error)) {
           throw error;
@@ -3302,7 +3322,7 @@ export class BridgeService extends EventEmitter {
       }
       let ack: BridgeAckPayload;
       try {
-        const rawAckReport = await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH);
+        const rawAckReport = await device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH);
         ack = options.allowProtocolMismatch
           ? parseAckReport(rawAckReport, { allowProtocolMismatch: true })
           : parseAckReport(rawAckReport);
@@ -4317,18 +4337,56 @@ export class BridgeService extends EventEmitter {
     this.recordControllerHistory(mac);
     await this.applyBoundButtonRemappingProfile(mac);
     const settings = this.settingsStore.get();
-    // No binding means Default, not "leave whatever is selected". Without this the Devices row
-    // would read Default for an unbound controller while the controller actually ran whichever
-    // profile happened to be active -- the row claiming a profile that is not running is the
-    // exact failure this avoids.
-    const boundProfileId = settings.controllerBindings[mac] ?? DEFAULT_CONTROLLER_PROFILE_ID;
-    if (boundProfileId === settings.selectedControllerProfileId) {
+    // Default UNLESS assigned. An assignment is either this controller's own, or a profile
+    // the user picked while nothing was attached -- which the first controller to connect
+    // adopts and keeps. Anything else falls to Default rather than inheriting whichever
+    // profile happened to be selected.
+    const boundProfileId = this.adoptPendingAssignment(
+      mac,
+      settings.controllerBindings[mac],
+      settings.pendingControllerProfileAssignment,
+      settings.controllerProfiles.map((profile) => profile.id),
+      (bindings, pending) => ({
+        controllerBindings: bindings,
+        pendingControllerProfileAssignment: pending
+      }),
+      settings.controllerBindings,
+      DEFAULT_CONTROLLER_PROFILE_ID
+    );
+    if (boundProfileId === this.settingsStore.get().selectedControllerProfileId) {
       return;
     }
     if (!settings.controllerProfiles.some((profile) => profile.id === boundProfileId)) {
       return;
     }
     await this.selectControllerProfile(boundProfileId, { recordBinding: false });
+  }
+
+  // Resolves which profile a connecting controller should run, and promotes a pending pick
+  // into a real assignment so the Devices row and the controller agree from then on.
+  private adoptPendingAssignment(
+    mac: string,
+    existing: string | undefined,
+    pending: string | null,
+    knownProfileIds: string[],
+    toUpdate: (bindings: Record<string, string>, pending: string | null) => Partial<CompanionSettings>,
+    bindings: Record<string, string>,
+    defaultProfileId: string
+  ): string {
+    if (existing) {
+      return existing;
+    }
+    // A pending pick naming a profile that has since been deleted is dropped, not applied.
+    if (pending && knownProfileIds.includes(pending)) {
+      this.snapshot.settings = this.settingsStore.update(
+        toUpdate({ ...bindings, [mac]: pending }, null)
+      );
+      return pending;
+    }
+    if (pending) {
+      this.snapshot.settings = this.settingsStore.update(toUpdate(bindings, null));
+    }
+    return defaultProfileId;
   }
 
   // Tracked separately from bindingAppliedForMac: the two bindings are independent, so a
@@ -4339,12 +4397,23 @@ export class BridgeService extends EventEmitter {
     }
     this.remapBindingAppliedForMac = mac;
     const settings = this.settingsStore.get();
-    // Same rule as controller profiles: unbound means Default. The Default remap profile is
-    // empty, so this is "no remapping" -- which is why the picker offers no separate empty
-    // entry; it would be a second name for this state.
-    const boundProfileId = settings.buttonRemappingBindings[mac]
-      ?? DEFAULT_BUTTON_REMAP_PROFILE_ID;
-    if (boundProfileId === settings.selectedButtonRemappingProfileId) {
+    // Same rule as controller profiles: Default unless assigned, and a pick made with nothing
+    // attached is adopted by the first controller to connect. The Default remap profile is
+    // empty, so Default here means "no remapping" -- which is why the picker offers no
+    // separate empty entry; it would be a second name for this state.
+    const boundProfileId = this.adoptPendingAssignment(
+      mac,
+      settings.buttonRemappingBindings[mac],
+      settings.pendingButtonRemappingAssignment,
+      settings.buttonRemappingProfiles.map((profile) => profile.id),
+      (bindings, pending) => ({
+        buttonRemappingBindings: bindings,
+        pendingButtonRemappingAssignment: pending
+      }),
+      settings.buttonRemappingBindings,
+      DEFAULT_BUTTON_REMAP_PROFILE_ID
+    );
+    if (boundProfileId === this.settingsStore.get().selectedButtonRemappingProfileId) {
       return;
     }
     // A binding pointing at a deleted profile is ignored rather than applied blindly.

@@ -65,6 +65,13 @@ export interface CompanionSettings {
   // what an already-saved controller profile captures does not change underneath anyone.
   // Controller BT address (hex) -> button remapping profile id.
   buttonRemappingBindings: Record<string, string>;
+  // A profile the USER picked while no controller was attached. The next controller to
+  // connect without an assignment of its own adopts it and keeps it. Null once adopted.
+  // Deliberately not just "whatever is selected": we also change the selection ourselves when
+  // applying another controller's assignment, and that must NOT propagate to the next
+  // controller that happens to connect.
+  pendingControllerProfileAssignment: string | null;
+  pendingButtonRemappingAssignment: string | null;
   // Devices tab: controllers seen by this companion, newest first.
   controllerHistory: ControllerHistoryEntry[];
   micVolumePercent: number;
