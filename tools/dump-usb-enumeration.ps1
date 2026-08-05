@@ -6,15 +6,15 @@
 .DESCRIPTION
     Uses only built-in PowerShell -- no SDK, no usbview, nothing to install.
 
-    The interesting part is usbflags. Windows queries a device's MS OS descriptors ONCE per
-    VID/PID/REV and caches the answer under
-    HKLM\SYSTEM\CurrentControlSet\Control\usbflags\<VID><PID><REV> as a value named 'osvc'.
-    If the first enumeration failed to produce a usable descriptor, osvc is cached as
-    00 00 ("does not support MS OS descriptors") and Windows NEVER ASKS AGAIN -- so a later,
-    fixed firmware still will not get a WinUSB binding until that cache entry is removed.
+    The usbflags section records the MS OS 1.0 string-descriptor probe, NOT MS OS 2.0.
+    Windows probes once per VID/PID/REV and caches the answer under
+    HKLM\SYSTEM\CurrentControlSet\Control\usbflags\<VID><PID><REV> as a value named 'osvc';
+    00 00 means "does not support MS OS 1.0 descriptors" and it will not ask again.
 
-    That matters here: the companion-only device (PID 0x0CE7) first enumerated with a broken
-    MS OS 2.0 descriptor, so its cache entry is very likely poisoned.
+    This firmware uses MS OS 2.0, which is fetched via BOS instead, so an ABSENT or 00 00
+    osvc entry is normal here and does not by itself explain a missing WinUSB binding. Read
+    the ProblemCode in the first section for that. -ClearOsDescriptorCache is kept because
+    clearing the entry also forces a fresh device install, which is occasionally useful.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File tools\dump-usb-enumeration.ps1
@@ -73,9 +73,9 @@ if (-not $found) {
     Write-Host 'No bridge device is present. Plug it in, or the firmware is not attaching at all.' -ForegroundColor Yellow
 }
 
-Write-Section 'MS OS descriptor cache (usbflags)'
-Write-Host 'osvc = 01 00 -> Windows queried and the device answered (WinUSB can bind).'
-Write-Host 'osvc = 00 00 -> cached as "no MS OS support"; Windows will NOT ask again.'
+Write-Section 'MS OS 1.0 descriptor cache (usbflags)'
+Write-Host 'This is the MS OS 1.0 probe only. This firmware uses MS OS 2.0 (fetched via BOS),'
+Write-Host 'so absent or 00 00 here is EXPECTED and is not the reason WinUSB failed to bind.'
 Write-Host ''
 
 $usbflags = 'HKLM:\SYSTEM\CurrentControlSet\Control\usbflags'
@@ -95,13 +95,7 @@ foreach ($entry in $entries) {
     $text = if ($null -eq $osvc) { '(absent -- will be queried on next plug-in)' }
             else { ($osvc | ForEach-Object { '{0:X2}' -f $_ }) -join ' ' }
 
-    $poisoned = ($null -ne $osvc) -and ($osvc.Length -ge 1) -and ($osvc[0] -eq 0)
-    $colour = if ($poisoned) { 'Red' } else { 'Green' }
-    Write-Host ("{0}  osvc = {1}" -f $key, $text) -ForegroundColor $colour
-    if ($poisoned) {
-        Write-Host '   ^ POISONED: Windows cached "no MS OS descriptors" for this VID/PID/REV.' -ForegroundColor Red
-        Write-Host '     WinUSB will not bind until this entry is deleted, however correct the firmware is.' -ForegroundColor Red
-    }
+    Write-Host ("{0}  osvc = {1}" -f $key, $text) -ForegroundColor DarkGray
 
     if ($ClearOsDescriptorCache) {
         try {

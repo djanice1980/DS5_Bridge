@@ -56,6 +56,9 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #define MS_OS_20_XUSB_FUNCTION_DESC_LEN 0x001C
 #define VENDOR_MS_OS_20_DESC_LEN 0x00B2
 #define VENDOR_MS_OS_20_DESC_LEN_XUSB (VENDOR_MS_OS_20_DESC_LEN + MS_OS_20_XUSB_FUNCTION_DESC_LEN)
+// Companion-only is not a composite device, so its set carries no configuration/function
+// subsets -- see desc_ms_os_20_idle. Set header + compatible ID + registry property only.
+#define MS_OS_20_IDLE_DESC_LEN (0x000A + 0x0014 + MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN)
 #define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
 #define KEYBOARD_HID_REPORT_DESC_LEN 0x002D
 #ifdef ENABLE_DSE
@@ -857,7 +860,18 @@ uint8_t const desc_bos_xusb[] = {
     TUD_BOS_MS_OS_20_DESCRIPTOR(VENDOR_MS_OS_20_DESC_LEN_XUSB, VENDOR_MS_OS_VENDOR_REQUEST)
 };
 
+// BOS advertises how many bytes the MS OS 2.0 set contains, and the companion-only set is a
+// different size. Advertising 0xB2 and then returning 0xA2 leaves Windows short-read, so the
+// idle device needs its own BOS rather than sharing the composite one.
+uint8_t const desc_bos_idle[] = {
+    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+    TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_IDLE_DESC_LEN, VENDOR_MS_OS_VENDOR_REQUEST)
+};
+
 uint8_t const *tud_descriptor_bos_cb(void) {
+    if (host_bridge_companion_only()) {
+        return desc_bos_idle;
+    }
     return host_persona_active() == HostPersonaModeXusb360 ? desc_bos_xusb : desc_bos;
 }
 
@@ -902,40 +916,55 @@ uint8_t const desc_ms_os_20[] = {
 
 TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == VENDOR_MS_OS_20_DESC_LEN, "Incorrect MS OS 2.0 descriptor size");
 
-// Offset of bFirstInterface within desc_ms_os_20, spelled out rather than hardcoded because
-// getting it wrong once already cost a release: the first attempt used 0x12, which is the
-// function subset header's wLength, not the interface byte four bytes later.
+// Companion-only MS OS 2.0 descriptor set.
 //
-//   set header            10 bytes   [0..9]
-//   configuration subset   8 bytes   [10..17]
-//   function subset        8 bytes   [18..25]
-//     wLength         [18,19]
-//     wDescriptorType [20,21]
-//     bFirstInterface [22]  <- this one
-#define MS_OS_20_SET_HEADER_LEN 0x0A
-#define MS_OS_20_CONFIG_SUBSET_HEADER_LEN 0x08
-#define MS_OS_20_FUNCTION_INTERFACE_OFFSET \
-    (MS_OS_20_SET_HEADER_LEN + MS_OS_20_CONFIG_SUBSET_HEADER_LEN + 4)
+// This is a DIFFERENT SHAPE, not a patched copy of the composite one, and the reason is worth
+// writing down because two releases were spent on the wrong theory.
+//
+// The full device exposes six interfaces, so Windows loads usbccgp, which creates one child
+// device per interface. A function subset names one of those children, and WinUSB binds to
+// the child. The companion-only configuration has a SINGLE interface, so the device is not
+// composite: usbccgp never loads, no child device exists, and a function subset names
+// something that is not there. Windows finds nothing to bind and reports ProblemCode 28.
+//
+// For a non-composite device the features apply to the device itself, so the compatible ID
+// and the registry property sit directly under the set header -- no configuration subset, no
+// function subset. Renumbering the interface (the previous fix) was never the issue.
+static uint8_t const desc_ms_os_20_idle[] = {
+    // Set header: length, type, Windows version, total length.
+    U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR),
+    U32_TO_U8S_LE(0x06030000), U16_TO_U8S_LE(MS_OS_20_IDLE_DESC_LEN),
 
-static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_idle[VENDOR_MS_OS_20_DESC_LEN];
-static bool desc_ms_os_20_idle_ready = false;
+    // Compatible ID: bind the DEVICE to WinUSB.
+    U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
+    'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
-static uint8_t const *build_idle_ms_os_20_descriptor(void) {
-    if (!desc_ms_os_20_idle_ready) {
-        memcpy(desc_ms_os_20_idle, desc_ms_os_20, sizeof(desc_ms_os_20));
-        // If either MS OS 2.0 header ever changes size this offset stops naming the
-        // interface byte. Patching regardless would corrupt the descriptor; leaving it
-        // unpatched instead means WinUSB simply does not bind, which is a visible failure
-        // rather than a subtly malformed one.
-        if (desc_ms_os_20_idle[MS_OS_20_FUNCTION_INTERFACE_OFFSET] == VENDOR_BRIDGE_INTERFACE_NUMBER) {
-            desc_ms_os_20_idle[MS_OS_20_FUNCTION_INTERFACE_OFFSET] = HOST_BRIDGE_IDLE_INTERFACE_NUMBER;
-        }
-        // Else: left unpatched deliberately. No logging here -- this is a C translation unit
-        // and DS5_LOG lives in a C++ header.
-        desc_ms_os_20_idle_ready = true;
-    }
-    return desc_ms_os_20_idle;
-}
+    // Registry property: the same DeviceInterfaceGUIDs value as the composite descriptor, so
+    // the companion finds this device under exactly the GUID it already looks for.
+    U16_TO_U8S_LE(MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN),
+    U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
+    U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A),
+    'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00,
+    'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
+    'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00,
+    'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00,
+    0x00, 0x00,
+    U16_TO_U8S_LE(0x0050),
+    '{', 0x00, 'E', 0x00, '4', 0x00, 'C', 0x00, '8', 0x00,
+    'B', 0x00, '2', 0x00, 'A', 0x00, '9', 0x00, '-', 0x00,
+    '8', 0x00, '7', 0x00, 'F', 0x00, '5', 0x00, '-', 0x00,
+    '4', 0x00, 'C', 0x00, '4', 0x00, 'C', 0x00, '-', 0x00,
+    '9', 0x00, 'E', 0x00, '5', 0x00, '2', 0x00, '-', 0x00,
+    '2', 0x00, 'B', 0x00, '4', 0x00, 'C', 0x00, '1', 0x00,
+    'B', 0x00, '8', 0x00, 'B', 0x00, '4', 0x00, 'F', 0x00,
+    '6', 0x00, '2', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+TU_VERIFY_STATIC(
+    sizeof(desc_ms_os_20_idle) == MS_OS_20_IDLE_DESC_LEN,
+    "Incorrect companion-only MS OS 2.0 descriptor size"
+);
 
 static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_xusb[VENDOR_MS_OS_20_DESC_LEN_XUSB];
 static bool desc_ms_os_20_xusb_ready = false;
@@ -1034,10 +1063,10 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
         uint8_t const *descriptor = desc_ms_os_20;
         uint16_t descriptor_len = VENDOR_MS_OS_20_DESC_LEN;
         if (host_bridge_companion_only()) {
-            // Same descriptor, one byte different: the function subset header names the
-            // interface WinUSB binds to, and companion-only renumbers it to 0. Patched at
-            // runtime rather than duplicated, so the GUID and layout cannot drift apart.
-            descriptor = build_idle_ms_os_20_descriptor();
+            // Non-composite shape, and a shorter one. The length must move with the
+            // descriptor -- desc_bos_idle advertises this same value.
+            descriptor = desc_ms_os_20_idle;
+            descriptor_len = MS_OS_20_IDLE_DESC_LEN;
         } else if (host_persona_active() == HostPersonaModeXusb360) {
             descriptor_len = build_xusb_ms_os_20_descriptor();
             descriptor = desc_ms_os_20_xusb;
