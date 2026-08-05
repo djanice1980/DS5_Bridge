@@ -784,6 +784,25 @@ function formatLastSeen(timestamp: number): string {
 // A profile picker must never render an empty label. If a profile's name is ever
 // blank at runtime, fall back to a sensible name (and surface the id for anything
 // unexpected so the real cause is visible rather than a blank box).
+// Four bars keyed to the same thresholds as the Overview signal label, so the two readouts
+// can never tell different stories about the same link. Purely decorative: the text label
+// carries the meaning and the dBm value stays in the tooltip, because bars alone cannot say
+// "Audio Risk" -- which is the one level worth acting on.
+function SignalBars({ quality }: { quality: string | null }) {
+  const filled = quality === 'Excellent' ? 4
+    : quality === 'Good' ? 3
+      : quality === 'Audio Risk' ? 2
+        : quality === 'Poor' ? 1
+          : 0;
+  return (
+    <span className="signal-bars" aria-hidden="true">
+      {[1, 2, 3, 4].map((step) => (
+        <i key={step} className={step <= filled ? 'on' : ''} />
+      ))}
+    </span>
+  );
+}
+
 function profileDisplayName(name: string | undefined, id: string): string {
   const trimmed = typeof name === 'string' ? name.trim() : '';
   if (trimmed.length > 0) return trimmed;
@@ -6810,7 +6829,9 @@ export function App() {
                 </div>
               </button>
 
-              <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
+              {/* Devices, not System: this card is about the Bluetooth link to the
+                  controller, and Devices is where signal, pairing and controllers live. */}
+              <button className="overview-card" type="button" onClick={() => selectControlTab('devices')}>
                 <div className="overview-card-title">
                   <span className="feature-icon overview-icon"><IconBluetooth size={19} /></span>
                   <h3>Wireless</h3>
@@ -9472,11 +9493,29 @@ export function App() {
                       </span>
                     </div>
                     <div className="settings-menu-row">
+                      <div className="settings-menu-copy"><strong>Signal</strong></div>
+                      {/* Tone on the WRAPPER so the bars (currentColor) and the label share
+                          one colour source and cannot disagree. The .signal-value tone rules
+                          are scoped to .overview-fields and do not reach this tab. */}
+                      <span
+                        className={`devices-signal ${overviewSignalTone}`}
+                        title={overviewSignalTitle}
+                      >
+                        <SignalBars quality={overviewSignalQuality} />
+                        <span>{overviewSignalLabel}</span>
+                      </span>
+                    </div>
+                    {/* Profile label on its own line with the two pickers side by side
+                        beneath it: at this width they cannot sit beside the label without
+                        truncating to "De..." / "No...". */}
+                    <div className="settings-menu-row devices-profile-row">
                       <div className="settings-menu-copy"><strong>Profile</strong></div>
-                      {renderControllerBinding(
-                        devicesCurrentEntry.mac,
-                        controllerTypeLabel(devicesCurrentEntry.controllerType)
-                      )}
+                      <div className="devices-row-controls">
+                        {renderControllerBinding(
+                          devicesCurrentEntry.mac,
+                          controllerTypeLabel(devicesCurrentEntry.controllerType)
+                        )}
+                      </div>
                     </div>
                   </div>
                 ) : (

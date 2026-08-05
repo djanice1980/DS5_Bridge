@@ -3122,6 +3122,52 @@ button.overview-shortcut-chip {
   gap: 8px;
 }
 
+/* Label on its own line, pickers side by side beneath it. */
+.devices-page .devices-profile-row {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+.devices-page .devices-profile-row .settings-menu-copy {
+  flex: 1 1 100%;
+}
+
+.devices-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.devices-signal.good { color: var(--success); }
+.devices-signal.warn { color: var(--warning); }
+.devices-signal.bad { color: var(--danger); }
+.devices-signal.idle { color: var(--text-control); }
+
+/* Four bars rising left to right. Dim by default; .on lights them in the tone colour of the
+   text beside them, so bars and label always agree. */
+.signal-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+
+.signal-bars i {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--surface-border-strong);
+}
+
+.signal-bars i:nth-child(1) { height: 5px; }
+.signal-bars i:nth-child(2) { height: 8px; }
+.signal-bars i:nth-child(3) { height: 11px; }
+.signal-bars i:nth-child(4) { height: 14px; }
+
+.signal-bars i.on {
+  background: currentColor;
+}
+
 /* flex-basis 0 so both pickers share the leftover width evenly and shrink together as the
    row narrows, rather than one fixed width deciding whether the forget button still fits. */
 .devices-page .controller-binding-select {
