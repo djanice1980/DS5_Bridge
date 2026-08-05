@@ -812,6 +812,26 @@ void assert_connect_does_not_overwrite_the_saved_lightbar(std::filesystem::path 
     }
 }
 
+// The host writing the lightbar must be reclaimed at most ONCE per controller connection.
+// Scheduling on every host write would re-push the configured colour continuously and fight
+// games that animate the lightbar; scheduling only when the host CLEARS the LEDs (the old
+// behaviour) missed Windows setting it blue, so the configured colour survived only by luck.
+void assert_host_lightbar_reclaim_is_bounded(std::filesystem::path const &root) {
+    const auto main_cpp = remove_comments(read_text(root / "src" / "main.cpp"));
+    const auto schedule = main_cpp.find("bt_schedule_lightbar_restore(HOST_LIGHTBAR_RESTORE_DELAY_MS)");
+    if (schedule == std::string::npos) {
+        throw std::runtime_error("Host lightbar reclaim is gone");
+    }
+    // The claim must gate the schedule, so the reclaim cannot become continuous.
+    const auto claim = main_cpp.rfind("bt_claim_host_lightbar_correction()", schedule);
+    if (claim == std::string::npos) {
+        throw std::runtime_error(
+            "Host lightbar restore must be gated on bt_claim_host_lightbar_correction(), "
+            "or it re-pushes the colour on every host write"
+        );
+    }
+}
+
 void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const std::string closed = extract_between(
@@ -876,6 +896,7 @@ int main() {
         assert_vendor_control_gates_share_one_interface_predicate(source_root);
         assert_connection_target_state_moves_the_phase(source_root);
         assert_connect_does_not_overwrite_the_saved_lightbar(source_root);
+        assert_host_lightbar_reclaim_is_bounded(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

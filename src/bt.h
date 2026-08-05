@@ -108,6 +108,8 @@ void bt_replay_adaptive_trigger_effect(
 );
 void bt_reset_adaptive_triggers();
 void bt_schedule_lightbar_restore(uint32_t delay_ms);
+// True at most once per controller connection -- see bt.cpp.
+bool bt_claim_host_lightbar_correction();
 void bt_lightbar_loop();
 void bt_signal_strength_loop();
 void bt_inquiry_loop();

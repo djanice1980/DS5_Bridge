@@ -99,7 +99,6 @@ void controller_output_submit_usb_payload(uint8_t const *payload, uint16_t paylo
     }
 
     const bool lightbarOverride = companion_lightbar_override_active();
-    const bool hostClearsLeds = controller_output_policy_host_output_clears_leds(outputData + 3, payloadLen);
 #ifdef ENABLE_COMPANION
     const bool triggerIntensityChanged = companion_apply_trigger_effect_intensity(outputData + 3, payloadLen);
     uint8_t companionOutput[sizeof(outputData)]{};
@@ -159,7 +158,13 @@ void controller_output_submit_usb_payload(uint8_t const *payload, uint16_t paylo
     // Haptics gain is applied to audio samples. Output report motor
     // bytes are classic rumble and must follow the rumble setting.
     bt_write_classified_output(outputData, sizeof(outputData));
-    if (hostClearsLeds && !lightbarOverride) {
+    // The host drives the lightbar during its own startup -- Windows sets it blue -- which
+    // lands after the connect-time restore and overwrites the configured colour. Reclaim it
+    // ONCE per connection: enough to make the configured colour stick, bounded so a game
+    // running a lighting effect is not fought every frame, and never a continuous re-push.
+    if (!lightbarOverride
+        && controller_output_policy_host_output_touches_leds(outputData + 3, payloadLen)
+        && bt_claim_host_lightbar_correction()) {
         bt_schedule_lightbar_restore(HOST_LIGHTBAR_RESTORE_DELAY_MS);
     }
 }

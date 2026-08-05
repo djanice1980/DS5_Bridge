@@ -28,5 +28,6 @@ bool controller_output_policy_sanitize_host_lightbar_payload(
     bool lightbar_override
 );
 bool controller_output_policy_host_output_clears_leds(uint8_t const *payload, uint16_t len);
+bool controller_output_policy_host_output_touches_leds(uint8_t const *payload, uint16_t len);
 
 #endif // DS5_BRIDGE_CONTROLLER_OUTPUT_POLICY_H

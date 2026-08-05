@@ -265,6 +265,19 @@ bool controller_output_policy_sanitize_host_lightbar_payload(
     return changed;
 }
 
+// Any host attempt to drive the LEDs, not only the ones that clear them.
+//
+// clears_leds() only reports a release, a cleared player indicator, or a lightbar set to
+// 0,0,0. Windows sets the lightbar to BLUE, which is none of those, so the configured colour
+// was overwritten with no correction scheduled -- and whether it survived depended on whether
+// the host happened to emit a clear during startup.
+bool controller_output_policy_host_output_touches_leds(uint8_t const *payload, uint16_t len) {
+    if (payload == nullptr || len <= kValidFlag1Offset) {
+        return false;
+    }
+    return (payload[kValidFlag1Offset] & kHostLedControlMask) != 0;
+}
+
 bool controller_output_policy_host_output_clears_leds(uint8_t const *payload, uint16_t len) {
     if (payload == nullptr || len <= kValidFlag1Offset) {
         return false;

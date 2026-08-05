@@ -351,6 +351,11 @@ static uint8_t saved_lightbar_blue = 0x00;
 static uint8_t saved_lightbar_brightness = 100;
 static bool player_led_enabled = true;
 static bool lightbar_restore_pending = false;
+// One corrective restore per controller connection, no more. The host writes the lightbar
+// during its startup, and the configured colour has to land after that -- but re-asserting it
+// on every host write would fight games that deliberately animate the lightbar, and would mean
+// the bridge is continuously pushing settings rather than applying them once.
+static bool host_lightbar_correction_used = false;
 static uint32_t lightbar_restore_at_us = 0;
 static uint8_t state_report_seq = 0;
 static bool speaker_output_enabled = false;
@@ -1140,6 +1145,17 @@ void bt_schedule_lightbar_restore(uint32_t delay_ms) {
 
     lightbar_restore_pending = true;
     lightbar_restore_at_us = time_us_32() + delay_ms * 1000;
+}
+
+// Claim the single corrective restore this connection is allowed. Returns false once spent,
+// so a host that keeps writing the lightbar -- a game running a lighting effect -- is left
+// alone after the first correction.
+bool bt_claim_host_lightbar_correction() {
+    if (host_lightbar_correction_used || hid_interrupt_cid == 0) {
+        return false;
+    }
+    host_lightbar_correction_used = true;
+    return true;
 }
 
 void bt_lightbar_loop() {
@@ -2858,6 +2874,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     //
                     // The saved colour survives a controller disconnect (it is bridge RAM), so
                     // the scheduled restore is what should decide the colour.
+                    host_lightbar_correction_used = false;
                     bt_schedule_lightbar_restore(250);
 
                 } else {
