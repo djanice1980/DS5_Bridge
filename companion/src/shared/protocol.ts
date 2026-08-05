@@ -430,6 +430,11 @@ export interface BridgeStatusPayload {
   };
   lightbarOverrideEnabled: boolean;
   micMuted: boolean;
+  // Bulk OUT reports the bridge has received, and failed endpoint arms. null on firmware
+  // older than protocol 1.17. A count stuck at zero while the app sends commands means the
+  // commands never arrived -- not that the bridge refused them.
+  bridgeCommandRxCount: number | null;
+  bridgeArmFailureCount: number | null;
   muteButtonMode: MuteButtonMode;
   muteKeyboardUsage: number;
   muteKeyboardModifiers: number;
@@ -735,6 +740,11 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
     },
     lightbarOverrideEnabled: report[59] === 1,
     micMuted: report[51] === 1,
+    // Command-link liveness (firmware protocol 1.17+). Commands travel over bulk OUT while
+    // status reads are control transfers, so a dead OUT endpoint is invisible from the app:
+    // the bridge reads healthy and ignores every command. Saturating u16 in the firmware.
+    bridgeCommandRxCount: report[6] >= 17 ? readU16(report, 52) : null,
+    bridgeArmFailureCount: report[6] >= 17 ? readU16(report, 54) : null,
     muteButtonMode: muteButtonMode(report[60]),
     muteKeyboardUsage: report[61],
     muteKeyboardModifiers: report[62] & MUTE_KEYBOARD_MODIFIER_MASK,

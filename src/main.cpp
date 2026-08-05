@@ -31,6 +31,7 @@
 #include "pico/time.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
+#include "host_bridge.h"
 #endif
 
 // Pico SDK support for waiting on conditions.
@@ -655,6 +656,10 @@ int main() {
         watchdog_update();
 #ifdef ENABLE_COMPANION
         watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Companion);
+        // Keep the companion's bulk OUT endpoint armed. Without this a single lost arm means
+        // every command from the app disappears for the rest of the session while the app
+        // still reads status happily over control transfers.
+        host_bridge_service();
         companion_loop();
         watchdog_update();
 #endif

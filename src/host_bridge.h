@@ -32,6 +32,17 @@ void host_bridge_set_report(uint8_t const *report, uint16_t len);
 void host_bridge_set_companion_only(bool enabled);
 bool host_bridge_companion_only(void);
 
+// Re-arms the bulk OUT endpoint if nothing is pending on it. Commands from the app arrive
+// only over that endpoint, so a lost arm silently swallows every command while status reads
+// (control transfers) keep working and the app still looks connected.
+void host_bridge_service(void);
+
+// rx_reports: bulk OUT reports actually received since boot. arm_failures: times the endpoint
+// could not be armed. Zero received while the app is sending is the signature of the failure
+// above; it is the difference between "the command was refused" and "the command never
+// arrived", which are indistinguishable from the app side.
+void host_bridge_get_link_counters(uint32_t *rx_reports, uint32_t *arm_failures);
+
 #ifdef __cplusplus
 }
 #endif

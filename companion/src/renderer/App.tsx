@@ -4173,7 +4173,9 @@ export function App() {
       `usbHostMicMute=${debug.usbHostMicMute ? 'true' : 'false'}`,
       `audioRepairCount=${debug.lastHostOutputCount}`,
       `lastAudioRepairReportId=0x${hexByte(debug.lastHostOutputReportId)}`,
-      `lastAudioRepairLength=${debug.lastHostOutputLength}`
+      `lastAudioRepairLength=${debug.lastHostOutputLength}`,
+      `bridgeCommandRx=${snapshot?.status?.bridgeCommandRxCount ?? 'unsupported'}`,
+      `bridgeArmFailures=${snapshot?.status?.bridgeArmFailureCount ?? 'unsupported'}`
     ];
     if (audio) {
       lines.push(

@@ -12,6 +12,7 @@ extern "C" void flash_probe_stats(uint32_t *worst_us, uint32_t *count);
 #include "controller_output_policy.h"
 #include "controller_output_submit.h"
 #include "dualsense_output.h"
+#include "host_bridge.h"
 #include "host_input.h"
 #include "persona/host_persona.h"
 #include "pico/critical_section.h"
@@ -29,7 +30,7 @@ constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 49;
+constexpr uint8_t kFirmwarePatch = 50;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -1593,6 +1594,18 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[47] = static_cast<uint8_t>(host_persona_active());
     buffer[48] = supported_host_persona_mask();
     buffer[50] = companion_mic_muted ? 1 : 0;
+    // Command-link liveness. Commands reach the bridge ONLY over the bulk OUT endpoint, while
+    // status reads are control transfers -- so a dead OUT endpoint looks exactly like a
+    // healthy bridge that ignores every button. Zero received while the app is sending is the
+    // signature. Saturating u16 because only "zero vs climbing" matters and the status report
+    // has six spare bytes, not eight.
+    {
+        uint32_t rx_reports = 0;
+        uint32_t arm_failures = 0;
+        host_bridge_get_link_counters(&rx_reports, &arm_failures);
+        write_u16(buffer + 51, static_cast<uint16_t>(rx_reports > 0xffffu ? 0xffffu : rx_reports));
+        write_u16(buffer + 53, static_cast<uint16_t>(arm_failures > 0xffffu ? 0xffffu : arm_failures));
+    }
     buffer[56] = bt_speaker_output_gain();
     buffer[58] = lightbar_override_enabled ? 1 : 0;
     buffer[59] = mute_button_mode;

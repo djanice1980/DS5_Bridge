@@ -4,6 +4,7 @@
 
 #include "audio.h"
 #include "companion.h"
+#include "usb.h"
 #include "tusb.h"
 #include "device/usbd_pvt.h"
 #include <cstring>
@@ -32,11 +33,51 @@ static void host_bridge_process_report(uint8_t const *report, uint32_t len) {
     companion_set_report(report_id, HID_REPORT_TYPE_OUTPUT, payload, payload_len);
 }
 
+static uint32_t host_bridge_rx_report_count = 0;
+static uint32_t host_bridge_arm_fail_count = 0;
+
 static bool host_bridge_arm_out(uint8_t rhport) {
     if (host_bridge_ep_out == 0) {
         return false;
     }
-    return usbd_edpt_xfer(rhport, host_bridge_ep_out, host_bridge_rx_buffer, sizeof(host_bridge_rx_buffer));
+    const bool armed = usbd_edpt_xfer(
+        rhport,
+        host_bridge_ep_out,
+        host_bridge_rx_buffer,
+        sizeof(host_bridge_rx_buffer)
+    );
+    if (!armed) {
+        host_bridge_arm_fail_count++;
+    }
+    return armed;
+}
+
+// If the OUT endpoint is open but has no transfer pending, nothing will ever be received
+// again: every companion command silently disappears while the app still looks healthy,
+// because status reads are control transfers and only commands travel over bulk. That is
+// exactly what a zeroed ACK ("received command 0x00 sequence 0") looks like from the app.
+//
+// The arm is issued from driver_open, and the return value used to be discarded. Re-arming
+// from the main loop is safe regardless of why an arm was lost -- an endpoint with no pending
+// transfer has nothing to disturb -- so the link repairs itself instead of staying dead for
+// the rest of the session.
+extern "C" void host_bridge_service(void) {
+    if (!usb_device_stack_ready() || host_bridge_ep_out == 0) {
+        return;
+    }
+    if (usbd_edpt_busy(0, host_bridge_ep_out)) {
+        return;
+    }
+    (void)host_bridge_arm_out(0);
+}
+
+extern "C" void host_bridge_get_link_counters(uint32_t *rx_reports, uint32_t *arm_failures) {
+    if (rx_reports != nullptr) {
+        *rx_reports = host_bridge_rx_report_count;
+    }
+    if (arm_failures != nullptr) {
+        *arm_failures = host_bridge_arm_fail_count;
+    }
 }
 
 extern "C" uint16_t host_bridge_get_report(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
@@ -148,6 +189,7 @@ static bool host_bridge_driver_xfer_cb(
     }
 
     if (result == XFER_RESULT_SUCCESS && xferred_bytes > 0) {
+        host_bridge_rx_report_count++;
         host_bridge_process_report(host_bridge_rx_buffer, xferred_bytes);
     }
     (void)host_bridge_arm_out(rhport);
