@@ -38,7 +38,9 @@ import {
   hostPersonaModeValue,
   normalizeChordControllerSettingStepPercent,
   normalizeBridgePresetId,
-  pollingRateModeValue
+  pollingRateModeValue,
+  DEFAULT_CONTROLLER_PROFILE_ID,
+  DEFAULT_BUTTON_REMAP_PROFILE_ID
 } from '../shared/protocol';
 import type {
   AdaptiveTriggerPreviewEffect,
@@ -4315,8 +4317,12 @@ export class BridgeService extends EventEmitter {
     this.recordControllerHistory(mac);
     await this.applyBoundButtonRemappingProfile(mac);
     const settings = this.settingsStore.get();
-    const boundProfileId = settings.controllerBindings[mac];
-    if (!boundProfileId || boundProfileId === settings.selectedControllerProfileId) {
+    // No binding means Default, not "leave whatever is selected". Without this the Devices row
+    // would read Default for an unbound controller while the controller actually ran whichever
+    // profile happened to be active -- the row claiming a profile that is not running is the
+    // exact failure this avoids.
+    const boundProfileId = settings.controllerBindings[mac] ?? DEFAULT_CONTROLLER_PROFILE_ID;
+    if (boundProfileId === settings.selectedControllerProfileId) {
       return;
     }
     if (!settings.controllerProfiles.some((profile) => profile.id === boundProfileId)) {
@@ -4333,8 +4339,12 @@ export class BridgeService extends EventEmitter {
     }
     this.remapBindingAppliedForMac = mac;
     const settings = this.settingsStore.get();
-    const boundProfileId = settings.buttonRemappingBindings[mac];
-    if (!boundProfileId || boundProfileId === settings.selectedButtonRemappingProfileId) {
+    // Same rule as controller profiles: unbound means Default. The Default remap profile is
+    // empty, so this is "no remapping" -- which is why the picker offers no separate empty
+    // entry; it would be a second name for this state.
+    const boundProfileId = settings.buttonRemappingBindings[mac]
+      ?? DEFAULT_BUTTON_REMAP_PROFILE_ID;
+    if (boundProfileId === settings.selectedButtonRemappingProfileId) {
       return;
     }
     // A binding pointing at a deleted profile is ignored rather than applied blindly.

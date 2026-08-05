@@ -180,6 +180,7 @@ class MockHidDevice extends EventEmitter {
   // Null means firmware that does not answer DEVICE_IDENTITY, which is the default so that
   // tests written before bridge selection was keyed on the board id keep their old behaviour.
   uniqueId: string | null = null;
+  controllerMac: string | null = null;
 
   constructor() {
     super();
@@ -229,7 +230,7 @@ class MockHidDevice extends EventEmitter {
       if (!this.uniqueId) {
         throw new Error('Device identity unsupported');
       }
-      return deviceIdentityReport(this.uniqueId);
+      return deviceIdentityReport(this.uniqueId, this.controllerMac ?? undefined);
     }
     if (reportId === REPORT_ID.INPUT) {
       if (this.shortcutReadError) {
@@ -270,7 +271,7 @@ class MockHidDevice extends EventEmitter {
 // Minimal DEVICE_IDENTITY report: enough for the board id, which is what bridge selection
 // is keyed on. Everything past the id stays zero, which parses as "no controller, no
 // watchdog telemetry" -- exactly what older firmware looks like.
-function deviceIdentityReport(uniqueId: string): number[] {
+function deviceIdentityReport(uniqueId: string, controllerMac?: string): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.DEVICE_IDENTITY;
   writeMagic(report);
@@ -281,6 +282,12 @@ function deviceIdentityReport(uniqueId: string): number[] {
   bytes.forEach((byte, index) => {
     report[8 + index] = Number.parseInt(byte, 16);
   });
+  if (controllerMac) {
+    report[16] = 1; // "a controller address follows"
+    (controllerMac.match(/../g) ?? []).forEach((byte, index) => {
+      report[17 + index] = Number.parseInt(byte, 16);
+    });
+  }
   return report;
 }
 
@@ -2620,6 +2627,32 @@ describe('BridgeService', () => {
 
     snapshot = await service.setControllerBinding(absent, null);
     expect(snapshot.settings.controllerBindings[absent]).toBeUndefined();
+  });
+
+  it('applies Default to a controller that has no binding', async () => {
+    // "No binding" means Default, not "leave whatever profile happens to be selected".
+    // Without this the Devices row reads Default while the controller runs something else.
+    const service = serviceFixture({
+      selectedControllerProfileId: 'profile-a',
+      controllerProfiles: [
+        { id: DEFAULT_CONTROLLER_PROFILE_ID, name: 'Default', settings: {} },
+        { id: 'profile-a', name: 'Racing', settings: {} }
+      ]
+    });
+    const device = new MockHidDevice();
+    device.uniqueId = 'aabbccddeeff0011';
+    device.controllerMac = 'd42f4b857317';
+    device.status = statusReport({ controllerConnected: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const settings = service.getSnapshot().settings;
+    expect(settings.selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
+    // Applying the implicit default must NOT write a binding -- that would silently pin a
+    // controller the user never assigned.
+    expect(settings.controllerBindings['d42f4b857317']).toBeUndefined();
   });
 
   it('binds a button remapping profile independently of the controller profile', async () => {

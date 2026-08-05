@@ -4734,23 +4734,20 @@ export function App() {
     ));
   }
 
-  // '' is the sentinel for "no profile" because CustomSelect carries string values; the
-  // service takes null to mean clear.
-  const controllerBindingOptions: Array<[string, string]> = [
-    ['No profile', ''],
-    ...(snapshot?.settings.controllerProfiles.map((profile): [string, string] => [
+  // No empty option in either list: the Default profile IS "nothing applied" -- an empty
+  // remap profile is exactly no remap -- so offering both an empty entry and Default was two
+  // names for one state. Every controller reads as Default until it is pointed elsewhere.
+  const controllerBindingOptions: Array<[string, string]> =
+    snapshot?.settings.controllerProfiles.map((profile): [string, string] => [
       profileDisplayName(profile.name, profile.id),
       profile.id
-    ]) ?? [])
-  ];
+    ]) ?? [['Default', DEFAULT_CONTROLLER_PROFILE_ID]];
 
-  const remapBindingOptions: Array<[string, string]> = [
-    ['No remap', ''],
-    ...(snapshot?.settings.buttonRemappingProfiles.map((profile): [string, string] => [
+  const remapBindingOptions: Array<[string, string]> =
+    snapshot?.settings.buttonRemappingProfiles.map((profile): [string, string] => [
       profileDisplayName(profile.name, profile.id),
       profile.id
-    ]) ?? [])
-  ];
+    ]) ?? [['Default', DEFAULT_BUTTON_REMAP_PROFILE_ID]];
 
   // Two pickers, because button remapping is a separate profile system: a controller profile
   // does not capture which remap profile is selected, so one binding cannot cover both.
@@ -4759,23 +4756,26 @@ export function App() {
       <>
         <CustomSelect
           className="controller-binding-select"
-          value={snapshot?.settings.controllerBindings[mac] ?? ''}
+          // Unbound resolves to Default, and the service applies Default on connect for an
+          // unbound controller, so the row cannot claim a profile the controller is not
+          // actually running.
+          value={snapshot?.settings.controllerBindings[mac] ?? DEFAULT_CONTROLLER_PROFILE_ID}
           options={controllerBindingOptions}
           disabled={pendingAction !== null}
           ariaLabel={`Controller profile for ${label}`}
           floatingMenu
-          onChange={(profileId) => setControllerBinding(mac, profileId === '' ? null : profileId)}
+          onChange={(profileId) => setControllerBinding(mac, profileId)}
         />
         <CustomSelect
           className="controller-binding-select"
-          value={snapshot?.settings.buttonRemappingBindings[mac] ?? ''}
+          value={
+            snapshot?.settings.buttonRemappingBindings[mac] ?? DEFAULT_BUTTON_REMAP_PROFILE_ID
+          }
           options={remapBindingOptions}
           disabled={pendingAction !== null}
           ariaLabel={`Button remapping profile for ${label}`}
           floatingMenu
-          onChange={(profileId) => (
-            setButtonRemappingBinding(mac, profileId === '' ? null : profileId)
-          )}
+          onChange={(profileId) => setButtonRemappingBinding(mac, profileId)}
         />
       </>
     );
