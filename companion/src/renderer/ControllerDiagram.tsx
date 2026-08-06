@@ -189,26 +189,39 @@ export function GyroDial({ label, value }: { label: string; value: number }) {
 /**
  * Acceleration as a vector.
  *
- * The needle plots X and Z -- the plane PARALLEL to a desk -- and Y, the vertical axis, goes on
- * the bar. Laid flat, a DualSense puts gravity almost entirely on Y, so the needle sits centred
- * and the bar reads about 1g. Plotting X/Y instead pinned the needle at full deflection just
+ * The needle plots X and Z -- the plane PARALLEL to a desk -- and the vertical axis goes on the
+ * bar. Laid flat, a DualSense puts gravity almost entirely on Y, so the needle sits centred and
+ * the bar sits at its middle. Plotting X/Y instead pinned the needle at full deflection just
  * from the controller sitting still, which says nothing.
  *
- * Centred therefore means level, and the needle leans the way the controller is tilted.
+ * The bar is CENTRE-ZERO at resting gravity for the same reason: measured absolute it parked at
+ * ~96% and never moved, so it carried no information either. Centred, it reads the thing you can
+ * actually cause -- lifting the controller or letting it drop.
  */
+
+/**
+ * Accelerometer magnitude at rest, measured on hardware (~7900, not the 8192 the scale implies).
+ * Used as the needle full-scale AND as the bar centre, so "level and still" is the origin of
+ * both. Units vary a little between sensors; this is a nominal figure, not a per-device
+ * calibration, and it does not need to be exact for either reading to be useful.
+ */
+const ACCEL_REST = 7900;
+
 export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
-  // ~1g at rest on this sensor's scale.
-  const ONE_G = 8192;
-  const nx = Math.max(-1, Math.min(1, x / ONE_G));
-  const ny = Math.max(-1, Math.min(1, y / ONE_G));
-  const nz = Math.max(-1, Math.min(1, z / ONE_G));
+  const nx = Math.max(-1, Math.min(1, x / ACCEL_REST));
+  const nz = Math.max(-1, Math.min(1, z / ACCEL_REST));
   const radius = 30;
   const tilted = Math.hypot(nx, nz) > 0.04;
-  // Both axes are negated: the sensor's positive X and Z point opposite to the direction the
+  // Both axes are negated: the sensor positive X and Z point opposite to the direction the
   // controller is tilted as seen on screen, so plotting them raw sent the needle the wrong way
   // on both. Confirmed against hardware.
   const needleX = 40 - nx * radius;
   const needleY = 40 - nz * radius;
+
+  // Deviation from resting gravity, spanning -1..+1 across the bar.
+  const lift = Math.max(-1, Math.min(1, (y - ACCEL_REST) / ACCEL_REST));
+  const fillWidth = Math.abs(lift) * 50;
+  const fillLeft = lift < 0 ? 50 - fillWidth : 50;
 
   return (
     <div className="tester-accel">
@@ -219,22 +232,16 @@ export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
         <line x1={34} y1={40} x2={46} y2={40} className="tester-dial-neutral" />
         <line x1={40} y1={34} x2={40} y2={46} className="tester-dial-neutral" />
         {tilted && (
-          <line
-            x1={40}
-            y1={40}
-            x2={needleX}
-            y2={needleY}
-            className="tester-accel-needle"
-          />
+          <line x1={40} y1={40} x2={needleX} y2={needleY} className="tester-accel-needle" />
         )}
         <circle cx={needleX} cy={needleY} r={4} className="tester-dial-head" />
       </svg>
       <div className="tester-accel-z">
-        <span className="tester-field-label">Y (vertical)</span>
-        <div className="tester-bar">
+        <span className="tester-field-label">Lift</span>
+        <div className="tester-bar tester-bar-centred">
           <div
             className="tester-bar-fill"
-            style={{ width: `${Math.abs(ny) * 100}%`, marginLeft: ny < 0 ? 'auto' : undefined }}
+            style={{ width: `${fillWidth}%`, marginLeft: `${fillLeft}%` }}
           />
         </div>
         <span className="tester-mono">{y}</span>

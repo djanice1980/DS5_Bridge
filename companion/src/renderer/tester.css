@@ -148,6 +148,22 @@ html {
   overflow: hidden;
 }
 
+/* Centre-zero bar: the fill grows either side of the middle, so the midpoint is the reading
+   at rest and movement is what shows. */
+.tester-bar-centred {
+  position: relative;
+}
+
+.tester-bar-centred::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.28);
+}
+
 .tester-bar-fill {
   height: 100%;
   background: linear-gradient(90deg, #6d28a8, #a855f7);

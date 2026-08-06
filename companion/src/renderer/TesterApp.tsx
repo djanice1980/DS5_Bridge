@@ -354,7 +354,8 @@ export function TesterApp() {
           <h2>Acceleration</h2>
           <p className="tester-subtle">
             Needle shows tilt in the plane of the desk, so a controller lying flat sits centred.
-            The bar is the vertical axis, which reads about 1g at rest.
+            Lift is the vertical axis measured from that resting point &mdash; right when raised,
+            left when dropped.
           </p>
           {state ? (
             <AccelVector x={state.accelX} y={state.accelY} z={state.accelZ} />
