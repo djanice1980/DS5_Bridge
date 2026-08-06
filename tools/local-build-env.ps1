@@ -33,6 +33,15 @@
     * DOTNET_ROLL_FORWARD=Major lets the net9.0 AudioHelper tests run on a newer installed
       .NET runtime, so no separate .NET 9 runtime install (which needs elevation) is needed.
 
+    * ENABLE_COMPANION defaults to OFF in CMakeLists, and CI always passes ON. A build
+      directory configured WITHOUT it -- which is what the VS Code extension creates, since it
+      configures with defaults -- compiles out companion_init() and
+      usb_attach_companion_only_idle() entirely. That firmware boots and runs, but with no
+      controller attached it presents NO USB device at all: the app reports "no bridge
+      detected", the bridge looks dead, and nothing in the build output says why. This script
+      checks every build directory for it, because the failure is silent and looks like
+      broken hardware.
+
 .EXAMPLE
     . .\tools\local-build-env.ps1
     cmake -S . -B build/local -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_COMPANION=ON
@@ -90,6 +99,26 @@ $env:PATH = ($parts -join ';') + ';' + $env:PATH
 # extension's pico-vscode.cmake shim.
 $env:PICO_SDK_PATH = Join-Path $picoSdkRoot "sdk\$sdkVersion"
 $env:DOTNET_ROLL_FORWARD = 'Major'
+
+# Any build directory configured with ENABLE_COMPANION=OFF produces firmware that silently
+# never enumerates when no controller is attached. Nothing in the build output hints at it, so
+# check the configured caches and say so loudly.
+$repoRoot = Split-Path $PSScriptRoot -Parent
+$companionOffDirs = Get-ChildItem $repoRoot -Directory -Filter 'build*' -ErrorAction SilentlyContinue |
+    ForEach-Object { Get-ChildItem $_.FullName -Recurse -Depth 1 -Filter 'CMakeCache.txt' -ErrorAction SilentlyContinue } |
+    Where-Object {
+        $cache = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
+        # Only firmware build dirs define this option at all; the host-test dirs do not.
+        $cache -match 'ENABLE_COMPANION:BOOL=OFF'
+    } |
+    ForEach-Object { Split-Path $_.FullName -Parent }
+
+if ($companionOffDirs) {
+    Write-Warning "These build directories have ENABLE_COMPANION=OFF. Firmware built there has NO companion interface and will NOT enumerate over USB unless a controller is already connected:"
+    foreach ($dir in $companionOffDirs) { Write-Warning "  $dir" }
+    Write-Warning "Reconfigure (or build in a fresh directory) with the flags CI uses:"
+    Write-Warning "  cmake -S . -B build/companion -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_COMPANION=ON"
+}
 
 $tinyUsb = Join-Path $env:PICO_SDK_PATH 'lib\tinyusb'
 $tinyUsbVersion = (& git -C $tinyUsb describe --tags 2>$null)
