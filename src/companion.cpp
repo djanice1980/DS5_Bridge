@@ -30,7 +30,7 @@ constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 58;
+constexpr uint8_t kFirmwarePatch = 59;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -148,7 +148,10 @@ enum CommandId : uint8_t {
     CommandSetClassicRumbleV1 = 0x25,
     CommandSetSpeakerGain = 0x32,
     CommandEnterBootloader = 0x33,
-    CommandSetAudioInterleave = 0x34,
+    // Retired: the audio/controller interleave scheduler is gone (state always wins).
+    // The id stays reserved so it is not reused, and so an older app sending it gets a
+    // refusal instead of silently believing it configured something.
+    CommandSetAudioInterleaveRetired = 0x34,
     // Devices tab. IDs match upstream so the protocol stays convergent.
     CommandRequestControllerScan = 0x27,
     CommandForgetControllerPairings = 0x28,
@@ -2080,25 +2083,9 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
-        case CommandSetAudioInterleave: {
-            // value (buffer[8..9]) = max consecutive audio sends before a pending
-            // controller-state packet is forced out. buffer[10..11] = the state
-            // latency cap in microseconds. bt_set_audio_interleave clamps both to
-            // the supported range, so we only reject an obviously invalid zero.
-            const uint16_t max_audio_run = value;
-            const uint16_t state_max_age_us = read_u16(buffer + 10);
-            if (max_audio_run == 0) {
-                set_ack(command_id, sequence, AckInvalidValue);
-                return;
-            }
-            bt_set_audio_interleave(
-                static_cast<uint8_t>(max_audio_run > 255 ? 255 : max_audio_run),
-                static_cast<uint32_t>(state_max_age_us)
-            );
-            settings_revision++;
-            set_ack(command_id, sequence, AckOk);
+        case CommandSetAudioInterleaveRetired:
+            set_ack(command_id, sequence, AckInvalidValue);
             return;
-        }
 
         case CommandRequestControllerScan:
             bt_request_pairing();
@@ -2506,7 +2493,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             restore_defaults();
-            bt_reset_audio_interleave();
             usb_set_wake_on_connect(true);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);

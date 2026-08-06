@@ -63,7 +63,6 @@ add_executable(ds5-bridge
         src/controller_output_rumble_state.cpp
         src/controller_output_state.cpp
         src/haptics_test_signal.cpp
-        src/output_scheduler.cpp
         src/watchdog_telemetry.cpp
         src/panic_hook.cpp
         src/fault_hooks.cpp
@@ -231,7 +230,7 @@ if(DS5_PAIRING_DIAG)
 endif()
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "1.6.58")
+pico_set_program_version(ds5-bridge "1.6.59")
 
 if(DS5_ENABLE_FIRMWARE_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)

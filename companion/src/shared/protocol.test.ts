@@ -13,12 +13,9 @@ import {
   ProtocolError,
   REMAP_BUTTON_IDS,
   REPORT_ID,
-  AUDIO_INTERLEAVE_DEFAULT,
-  buildAudioInterleaveCommand,
   buildButtonRemapPayload,
   buildChordBindingsPayload,
   buildCommandReport,
-  clampAudioInterleaveValues,
   hostPersonaModeValue,
   isChordBindingAllowed,
   normalizeBridgePresetId,
@@ -31,7 +28,6 @@ import {
   parseStatusReport,
   remapButtonIdValue
 } from './protocol';
-
 function baseReport(reportId: number): number[] {
   const report = new Array<number>(64).fill(0);
   report[0] = reportId;
@@ -43,19 +39,16 @@ function baseReport(reportId: number): number[] {
   report[6] = PROTOCOL_MINOR;
   return report;
 }
-
 function writeU32(report: number[], offset: number, value: number): void {
   report[offset] = value & 0xff;
   report[offset + 1] = (value >> 8) & 0xff;
   report[offset + 2] = (value >> 16) & 0xff;
   report[offset + 3] = (value >> 24) & 0xff;
 }
-
 function writeU16(report: number[], offset: number, value: number): void {
   report[offset] = value & 0xff;
   report[offset + 1] = (value >> 8) & 0xff;
 }
-
 describe('companion protocol', () => {
   it('rejects malformed report envelopes with protocol-specific errors', () => {
     const cases: Array<{
@@ -97,7 +90,6 @@ describe('companion protocol', () => {
         code: 'bad-version'
       }
     ];
-
     for (const testCase of cases) {
       try {
         testCase.parse(testCase.report);
@@ -108,7 +100,6 @@ describe('companion protocol', () => {
       }
     }
   });
-
   it('parses a status report', () => {
     const report = baseReport(REPORT_ID.STATUS);
     report[7] = 1;
@@ -136,7 +127,6 @@ describe('companion protocol', () => {
     report[61] = 0x68;
     report[62] = MUTE_KEYBOARD_HOLD_FLAG | MUTE_KEYBOARD_CHORD_STARTER_FLAG | 0x02;
     report[63] = 1;
-
     const status = parseStatusReport(report);
     expect(status.controllerConnected).toBe(true);
     expect(status.controllerType).toBe('dualsense-edge');
@@ -169,48 +159,40 @@ describe('companion protocol', () => {
     expect(status.hostPersonaMode).toBe('ds4');
     expect(status.supportedHostPersonaModes).toEqual(['dualsense', 'xbox', 'ds4']);
   });
-
   it('parses chord mute button mode', () => {
     const report = baseReport(REPORT_ID.STATUS);
     report[60] = 3;
-
     const status = parseStatusReport(report);
     expect(status.muteButtonMode).toBe('chord');
   });
-
   it('encodes host persona command values', () => {
     expect(hostPersonaModeValue('dualsense')).toBe(0);
     expect(hostPersonaModeValue('xbox')).toBe(1);
     expect(hostPersonaModeValue('ds4')).toBe(2);
   });
-
   it('parses an ACK report', () => {
     const report = baseReport(REPORT_ID.ACK);
     report[7] = COMMAND_ID.TEST_HAPTICS;
     report[8] = 7;
     report[9] = ACK_RESULT.ERR_BUSY;
     report[11] = 9;
-
     const ack = parseAckReport(report);
     expect(ack.commandId).toBe(COMMAND_ID.TEST_HAPTICS);
     expect(ack.commandSequence).toBe(7);
     expect(ack.resultCode).toBe(ACK_RESULT.ERR_BUSY);
     expect(ack.settingsRevision).toBe(9);
   });
-
   it('can parse an older ACK report when protocol mismatch is explicitly allowed', () => {
     const report = baseReport(REPORT_ID.ACK);
     report[6] = PROTOCOL_MINOR - 1;
     report[7] = COMMAND_ID.ENTER_BOOTLOADER;
     report[8] = 4;
     report[9] = ACK_RESULT.OK;
-
     expect(() => parseAckReport(report)).toThrow(ProtocolError);
     const ack = parseAckReport(report, { allowProtocolMismatch: true });
     expect(ack.commandId).toBe(COMMAND_ID.ENTER_BOOTLOADER);
     expect(ack.protocolVersion).toBe(`${PROTOCOL_MAJOR}.${PROTOCOL_MINOR - 1}`);
   });
-
   it('parses an audio debug report', () => {
     const report = baseReport(REPORT_ID.AUDIO_DEBUG);
     report[7] = 1;
@@ -225,7 +207,6 @@ describe('companion protocol', () => {
     report[26] = 255;
     report[27] = 9;
     report[28] = 2;
-
     const debug = parseAudioDebugReport(report);
     expect(debug.latestSequence).toBe(42);
     expect(debug.droppedCount).toBe(2);
@@ -238,7 +219,6 @@ describe('companion protocol', () => {
       }
     ]);
   });
-
   it('parses an audio stats report', () => {
     const report = baseReport(REPORT_ID.AUDIO_STATS);
     report[7] = 1;
@@ -256,7 +236,6 @@ describe('companion protocol', () => {
     writeU32(report, 52, 12);
     writeU32(report, 56, 13);
     writeU32(report, 60, 14);
-
     const stats = parseAudioStatsReport(report);
     expect(stats).toEqual({
       statsVersion: 1,
@@ -276,14 +255,12 @@ describe('companion protocol', () => {
       criticalStarvingAudioCount: 14
     });
   });
-
   it('parses a trigger trace report', () => {
     const report = baseReport(REPORT_ID.TRIGGER_TRACE);
     report[7] = 1;
     report[8] = 38;
     writeU32(report, 9, 260);
     writeU16(report, 13, 3);
-
     const offset = 15;
     writeU16(report, offset, 260);
     writeU32(report, offset + 2, 12345);
@@ -300,7 +277,6 @@ describe('companion protocol', () => {
       report[offset + 15 + index] = index + 1;
       report[offset + 26 + index] = index + 21;
     }
-
     const trace = parseTriggerTraceReport(report);
     expect(trace).toEqual({
       latestSequence: 260,
@@ -324,14 +300,12 @@ describe('companion protocol', () => {
       ]
     });
   });
-
   it('parses a feedback trace report', () => {
     const report = baseReport(REPORT_ID.FEEDBACK_TRACE);
     report[7] = 1;
     report[8] = 24;
     writeU32(report, 9, 33);
     writeU16(report, 13, 2);
-
     const offset = 15;
     writeU16(report, offset, 33);
     writeU32(report, offset + 2, 4444);
@@ -352,7 +326,6 @@ describe('companion protocol', () => {
     report[offset + 20] = 2;
     report[offset + 21] = 3;
     report[offset + 22] = 4;
-
     const trace = parseFeedbackTraceReport(report);
     expect(trace).toEqual({
       latestSequence: 33,
@@ -382,7 +355,6 @@ describe('companion protocol', () => {
       ]
     });
   });
-
   it('builds a command report', () => {
     const report = buildCommandReport(COMMAND_ID.SET_HAPTICS_GAIN, 12, 175);
     expect(report).toHaveLength(64);
@@ -392,7 +364,6 @@ describe('companion protocol', () => {
     expect(report[9]).toBe(175);
     expect(report[10]).toBe(0);
   });
-
   it('can build a Pico bootloader command report for an older protocol minor', () => {
     const oldMinor = PROTOCOL_MINOR - 1;
     const report = buildCommandReport(COMMAND_ID.ENTER_BOOTLOADER, 11, 0, [], { protocolMinor: oldMinor });
@@ -400,7 +371,6 @@ describe('companion protocol', () => {
     expect(report[6]).toBe(oldMinor);
     expect(report[7]).toBe(COMMAND_ID.ENTER_BOOTLOADER);
   });
-
   it('builds a mute button action command report', () => {
     const report = buildCommandReport(COMMAND_ID.SET_MUTE_BUTTON_ACTION, 4, 1, [0x68, 0x02]);
     expect(report[7]).toBe(COMMAND_ID.SET_MUTE_BUTTON_ACTION);
@@ -409,51 +379,18 @@ describe('companion protocol', () => {
     expect(report[11]).toBe(0x68);
     expect(report[12]).toBe(0x02);
   });
-
-  it('builds an audio interleave command with the state latency in the extra payload', () => {
-    // Firmware reads value (report[9..10]) as max_consecutive_audio_sends and
-    // read_u16(buffer+10) -> report[11..12] as state_max_age_us (little-endian).
-    const report = buildAudioInterleaveCommand(9, 4, 3000);
-    expect(report[7]).toBe(COMMAND_ID.SET_AUDIO_INTERLEAVE);
-    expect(report[8]).toBe(9);
-    expect(report[9]).toBe(4);
-    expect(report[11]).toBe(3000 & 0xff);
-    expect(report[12]).toBe((3000 >> 8) & 0xff);
-  });
-
-  it('clamps out-of-range audio interleave values to the firmware bounds', () => {
-    expect(clampAudioInterleaveValues(0, 10)).toEqual({
-      maxConsecutiveAudioSends: 1,
-      stateMaxAgeUs: 250
-    });
-    expect(clampAudioInterleaveValues(1000, 999999)).toEqual({
-      maxConsecutiveAudioSends: 64,
-      stateMaxAgeUs: 60000
-    });
-    // The default is a valid, unclamped point.
-    expect(clampAudioInterleaveValues(
-      AUDIO_INTERLEAVE_DEFAULT.maxConsecutiveAudioSends,
-      AUDIO_INTERLEAVE_DEFAULT.stateMaxAgeUs
-    )).toEqual({
-      maxConsecutiveAudioSends: AUDIO_INTERLEAVE_DEFAULT.maxConsecutiveAudioSends,
-      stateMaxAgeUs: AUDIO_INTERLEAVE_DEFAULT.stateMaxAgeUs
-    });
-  });
-
   it('builds a USB suspend disconnect setting command report', () => {
     const report = buildCommandReport(COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED, 5, 1);
     expect(report[7]).toBe(COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED);
     expect(report[8]).toBe(5);
     expect(report[9]).toBe(1);
   });
-
   it('builds an idle disconnect timeout command report', () => {
     const report = buildCommandReport(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT, 6, 15);
     expect(report[7]).toBe(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT);
     expect(report[8]).toBe(6);
     expect(report[9]).toBe(15);
   });
-
   it('builds a button remap command payload', () => {
     const payload = buildButtonRemapPayload({
       ...DEFAULT_BUTTON_REMAP_PROFILE.mappings,
@@ -468,7 +405,6 @@ describe('companion protocol', () => {
     expect(report[11 + remapButtonIdValue('lb')]).toBe(remapButtonIdValue('square'));
     expect(report[11 + remapButtonIdValue('rfn')]).toBe(remapButtonIdValue('ps'));
   });
-
   it('builds chord binding command payloads', () => {
     const payload = buildChordBindingsPayload([{
       id: 'chord-ps-triangle',
@@ -490,19 +426,16 @@ describe('companion protocol', () => {
       functionId: 'mute-action'
     }]);
     const report = buildCommandReport(COMMAND_ID.SET_CHORD_BINDINGS, 8, 3, payload);
-
     expect(payload).toEqual([0x20, 0x01, 11, 0x21, 0x02, 10, 0x22, 0x04, 10]);
     expect(report[7]).toBe(COMMAND_ID.SET_CHORD_BINDINGS);
     expect(report.slice(11, 20)).toEqual(payload);
   });
-
   it('marks Edge Fn face-button chord combos as reserved', () => {
     expect(isChordBindingAllowed('ps', 'triangle')).toBe(true);
     expect(isChordBindingAllowed('lfn', 'options')).toBe(true);
     expect(isChordBindingAllowed('rfn', 'square')).toBe(false);
     expect(isChordBindingAllowed('lfn', 'circle')).toBe(false);
   });
-
   it('builds sleep controller command reports', () => {
     const keybindReport = buildCommandReport(COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED, 6, 1);
     const sleepReport = buildCommandReport(COMMAND_ID.SLEEP_CONTROLLER, 7, 0);
@@ -511,7 +444,6 @@ describe('companion protocol', () => {
     expect(sleepReport[7]).toBe(COMMAND_ID.SLEEP_CONTROLLER);
     expect(sleepReport[9]).toBe(0);
   });
-
   it('rejects undersized variable-length diagnostic records', () => {
     const cases: Array<{
       reportId: number;
@@ -538,12 +470,10 @@ describe('companion protocol', () => {
         code: 'bad-feedback-trace-record'
       }
     ];
-
     for (const testCase of cases) {
       const report = baseReport(testCase.reportId);
       report[7] = 1;
       report[8] = testCase.recordSize;
-
       try {
         testCase.parse(report);
         throw new Error(`Expected report 0x${testCase.reportId.toString(16)} to throw`);
@@ -553,13 +483,11 @@ describe('companion protocol', () => {
       }
     }
   });
-
   it('stops parsing audio debug records at the report boundary', () => {
     const report = baseReport(REPORT_ID.AUDIO_DEBUG);
     report[7] = 5;
     report[8] = 14;
     writeU32(report, 9, 9);
-
     for (let index = 0; index < 3; index += 1) {
       const offset = 15 + index * 14;
       writeU32(report, offset, index + 7);
@@ -567,35 +495,28 @@ describe('companion protocol', () => {
       report[offset + 8] = AUDIO_DEBUG_EVENT.AUDIO_START;
       report[offset + 9] = index;
     }
-
     const debug = parseAudioDebugReport(report);
-
     expect(debug.events.map((event) => event.sequence)).toEqual([7, 8, 9]);
   });
-
   it('parses the mixed-report split counters', () => {
     const report = baseReport(REPORT_ID.AUDIO_STATUS);
     writeU32(report, 17, 1234);
     writeU32(report, 21, 56789);
-
     expect(parseAudioStatusReport(report)).toMatchObject({
       mixed0x31SplitCount: 1234,
       normal0x31RxCount: 56789
     });
   });
-
   it('reports the split counters as null, not zero, on firmware that cannot send them', () => {
     // The whole point of the measurement is "how often does splitting happen". Firmware that
     // predates the counters must not be indistinguishable from firmware reporting zero.
     const report = baseReport(REPORT_ID.AUDIO_STATUS);
     report[6] = 16;
-
     expect(parseAudioStatusReport(report)).toMatchObject({
       mixed0x31SplitCount: null,
       normal0x31RxCount: null
     });
   });
-
   it('parses Pico-local audio mic concealment counters', () => {
     const report = baseReport(REPORT_ID.AUDIO_STATUS);
     report[7] = 1;
@@ -613,7 +534,6 @@ describe('companion protocol', () => {
     writeU16(report, 57, 480);
     writeU16(report, 59, 96);
     writeU16(report, 61, 47);
-
     expect(parseAudioStatusReport(report)).toMatchObject({
       duplexRequested: true,
       duplexActive: true,
@@ -631,7 +551,6 @@ describe('companion protocol', () => {
       protocolVersion: `${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}`
     });
   });
-
   it('parses older Pico-local audio status protocol versions', () => {
     const report = baseReport(REPORT_ID.AUDIO_STATUS);
     report[6] = 2;
@@ -651,7 +570,6 @@ describe('companion protocol', () => {
     writeU16(report, 59, 96);
     writeU16(report, 61, 33);
     report[63] = 1;
-
     expect(parseAudioStatusReport(report)).toMatchObject({
       duplexRequested: true,
       duplexActive: true,
@@ -665,11 +583,9 @@ describe('companion protocol', () => {
       protocolVersion: '1.2'
     });
   });
-
   it('masks command header bytes and truncates oversized extra payloads', () => {
     const payload = Array.from({ length: 100 }, (_, index) => index + 1);
     const report = buildCommandReport(0x123, 0x1ff, 0x1234, payload);
-
     expect(report).toHaveLength(64);
     expect(report[7]).toBe(0x23);
     expect(report[8]).toBe(0xff);
@@ -678,13 +594,11 @@ describe('companion protocol', () => {
     expect(report[11]).toBe(1);
     expect(report[63]).toBe(53);
   });
-
   it('builds polling rate command reports', () => {
     const report = buildCommandReport(COMMAND_ID.SET_POLLING_RATE_MODE, 8, 1);
     expect(report[7]).toBe(COMMAND_ID.SET_POLLING_RATE_MODE);
     expect(report[9]).toBe(1);
   });
-
   it('normalizes deleted or unknown bridge presets to a fallback', () => {
     expect(normalizeBridgePresetId('quiet')).toBe('quiet');
     expect(normalizeBridgePresetId('ptt-f24')).toBe('balanced');

@@ -18,7 +18,6 @@ add_executable(firmware_logic_tests
     ../../src/controller_output_state.cpp
     ../../src/controller_packet_compositor.cpp
     ../../src/haptics_test_signal.cpp
-    ../../src/output_scheduler.cpp
 )
 
 target_include_directories(firmware_logic_tests PRIVATE

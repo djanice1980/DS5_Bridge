@@ -19,7 +19,6 @@
 #include "controller_output_policy.h"
 #include "controller_output_rumble_state.h"
 #include "controller_output_state.h"
-#include "output_scheduler.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
 #endif
@@ -94,12 +93,6 @@
 #define DS_TRIGGER_TARGET_RIGHT 2
 #define AUDIO_SEND_QUEUE_MAX_DEPTH 4
 #define URGENT_SEND_QUEUE_MAX_DEPTH 16
-// Audio/controller interleave defaults. The companion app can override these
-// live over the vendor link (CommandSetAudioInterleave); these are the values
-// used until it does. See output_scheduler.cpp for the algorithm.
-#define OUTPUT_DEFAULT_MAX_CONSECUTIVE_AUDIO_SENDS 4
-#define OUTPUT_DEFAULT_STATE_MAX_AGE_US 3000
-#define OUTPUT_MIN_MAX_CONSECUTIVE_AUDIO_SENDS 1
 #define OUTPUT_MAX_MAX_CONSECUTIVE_AUDIO_SENDS 64
 #define OUTPUT_MIN_STATE_MAX_AGE_US 250
 #define OUTPUT_MAX_STATE_MAX_AGE_US 60000
@@ -348,11 +341,6 @@ static uint8_t consecutive_non_audio_sends = 0;
 // Counts audio packets sent in a row since the last controller-state packet;
 // feeds the fair-interleave scheduler so state is guaranteed a slot.
 static uint8_t consecutive_audio_sends = 0;
-// Live-tunable interleave policy (companion app may override the defaults).
-static OutputSchedulerConfig output_interleave_config{
-    OUTPUT_DEFAULT_MAX_CONSECUTIVE_AUDIO_SENDS,
-    OUTPUT_DEFAULT_STATE_MAX_AGE_US
-};
 static critical_section_t queue_lock;
 uint32_t inactive_time = 0; // Tracks long controller inactivity.
 static uint16_t idle_disconnect_timeout_minutes = DEFAULT_IDLE_DISCONNECT_TIMEOUT_MINUTES;
@@ -2766,33 +2754,30 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         packet = std::move(urgent_queue.front());
         urgent_queue.pop();
     } else {
-        const bool audio_available = !audio_queue.empty();
-        const uint32_t state_age_us = state_pending
-            ? packet_age_us(now, state_pending_since_us)
-            : 0;
-        const OutputSchedulerInputs scheduler_inputs{
-            audio_available,
-            state_pending,
-            consecutive_audio_sends,
-            state_age_us
-        };
-
-        const OutputSchedulerChoice choice = output_scheduler_choose_interrupt_packet(
-            scheduler_inputs,
-            output_interleave_config
-        );
-
-        if (choice == OutputSchedulerChoice::AudioStream) {
+        // Controller state first, audio otherwise.
+        //
+        // This replaced an interleave scheduler that bounded state's share of the link. That
+        // bound was added on the theory that audio was starving trigger/rumble updates, which
+        // turned out to be wrong twice: the real causes were firmware state-suppression guards
+        // (removed in 1.6.12) and the audio snapshot replaying stale trigger state over the
+        // test effect (fixed in 1.6.58). Upstream does not carry the scheduler either.
+        //
+        // State cannot flood audio the way an unbounded stream could: state_pending is a
+        // SINGLE coalesced slot holding the latest report, so a host sending at 1kHz still
+        // yields at most one state packet per send opportunity. Worth watching
+        // audio_0x36_late_count under a busy game regardless -- that is the number that would
+        // show starvation if this is wrong.
+        if (!state_pending) {
+            if (audio_queue.empty()) {
+                return false;
+            }
             packet = std::move(audio_queue.front());
             audio_queue.pop();
-        } else if (choice == OutputSchedulerChoice::CoalescedState) {
-            // The interleave scheduler already decided controller state is starved
-            // and must go now, so do NOT additionally veto it with the legacy
-            // state_send_blocked_by_audio window. During continuous audio that
-            // window is effectively always "recent", which would block every
-            // state send and defeat the scheduler (this is why triggers/rumble
-            // died under audio). The scheduler bounds state's share of the link,
-            // so audio stays protected without this override.
+        } else {
+            // No legacy state_send_blocked_by_audio veto here either. During continuous audio
+            // that window is effectively always "recent", so honouring it would block every
+            // state send -- which is how triggers and rumble died under audio in the first
+            // place.
             uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
             memcpy(report, state_pending_report, sizeof(report));
             if (!build_interrupt_output_packet(report, sizeof(report), packet.data)) {
@@ -2805,8 +2790,6 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
             packet.report_id = DS_OUTPUT_REPORT_BT;
             packet.reason = state_pending_reason;
             state_pending = false;
-        } else {
-            return false;
         }
     }
 
@@ -4150,33 +4133,6 @@ void bt_reset_output_debug_stats() {
     consecutive_non_audio_sends = 0;
     consecutive_audio_sends = 0;
     update_queue_depth_counters_locked();
-    critical_section_exit(&queue_lock);
-}
-
-// Live-tunable audio/controller interleave policy. The companion app pushes these
-// over the vendor link; values are clamped to the supported range. See
-// output_scheduler.cpp for how they steer packet selection.
-void bt_set_audio_interleave(uint8_t max_consecutive_audio_sends, uint32_t state_max_age_us) {
-    if (max_consecutive_audio_sends < OUTPUT_MIN_MAX_CONSECUTIVE_AUDIO_SENDS) {
-        max_consecutive_audio_sends = OUTPUT_MIN_MAX_CONSECUTIVE_AUDIO_SENDS;
-    } else if (max_consecutive_audio_sends > OUTPUT_MAX_MAX_CONSECUTIVE_AUDIO_SENDS) {
-        max_consecutive_audio_sends = OUTPUT_MAX_MAX_CONSECUTIVE_AUDIO_SENDS;
-    }
-    if (state_max_age_us < OUTPUT_MIN_STATE_MAX_AGE_US) {
-        state_max_age_us = OUTPUT_MIN_STATE_MAX_AGE_US;
-    } else if (state_max_age_us > OUTPUT_MAX_STATE_MAX_AGE_US) {
-        state_max_age_us = OUTPUT_MAX_STATE_MAX_AGE_US;
-    }
-    critical_section_enter_blocking(&queue_lock);
-    output_interleave_config.max_consecutive_audio_sends = max_consecutive_audio_sends;
-    output_interleave_config.state_max_age_us = state_max_age_us;
-    critical_section_exit(&queue_lock);
-}
-
-void bt_reset_audio_interleave() {
-    critical_section_enter_blocking(&queue_lock);
-    output_interleave_config.max_consecutive_audio_sends = OUTPUT_DEFAULT_MAX_CONSECUTIVE_AUDIO_SENDS;
-    output_interleave_config.state_max_age_us = OUTPUT_DEFAULT_STATE_MAX_AGE_US;
     critical_section_exit(&queue_lock);
 }
 

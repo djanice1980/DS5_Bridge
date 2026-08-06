@@ -23,7 +23,6 @@ import {
   ackUserMessage,
   buildChordBindingsPayload,
   buildCommandReport,
-  clampAudioInterleaveValues,
   parseAckReport,
   parseAudioDebugReport,
   parseAudioStatsReport,
@@ -123,7 +122,7 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.58';
+const BUNDLED_FIRMWARE_VERSION = '1.6.59';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -2223,22 +2222,6 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
-  async setAudioInterleave(
-    maxConsecutiveAudioSends: number,
-    stateMaxAgeUs: number
-  ): Promise<BridgeSnapshot> {
-    const clamped = clampAudioInterleaveValues(maxConsecutiveAudioSends, stateMaxAgeUs);
-    await this.sendSettingCommand(
-      COMMAND_ID.SET_AUDIO_INTERLEAVE,
-      clamped.maxConsecutiveAudioSends,
-      {
-        audioInterleaveMaxConsecutiveAudioSends: clamped.maxConsecutiveAudioSends,
-        audioInterleaveStateMaxAgeUs: clamped.stateMaxAgeUs
-      },
-      [clamped.stateMaxAgeUs & 0xff, (clamped.stateMaxAgeUs >> 8) & 0xff]
-    );
-    return this.getSnapshot();
-  }
 
   async setClassicRumbleGain(percent: number): Promise<BridgeSnapshot> {
     const currentSettings = this.settingsStore.get();
@@ -3955,18 +3938,6 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH, settings.hapticsBufferLength, {
       expectSettingsRevisionChange
     });
-    {
-      const interleave = clampAudioInterleaveValues(
-        settings.audioInterleaveMaxConsecutiveAudioSends,
-        settings.audioInterleaveStateMaxAgeUs
-      );
-      // Best-effort: firmware without CommandSetAudioInterleave simply NACKs, so
-      // don't let it break the connect sequence.
-      await this.sendCommand(COMMAND_ID.SET_AUDIO_INTERLEAVE, interleave.maxConsecutiveAudioSends, {
-        throwOnCommandError: false,
-        extraPayload: [interleave.stateMaxAgeUs & 0xff, (interleave.stateMaxAgeUs >> 8) & 0xff]
-      });
-    }
     await this.applyAudioReactiveHapticsSettings(settings, expectSettingsRevisionChange);
     if (!this.reapplyActive) {
       await this.updateSystemAudioHapticsEngine();

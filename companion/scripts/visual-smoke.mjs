@@ -31,6 +31,14 @@ let originalUiThemePreset;
 try {
   page = await app.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  // Mark the startup tour complete before touching anything. Its modal backdrop covers the
+  // tab strip, so on a machine that has not dismissed it every tab click times out waiting
+  // for an element that is present but not clickable -- which reads as a UI regression.
+  await page.evaluate(() => {
+    // The app checks for exactly '1'; any other truthy string leaves the tour showing.
+    localStorage.setItem('ds5bridge.startupTutorialCompleted.v1', '1');
+  });
+  await page.reload();
   await page.waitForSelector('.hero-card', { timeout: 10000 });
   await page.waitForTimeout(250);
 

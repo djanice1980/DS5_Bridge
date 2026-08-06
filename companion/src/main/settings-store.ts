@@ -1,8 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  AUDIO_INTERLEAVE_DEFAULT,
-  clampAudioInterleaveValues,
   CHORD_ASSIGNABLE_BUTTON_IDS,
   CHORD_STARTER_IDS,
   DEFAULT_BUTTON_REMAP_PROFILE,
@@ -156,8 +154,6 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   hapticsGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsGainPercent,
   feedbackBoostEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.feedbackBoostEnabled,
   hapticsBufferLength: 64,
-  audioInterleaveMaxConsecutiveAudioSends: AUDIO_INTERLEAVE_DEFAULT.maxConsecutiveAudioSends,
-  audioInterleaveStateMaxAgeUs: AUDIO_INTERLEAVE_DEFAULT.stateMaxAgeUs,
   wakeOnControllerConnect: true,
   classicRumbleEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleEnabled,
   classicRumbleGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleGainPercent,
@@ -903,22 +899,6 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     hapticsBufferLength: Number.isFinite(value?.hapticsBufferLength)
       ? Math.max(16, Math.min(128, Math.round(value!.hapticsBufferLength!)))
       : DEFAULT_SETTINGS.hapticsBufferLength,
-    audioInterleaveMaxConsecutiveAudioSends: clampAudioInterleaveValues(
-      Number.isFinite(value?.audioInterleaveMaxConsecutiveAudioSends)
-        ? value!.audioInterleaveMaxConsecutiveAudioSends!
-        : DEFAULT_SETTINGS.audioInterleaveMaxConsecutiveAudioSends,
-      Number.isFinite(value?.audioInterleaveStateMaxAgeUs)
-        ? value!.audioInterleaveStateMaxAgeUs!
-        : DEFAULT_SETTINGS.audioInterleaveStateMaxAgeUs
-    ).maxConsecutiveAudioSends,
-    audioInterleaveStateMaxAgeUs: clampAudioInterleaveValues(
-      Number.isFinite(value?.audioInterleaveMaxConsecutiveAudioSends)
-        ? value!.audioInterleaveMaxConsecutiveAudioSends!
-        : DEFAULT_SETTINGS.audioInterleaveMaxConsecutiveAudioSends,
-      Number.isFinite(value?.audioInterleaveStateMaxAgeUs)
-        ? value!.audioInterleaveStateMaxAgeUs!
-        : DEFAULT_SETTINGS.audioInterleaveStateMaxAgeUs
-    ).stateMaxAgeUs,
     classicRumbleEnabled: typeof value?.classicRumbleEnabled === 'boolean'
       ? value.classicRumbleEnabled
       : DEFAULT_SETTINGS.classicRumbleEnabled,

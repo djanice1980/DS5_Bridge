@@ -134,7 +134,6 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_MUTE_BUTTON_ACTION,
   COMMAND_ID.SET_HAPTICS_GAIN,
   COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH,
-  COMMAND_ID.SET_AUDIO_INTERLEAVE,
   COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS,
   COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
   COMMAND_ID.SET_CLASSIC_RUMBLE_V1,
@@ -751,7 +750,7 @@ describe('BridgeService', () => {
     expect(snapshot.diagnostics.lastError).toBeNull();
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toEqual({
       currentVersion: '1.6.2',
-      availableVersion: '1.6.58'
+      availableVersion: '1.6.59'
     });
   });
 
@@ -891,7 +890,7 @@ describe('BridgeService', () => {
   it('does not surface an available update for the bundled bridge firmware', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
-    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 58 });
+    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 59 });
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
@@ -899,7 +898,7 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('connected');
-    expect(snapshot.status?.firmwareVersion).toBe('1.6.58');
+    expect(snapshot.status?.firmwareVersion).toBe('1.6.59');
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toBeNull();
   });
 
