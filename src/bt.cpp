@@ -74,10 +74,21 @@
 #define DS_TRIGGER_EFFECT_RIGHT_OFFSET 10
 #define DS_TRIGGER_EFFECT_LEFT_OFFSET 21
 #define DS_TRIGGER_EFFECT_POWER_OFFSET 36
+// Extended, zone-packed effects: position is one of 10 zones and force is 3 bits PER ZONE, so
+// they can vary force along the travel -- which the simple family cannot do. Kept for the
+// custom/Lab effects that actually use that.
 #define DS_TRIGGER_EFFECT_OFF 0x05
 #define DS_TRIGGER_EFFECT_FEEDBACK 0x21
 #define DS_TRIGGER_EFFECT_WEAPON 0x25
 #define DS_TRIGGER_EFFECT_VIBRATION 0x26
+
+// Simple, scalar effects: the controller translates these internally and they are what games
+// actually send. Position and force are full BYTES rather than a 10-zone map and a 3-bit
+// force, so the presets stop being quantised to 8 strength steps -- which is why the built-in
+// tests felt weak and steppy next to a dedicated tester.
+#define DS_TRIGGER_EFFECT_SIMPLE_RESISTANCE 0x01
+#define DS_TRIGGER_EFFECT_SIMPLE_WEAPON 0x02
+#define DS_TRIGGER_EFFECT_SIMPLE_AUTO 0x06
 #define DS_TRIGGER_TARGET_BOTH 0
 #define DS_TRIGGER_TARGET_LEFT 1
 #define DS_TRIGGER_TARGET_RIGHT 2
@@ -726,6 +737,53 @@ static void set_trigger_off(uint8_t *trigger) {
     trigger[0] = DS_TRIGGER_EFFECT_OFF;
 }
 
+// Scale a preset's full-strength force by the intensity setting. Full byte range, so the
+// intensity slider is smooth instead of the eight 12.5% steps the packed force allowed.
+static uint8_t trigger_force_from_percent(uint8_t intensity_percent, uint8_t full_force) {
+    const uint8_t clamped = intensity_percent > 100 ? 100 : intensity_percent;
+    if (clamped == 0) {
+        return 0;
+    }
+    const uint16_t scaled = static_cast<uint16_t>((full_force * clamped + 50) / 100);
+    return scaled == 0 ? 1 : static_cast<uint8_t>(scaled);
+}
+
+// Byte layout for the simple family: [0] effect id, then its scalar parameters in order.
+static void set_trigger_simple_resistance(uint8_t *trigger, uint8_t start_position, uint8_t force) {
+    memset(trigger, 0, DS_TRIGGER_EFFECT_SIZE);
+    trigger[0] = DS_TRIGGER_EFFECT_SIMPLE_RESISTANCE;
+    trigger[1] = start_position;
+    trigger[2] = force;
+}
+
+static void set_trigger_simple_weapon(
+    uint8_t *trigger,
+    uint8_t start_position,
+    uint8_t end_position,
+    uint8_t force
+) {
+    memset(trigger, 0, DS_TRIGGER_EFFECT_SIZE);
+    trigger[0] = DS_TRIGGER_EFFECT_SIMPLE_WEAPON;
+    trigger[1] = start_position;
+    trigger[2] = end_position;
+    trigger[3] = force;
+}
+
+static void set_trigger_simple_auto(
+    uint8_t *trigger,
+    uint8_t start_position,
+    uint8_t force,
+    uint8_t frequency
+) {
+    memset(trigger, 0, DS_TRIGGER_EFFECT_SIZE);
+    trigger[0] = DS_TRIGGER_EFFECT_SIMPLE_AUTO;
+    trigger[1] = start_position;
+    trigger[2] = force;
+    // Frequency is a small field in this mode; the old packed-vibration preset passed 18,
+    // which is outside the range this effect accepts.
+    trigger[3] = frequency > 15 ? 15 : frequency;
+}
+
 static void set_trigger_feedback(uint8_t *trigger, uint8_t position, uint8_t strength) {
     if (strength == 0) {
         set_trigger_off(trigger);
@@ -817,7 +875,6 @@ void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uin
         return;
     }
 
-    const uint8_t strength = trigger_strength_from_percent(intensity_percent);
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3] = 0x04 | 0x08;
@@ -826,15 +883,20 @@ void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uin
     set_trigger_off(right_trigger);
     set_trigger_off(left_trigger);
 
+    // The presets use the SIMPLE effect family with full-byte parameters. They previously used
+    // the zone-packed family, where force is 3 bits -- eight steps across the whole intensity
+    // range -- and the chosen positions sat early in the travel, which is why they felt weak
+    // and steppy. Full-strength values here are the ones the effects are normally driven at;
+    // intensity scales them.
     auto apply_effect = [&](uint8_t *trigger) {
-        if (strength == 0) {
+        if (intensity_percent == 0) {
             set_trigger_off(trigger);
         } else if (mode == 1) {
-            set_trigger_weapon(trigger, 2, 7, strength);
+            set_trigger_simple_weapon(trigger, 15, 100, trigger_force_from_percent(intensity_percent, 255));
         } else if (mode == 2) {
-            set_trigger_vibration(trigger, 3, strength, 18);
+            set_trigger_simple_auto(trigger, 20, trigger_force_from_percent(intensity_percent, 255), 10);
         } else {
-            set_trigger_feedback(trigger, 3, strength);
+            set_trigger_simple_resistance(trigger, 40, trigger_force_from_percent(intensity_percent, 230));
         }
     };
 

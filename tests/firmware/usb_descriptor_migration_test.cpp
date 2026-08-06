@@ -847,6 +847,30 @@ void assert_lightbar_override_applies_to_every_path(std::filesystem::path const 
     }
 }
 
+// The built-in trigger presets must use the SIMPLE effect family. The zone-packed family
+// carries force as 3 bits per zone -- eight steps across the entire intensity range -- which
+// is what made the presets feel weak and steppy. The packed encoders stay for the custom/Lab
+// effects, which genuinely need per-zone force.
+void assert_trigger_presets_use_the_simple_family(std::filesystem::path const &root) {
+    const auto bt_cpp = remove_comments(read_text(root / "src" / "bt.cpp"));
+    const std::string body = extract_between(
+        bt_cpp,
+        "void bt_set_adaptive_trigger_effect(",
+        "\n}\n"
+    );
+    for (const char *packed : {"set_trigger_feedback(", "set_trigger_weapon(", "set_trigger_vibration("}) {
+        if (body.find(packed) != std::string::npos) {
+            throw std::runtime_error(
+                std::string("Trigger presets must not use the zone-packed encoder ") + packed
+                + "; its force is quantised to eight steps"
+            );
+        }
+    }
+    if (body.find("set_trigger_simple_") == std::string::npos) {
+        throw std::runtime_error("Trigger presets must use the simple effect encoders");
+    }
+}
+
 void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const std::string closed = extract_between(
@@ -913,6 +937,7 @@ int main() {
         assert_connect_does_not_overwrite_the_saved_lightbar(source_root);
         assert_host_lightbar_reclaim_is_bounded(source_root);
         assert_lightbar_override_applies_to_every_path(source_root);
+        assert_trigger_presets_use_the_simple_family(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex
