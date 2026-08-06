@@ -360,6 +360,26 @@ html {
   stroke-linecap: round;
 }
 
+.tester-axis-readout {
+  display: flex;
+  gap: 14px;
+  margin: 6px 0 0;
+  font-size: 11px;
+}
+
+.tester-axis-readout div {
+  display: flex;
+  gap: 5px;
+}
+
+.tester-axis-readout dt {
+  color: var(--text-muted, #8fa3bb);
+}
+
+.tester-axis-readout dd {
+  margin: 0;
+}
+
 .tester-accel-z {
   flex: 1;
   display: flex;

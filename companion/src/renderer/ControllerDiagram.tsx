@@ -247,7 +247,16 @@ export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
             style={{ width: `${fillWidth}%`, marginLeft: `${fillLeft}%` }}
           />
         </div>
-        <span className="tester-mono">{y}</span>
+        {/*
+          Per-axis numbers, because the needle is driven by X and Z and without them an
+          off-centre dot cannot be told apart from a sensor offset. Guessing between those two
+          from the Y value alone is exactly what went wrong before these were shown.
+        */}
+        <dl className="tester-axis-readout">
+          <div><dt>X</dt><dd className="tester-mono">{x}</dd></div>
+          <div><dt>Y</dt><dd className="tester-mono">{y}</dd></div>
+          <div><dt>Z</dt><dd className="tester-mono">{z}</dd></div>
+        </dl>
       </div>
     </div>
   );
