@@ -871,6 +871,25 @@ void assert_trigger_presets_use_the_simple_family(std::filesystem::path const &r
     }
 }
 
+// A host report that merely CARRIES the trigger validity bits with the effect set to OFF is
+// not a game driving the triggers. Treating it as one made the built-in trigger tests refuse
+// to run for kGameTriggerUpdateRecentUs afterwards -- which is what stopped them engaging
+// while audio played, since hosts set those bits while configuring audio.
+void assert_game_trigger_activity_ignores_off_effects(std::filesystem::path const &root) {
+    const auto companion_cpp = remove_comments(read_text(root / "src" / "companion.cpp"));
+    const std::string body = extract_between(
+        companion_cpp,
+        "void cache_game_trigger_effects(",
+        "\n}\n"
+    );
+    if (body.find("kTriggerEffectModeOffExtended") == std::string::npos
+        || body.find("kTriggerEffectModeOffSimple") == std::string::npos) {
+        throw std::runtime_error(
+            "cache_game_trigger_effects must not treat an OFF trigger effect as game activity"
+        );
+    }
+}
+
 void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const std::string closed = extract_between(
@@ -938,6 +957,7 @@ int main() {
         assert_host_lightbar_reclaim_is_bounded(source_root);
         assert_lightbar_override_applies_to_every_path(source_root);
         assert_trigger_presets_use_the_simple_family(source_root);
+        assert_game_trigger_activity_ignores_off_effects(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

@@ -30,7 +30,7 @@ constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 56;
+constexpr uint8_t kFirmwarePatch = 57;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -91,6 +91,9 @@ constexpr uint8_t kTriggerTraceRingSize = 96;
 constexpr uint8_t kFeedbackTraceRecordSize = 24;
 constexpr uint8_t kFeedbackTraceRingSize = 160;
 #endif
+// Both spellings of "no effect": 0x05 in the extended family, 0x00 in the simple one.
+constexpr uint8_t kTriggerEffectModeOffExtended = 0x05;
+constexpr uint8_t kTriggerEffectModeOffSimple = 0x00;
 constexpr uint8_t kTriggerEffectSize = 11;
 constexpr uint8_t kTriggerEffectRightOffset = 10;
 constexpr uint8_t kTriggerEffectLeftOffset = 21;
@@ -1059,7 +1062,27 @@ void cache_game_trigger_effects(uint8_t const *payload, uint16_t len) {
         return;
     }
 
-    last_game_trigger_update_us = time_us_32();
+    // Only an effect that actually DOES something counts as "a game is driving the triggers".
+    //
+    // The guard exists so a trigger test cannot fight a game mid-play. But hosts routinely
+    // send output reports carrying the trigger validity bits with the effect set to OFF --
+    // Windows does it while setting up audio -- and treating that as game activity made
+    // schedule_adaptive_trigger_test() refuse for kGameTriggerUpdateRecentUs afterwards. The
+    // symptom was that the built-in trigger tests would not engage while audio played, even
+    // though nothing was competing for the triggers at all.
+    const bool right_effect_active =
+        (trigger_flags & kTriggerRightEffectFlag)
+        && len > kTriggerEffectRightOffset
+        && payload[kTriggerEffectRightOffset] != kTriggerEffectModeOffExtended
+        && payload[kTriggerEffectRightOffset] != kTriggerEffectModeOffSimple;
+    const bool left_effect_active =
+        (trigger_flags & kTriggerLeftEffectFlag)
+        && len > kTriggerEffectLeftOffset
+        && payload[kTriggerEffectLeftOffset] != kTriggerEffectModeOffExtended
+        && payload[kTriggerEffectLeftOffset] != kTriggerEffectModeOffSimple;
+    if (right_effect_active || left_effect_active) {
+        last_game_trigger_update_us = time_us_32();
+    }
 
     if (
         (trigger_flags & kTriggerRightEffectFlag)
