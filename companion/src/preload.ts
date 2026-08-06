@@ -208,6 +208,9 @@ const api = {
     ipcRenderer.invoke('bridge:readControllerInput')
   ),
   openTesterWindow: (): Promise<void> => ipcRenderer.invoke('bridge:openTesterWindow'),
+  holdInputForwarding: (holdMs: number): Promise<void> => (
+    ipcRenderer.invoke('bridge:holdInputForwarding', holdMs)
+  ),
   restoreDefaults: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:restoreDefaults'),
   setButtonRemap: (buttonId: RemapButtonId, targetId: RemapButtonId): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setButtonRemap', buttonId, targetId)

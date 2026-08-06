@@ -206,6 +206,31 @@ static bool time_reached_u32(uint32_t now, uint32_t target) {
     return static_cast<int32_t>(now - target) >= 0;
 }
 
+// Input-forwarding hold, used by the tester so pressing PS does not open Steam while you are
+// checking buttons.
+//
+// A LEASE, not a toggle: the app renews it while the tester is open and it expires on its own.
+// A plain on/off flag would leave the controller dead to the host if the app crashed, was killed,
+// or lost the bridge with the hold set -- and the user would have no way to clear it except by
+// power-cycling. Expiry means the worst case is a couple of seconds of lost input.
+static uint32_t host_input_hold_until_us = 0;
+static bool host_input_hold_neutral_sent = false;
+
+void host_input_hold_forwarding(uint32_t duration_us) {
+    host_input_hold_until_us = duration_us == 0 ? 0 : time_us_32() + duration_us;
+}
+
+static bool host_input_hold_active(uint32_t now) {
+    if (host_input_hold_until_us == 0) {
+        return false;
+    }
+    if (time_reached_u32(now, host_input_hold_until_us)) {
+        host_input_hold_until_us = 0;
+        return false;
+    }
+    return true;
+}
+
 static bool host_input_quiet_active(uint32_t now) {
     if (!host_input_waiting_for_mount) {
         return false;
@@ -343,6 +368,18 @@ void interrupt_loop() {
     if (host_input_quiet_active(now)) {
         return;
     }
+
+    // While held, keep reporting NEUTRAL rather than simply not sending. Skipping would leave
+    // the host latched on whatever was pressed at the moment the hold started -- a held trigger
+    // or stick would stay stuck down for the whole session.
+    if (host_input_hold_active(now)) {
+        if (!host_input_hold_neutral_sent) {
+            host_input_hold_neutral_sent = true;
+            (void)host_input_send_report_for_persona(host_persona_active(), neutral_controller_state());
+        }
+        return;
+    }
+    host_input_hold_neutral_sent = false;
 
     watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptReadyCheck);
     const HostPersonaMode persona = host_persona_active();

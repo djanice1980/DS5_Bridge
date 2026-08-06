@@ -22,6 +22,18 @@ import {
  */
 const INPUT_POLL_INTERVAL_MS = 40;
 
+/**
+ * While this window is open the bridge stops forwarding input to the host, so pressing PS to
+ * check it does not open Steam and a stick sweep does not move the game behind.
+ *
+ * Held as a short LEASE that this window renews, not a flag it sets once: if the app is killed,
+ * crashes, or loses the bridge, the hold expires by itself and the controller comes back. The
+ * hold is comfortably longer than the renewal so ordinary scheduling jitter never lets it lapse
+ * mid-session.
+ */
+const INPUT_HOLD_MS = 2000;
+const INPUT_HOLD_RENEW_MS = 700;
+
 function EffectEditor({
   title,
   effect,
@@ -168,6 +180,7 @@ export function TesterApp() {
   const [leftEffect, setLeftEffect] = useState<TriggerEffect>(() => defaultTriggerEffect('resistance'));
   const [sendError, setSendError] = useState<string | null>(null);
   const [pollMs, setPollMs] = useState<number | null>(null);
+  const [holdInput, setHoldInput] = useState(true);
 
   const pollBusy = useRef(false);
 
@@ -204,6 +217,29 @@ export function TesterApp() {
       clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    if (!holdInput) {
+      // Release immediately rather than waiting for the lease to lapse.
+      void window.bridge.holdInputForwarding(0).catch(() => {});
+      return;
+    }
+
+    let cancelled = false;
+    const renew = () => {
+      if (!cancelled) {
+        void window.bridge.holdInputForwarding(INPUT_HOLD_MS).catch(() => {});
+      }
+    };
+
+    renew();
+    const timer = setInterval(renew, INPUT_HOLD_RENEW_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+      void window.bridge.holdInputForwarding(0).catch(() => {});
+    };
+  }, [holdInput]);
 
   useEffect(() => {
     let cancelled = false;
@@ -270,6 +306,18 @@ export function TesterApp() {
           </select>
         </label>
       </header>
+
+      <label className="tester-hold-toggle">
+        <input
+          type="checkbox"
+          checked={holdInput}
+          onChange={(event) => setHoldInput(event.target.checked)}
+        />
+        <span>
+          Pause input to this PC while testing
+          <span className="tester-subtle"> &mdash; so PS does not open Steam. Releases automatically if the app closes.</span>
+        </span>
+      </label>
 
       <div className={`tester-status${connected ? ' is-live' : ''}`}>
         {connected

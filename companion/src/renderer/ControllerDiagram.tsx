@@ -1,14 +1,11 @@
+import { createElement } from 'react';
 import type { DualSenseInputState } from '../shared/dualsense-input';
 import { DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH } from '../shared/dualsense-input';
-import {
-  DUALSENSE_ART,
-  DUALSENSE_TRANSFORM,
-  DUALSENSE_VIEWBOX,
-  type DualSenseArtRole
-} from './dualsense-art';
+import { DUALSENSE_ART, DUALSENSE_VIEWBOX, type DualSenseArtRole } from './dualsense-art';
 
 /**
- * DualSense driven by live input, over traced artwork (see dualsense-art.ts).
+ * DualSense driven by live input, over artwork from daidr/dualsense-tester (MIT, see
+ * dualsense-art.ts and NOTICE.txt).
  *
  * Two deliberately different visual languages, because conflating them hides what the hardware
  * actually reports:
@@ -17,21 +14,16 @@ import {
  *     easing would invent intermediate states the controller never sent.
  *   - ANALOGUE controls fade in proportion to their value. A trigger at 40 and a trigger at 250
  *     must not look alike, and the fade is what makes a sticky or drifting axis visible.
- *
- * The artwork carries no separate outline: the linework is the GAP between filled regions, so
- * the card behind showing through IS the outline. Fills therefore have to stay lighter than the
- * card, and the canvas path is never drawn.
  */
 
-/** Touchpad geometry in artwork units, for placing live contacts. */
-const TOUCHPAD = { x: 12606, y: 20101, width: 18247, height: 9321 };
-/** The PS button is linework in the artwork rather than a fillable region, so it gets an overlay. */
-const PS_BUTTON = { cx: 21749, cy: 14700, r: 620 };
-/** Stick centres in artwork units. */
-const LEFT_STICK = { cx: 14002, cy: 15109 };
-const RIGHT_STICK = { cx: 29381, cy: 15115 };
-/** How far a thumb cap travels from centre at full deflection, in artwork units. */
-const STICK_TRAVEL = 900;
+/** Touchpad bounds in artwork units, taken from the touchpad path, for placing live contacts. */
+const TOUCHPAD = { x: 292, y: 143, width: 534, height: 254 };
+/** Stick centres and cap radius in artwork units, from l3/r3. */
+const LEFT_STICK = { cx: 351.764, cy: 528.548 };
+const RIGHT_STICK = { cx: 763.456, cy: 528.548 };
+/** How far a cap travels from centre at full deflection. The well is 87 and the cap 57, so this
+ *  keeps the cap inside its well rather than sliding out of the drawing. */
+const STICK_TRAVEL = 26;
 
 function axis(value: number): number {
   return (value - 128) / 127;
@@ -60,8 +52,9 @@ export function ControllerDiagram({ state }: { state: DualSenseInputState | null
     circle: s?.circle === true,
     cross: s?.cross === true,
     square: s?.square === true,
-    leftStickInner: s?.l3 === true,
-    rightStickInner: s?.r3 === true,
+    l3: s?.l3 === true,
+    r3: s?.r3 === true,
+    ps: s?.home === true,
     mute: s?.mute === true
   };
 
@@ -83,84 +76,78 @@ export function ControllerDiagram({ state }: { state: DualSenseInputState | null
       role="img"
       aria-label="Controller input"
     >
-      <g transform={DUALSENSE_TRANSFORM}>
-        {DUALSENSE_ART.map((path, index) => {
-          // The canvas path is the traced background, not part of the controller.
-          if (path.role === 'canvas') {
-            return null;
-          }
+      {DUALSENSE_ART.map((element, index) => {
+        // The artwork's own touch dots are placeholders at fixed positions; live contacts are
+        // drawn below instead. Rendering both would show two sets of fingers.
+        if (element.role === 'touchDot') {
+          return null;
+        }
 
-          const analogueFraction = analogue[path.role];
-          const isPressed = pressed[path.role] === true;
+        const analogueFraction = analogue[element.role];
+        const isPressed = pressed[element.role] === true;
 
-          // Thumb caps translate with their axes; the wells stay put, so deflection reads as
-          // the stick moving rather than the whole assembly sliding. Artwork Y is flipped by
-          // the group transform, hence the negated Y.
-          let transform: string | undefined;
-          if (path.role === 'leftStickInner') {
-            transform = `translate(${leftAxis.x * STICK_TRAVEL} ${-leftAxis.y * STICK_TRAVEL})`;
-          } else if (path.role === 'rightStickInner') {
-            transform = `translate(${rightAxis.x * STICK_TRAVEL} ${-rightAxis.y * STICK_TRAVEL})`;
-          }
+        // Stick caps translate with their axes; the wells stay put, so deflection reads as the
+        // stick moving rather than the whole assembly sliding.
+        let transform: string | undefined;
+        if (element.role === 'l3') {
+          transform = `translate(${leftAxis.x * STICK_TRAVEL} ${leftAxis.y * STICK_TRAVEL})`;
+        } else if (element.role === 'r3') {
+          transform = `translate(${rightAxis.x * STICK_TRAVEL} ${rightAxis.y * STICK_TRAVEL})`;
+        }
 
-          const className = [
-            'ds-part',
-            path.role === 'shell' ? 'ds-shell' : 'ds-control',
-            isPressed ? 'is-on' : ''
-          ].filter(Boolean).join(' ');
+        const className = [
+          'ds-part',
+          `ds-${element.role}`,
+          isPressed ? 'is-on' : ''
+        ].filter(Boolean).join(' ');
 
-          return (
-            <g key={index} transform={transform}>
-              <path className={className} d={path.d} />
-              {analogueFraction !== undefined && analogueFraction > 0 && (
-                <path
-                  className="ds-analogue"
-                  d={path.d}
-                  fillOpacity={analogueOpacity(analogueFraction)}
-                />
-              )}
-            </g>
-          );
-        })}
+        const shape = createElement(element.tag, {
+          ...element.attrs,
+          className,
+          key: 'base'
+        });
 
-        {/* PS button: an overlay, because the logo is linework in the artwork, not a region. */}
-        <circle
-          className={`ds-part ds-control ds-ps${s?.home === true ? ' is-on' : ''}`}
-          cx={PS_BUTTON.cx}
-          cy={PS_BUTTON.cy}
-          r={PS_BUTTON.r}
-        />
+        // The analogue overlay is the same shape drawn again, tinted by travel.
+        const overlay = analogueFraction !== undefined && analogueFraction > 0
+          ? createElement(element.tag, {
+            ...element.attrs,
+            className: 'ds-analogue',
+            fillOpacity: analogueOpacity(analogueFraction),
+            key: 'analogue'
+          })
+          : null;
 
-        {/* Live touch contacts. The report's Y grows downward, the artwork's upward. */}
-        {s?.touchPoints.map((point, index) => (
-          point.active
-            ? (
-              <circle
-                key={index}
-                className={`ds-touch ds-touch-${index}`}
-                cx={TOUCHPAD.x + (point.x / DUALSENSE_TOUCHPAD_WIDTH) * TOUCHPAD.width}
-                cy={TOUCHPAD.y + TOUCHPAD.height
-                  - (point.y / DUALSENSE_TOUCHPAD_HEIGHT) * TOUCHPAD.height}
-                r={520}
-              />
-            )
-            : null
-        ))}
+        return <g key={index} transform={transform}>{shape}{overlay}</g>;
+      })}
 
-        {/* Deflection dots, so small stick movement is readable rather than merely implied. */}
-        <circle
-          className="ds-stick-dot"
-          cx={LEFT_STICK.cx + leftAxis.x * STICK_TRAVEL}
-          cy={LEFT_STICK.cy - leftAxis.y * STICK_TRAVEL}
-          r={230}
-        />
-        <circle
-          className="ds-stick-dot"
-          cx={RIGHT_STICK.cx + rightAxis.x * STICK_TRAVEL}
-          cy={RIGHT_STICK.cy - rightAxis.y * STICK_TRAVEL}
-          r={230}
-        />
-      </g>
+      {/* Live touch contacts, replacing the artwork's placeholders. */}
+      {s?.touchPoints.map((point, index) => (
+        point.active
+          ? (
+            <circle
+              key={index}
+              className={`ds-touch ds-touch-${index}`}
+              cx={TOUCHPAD.x + (point.x / DUALSENSE_TOUCHPAD_WIDTH) * TOUCHPAD.width}
+              cy={TOUCHPAD.y + (point.y / DUALSENSE_TOUCHPAD_HEIGHT) * TOUCHPAD.height}
+              r={19}
+            />
+          )
+          : null
+      ))}
+
+      {/* Deflection dots, so small stick movement is readable rather than merely implied. */}
+      <circle
+        className="ds-stick-dot"
+        cx={LEFT_STICK.cx + leftAxis.x * STICK_TRAVEL}
+        cy={LEFT_STICK.cy + leftAxis.y * STICK_TRAVEL}
+        r={7}
+      />
+      <circle
+        className="ds-stick-dot"
+        cx={RIGHT_STICK.cx + rightAxis.x * STICK_TRAVEL}
+        cy={RIGHT_STICK.cy + rightAxis.y * STICK_TRAVEL}
+        r={7}
+      />
     </svg>
   );
 }

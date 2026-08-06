@@ -1,6 +1,6 @@
 {
   "name": "ds5-bridge-companion",
-  "version": "1.6.84",
+  "version": "1.6.85",
   "private": true,
   "description": "Companion app for the Pico DS5 Bridge companion firmware.",
   "author": "SundayMoments",
@@ -89,6 +89,14 @@
           "filter": [
             "clean-ds5bridge-devices.ps1"
           ]
+        },
+        {
+          "from": "../LICENSE",
+          "to": "LICENSE.txt"
+        },
+        {
+          "from": "../NOTICE",
+          "to": "NOTICE.txt"
         }
       ],
       "target": [

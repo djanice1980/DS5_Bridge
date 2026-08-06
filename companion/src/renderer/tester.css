@@ -83,6 +83,20 @@ html {
   color: var(--text-muted, #8fa3bb);
 }
 
+.tester-hold-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tester-hold-toggle .tester-subtle {
+  display: inline;
+  margin: 0;
+}
+
 .tester-status {
   display: inline-block;
   border: 1px solid var(--border, #263243);
@@ -176,48 +190,74 @@ html {
 }
 
 /*
- * Traced artwork: every visible line is the GAP between filled regions, so these fills must stay
- * lighter than the card behind them. Fill the parts dark and the drawing vanishes.
+ * Artwork from daidr/dualsense-tester (MIT). It is a STROKED line drawing, so the outline is a
+ * real stroke here rather than a gap between fills -- pressing a control fills its interior and
+ * leaves the outline intact.
  */
 .ds-part {
-  /* No transition on the base fill: digital controls must snap. */
-  fill: #9fb2cc;
+  /* No transition: digital controls must snap. */
+  fill: none;
+  stroke: #93a6c4;
+  stroke-width: 4px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .ds-shell {
-  fill: #64748f;
+  stroke: #5d6c88;
 }
 
-.ds-control {
-  fill: #9fb2cc;
+/* Decoration. Never lights up; it only has to stay legible on top of a filled button. The
+   face-button symbols are OUTLINES in the artwork -- filling them turns the square and circle
+   into solid blobs -- while the d-pad arrows and PS logo are solid shapes. */
+.ds-glyph {
+  fill: none;
+  stroke: #93a6c4;
+  stroke-width: 4px;
 }
 
-.ds-control.is-on {
-  fill: #b072f0;
+.ds-glyphSolid {
+  fill: #93a6c4;
+  stroke: none;
+}
+
+.ds-part.is-on {
+  fill: #8532c0;
+  stroke: #c9a4f0;
+}
+
+/* The PS logo is a solid shape, not an outline, so it fills rather than strokes. */
+.ds-ps {
+  fill: #93a6c4;
+  stroke: none;
+}
+
+.ds-ps.is-on {
+  fill: #c9a4f0;
+  stroke: none;
 }
 
 /* Analogue overlay: the only thing here that eases, because its value is continuous. */
 .ds-analogue {
   fill: #b072f0;
+  stroke: none;
   transition: fill-opacity 70ms linear;
 }
 
-/*
- * The PS button is linework in the artwork, so this overlay sits on top of it. It stays
- * invisible until pressed -- drawn idle it just blots out the logo. .ds-control.is-on is more
- * specific, so the pressed fill still wins.
- */
-.ds-ps {
-  fill: transparent;
+.ds-l3,
+.ds-r3 {
+  transition: transform 60ms linear;
 }
 
 .ds-stick-dot {
-  fill: #2b3446;
+  fill: #93a6c4;
+  stroke: none;
   transition: cx 60ms linear, cy 60ms linear;
 }
 
 .ds-touch {
   fill: #38bdf8;
+  stroke: none;
 }
 
 .ds-touch-1 {

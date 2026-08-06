@@ -110,7 +110,10 @@ export const COMMAND_ID = {
   SET_WAKE_ON_CONNECT: 0x35,
   // App-composed trigger effect bytes. The percent-based PREVIEW/APPLY commands quantize to
   // zones and 3-bit force; this one carries the effect verbatim.
-  SET_RAW_TRIGGER_EFFECT: 0x36
+  SET_RAW_TRIGGER_EFFECT: 0x36,
+  // Hold input forwarding to the host, in milliseconds. A lease: the holder renews it and it
+  // expires by itself, so a crashed app cannot leave the controller silent.
+  HOLD_INPUT_FORWARDING: 0x37
 } as const;
 
 export const ACK_RESULT = {
@@ -1189,6 +1192,9 @@ export function parseControllerInputReport(report: ArrayLike<number>): Controlle
   assertCurrentOrOlderVersion(report);
 
   const controllerConnected = (report[7] & 0x01) !== 0;
+  // The firmware strips the mute bit from every report before the host sees it -- the bridge
+  // owns that button -- so it cannot be decoded from the bytes and rides in the flags instead.
+  const muteHeld = (report[7] & 0x02) !== 0;
   const declared = report[8] & 0xff;
   // Trust the smaller of what the firmware declared and what actually arrived, so a truncated
   // transfer decodes as "too short" rather than reading whatever follows in the buffer.
@@ -1205,8 +1211,16 @@ export function parseControllerInputReport(report: ArrayLike<number>): Controlle
     raw,
     // A disconnected controller leaves the firmware's cache holding the neutral report. Decoding
     // it would render a centred, fully-released controller that looks live -- worse than nothing.
-    state: controllerConnected ? decodeDualSenseInputReport(raw) : null
+    state: controllerConnected ? withMuteHeld(decodeDualSenseInputReport(raw), muteHeld) : null
   };
+}
+
+/** Fold the out-of-band mute flag back into the decoded state, so callers see one shape. */
+function withMuteHeld(
+  state: ReturnType<typeof decodeDualSenseInputReport>,
+  muteHeld: boolean
+): ReturnType<typeof decodeDualSenseInputReport> {
+  return state === null ? null : { ...state, mute: muteHeld };
 }
 
 export const TRIGGER_RAW_TARGET = {

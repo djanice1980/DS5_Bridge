@@ -127,7 +127,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.62';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.63';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -3042,6 +3042,19 @@ export class BridgeService extends EventEmitter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Stop the bridge forwarding controller input to the host for holdMs, or release with 0.
+   *
+   * Callers RENEW this rather than setting it once; the firmware expires it on its own so a
+   * crash cannot leave the controller silent. Not surfaced as a persistent setting for the same
+   * reason -- there must be no way to end up held with nothing renewing it.
+   */
+  async holdInputForwarding(holdMs: number): Promise<void> {
+    await this.sendCommand(COMMAND_ID.HOLD_INPUT_FORWARDING, Math.max(0, Math.min(5000, Math.round(holdMs))), {
+      throwOnCommandError: false
+    });
   }
 
   async resetAdaptiveTriggers(): Promise<BridgeSnapshot> {

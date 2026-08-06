@@ -31,7 +31,7 @@ constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 62;
+constexpr uint8_t kFirmwarePatch = 63;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -160,6 +160,8 @@ enum CommandId : uint8_t {
     CommandSetWakeOnConnect = 0x35,
     // App-composed effect bytes. See bt_set_raw_adaptive_trigger_effects.
     CommandSetRawTriggerEffect = 0x36,
+    // Hold input forwarding to the host. See host_input_hold_forwarding.
+    CommandHoldInputForwarding = 0x37,
 };
 
 enum AckResult : uint8_t {
@@ -336,6 +338,10 @@ uint8_t mute_button_mode = MuteButtonNormal;
 uint8_t mute_keyboard_usage = kDefaultMuteKeyboardUsage;
 uint8_t mute_keyboard_modifiers = 0;
 bool mute_button_last_pressed = false;
+// The mute bit is stripped from every report before it reaches the host -- the bridge owns that
+// button. So the companion input report cannot show it, and the tester would draw the mic key as
+// never pressed. Latch the real state here and surface it out-of-band instead.
+bool mute_button_pressed_now = false;
 bool sleep_keybind_enabled = false;
 bool speaker_volume_shortcut_enabled = false;
 bool shortcut_binding_last_pressed[kShortcutBindingCount]{};
@@ -1833,7 +1839,12 @@ uint16_t build_controller_input(uint8_t *buffer, uint16_t reqlen) {
 
     memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
     write_magic_and_version(buffer);
-    buffer[6] = bt_is_controller_connected() ? 0x01 : 0x00;
+    // bit0 = controller connected, bit1 = mute button held. The mute bit never survives into
+    // the report itself (see mute_button_pressed_now), so it rides here.
+    buffer[6] = static_cast<uint8_t>(
+        (bt_is_controller_connected() ? 0x01 : 0x00)
+        | (mute_button_pressed_now ? 0x02 : 0x00)
+    );
     const size_t copied = controller_input_report_snapshot(
         buffer + kControllerInputHeaderSize,
         kControllerInputMaxBytes
@@ -2257,6 +2268,20 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckNotConnected);
                 return;
             }
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
+
+        case CommandHoldInputForwarding:
+            {
+            // value = hold duration in milliseconds, 0 to release. Capped so a caller cannot
+            // silence the controller indefinitely with one command; holders renew instead.
+            constexpr uint16_t kMaxHoldMs = 5000;
+            if (value > kMaxHoldMs) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            host_input_hold_forwarding(static_cast<uint32_t>(value) * 1000u);
             set_ack(command_id, sequence, AckOk);
             return;
             }
@@ -3128,6 +3153,7 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     const uint8_t dpad_direction = report[7] & kDpadMask;
     const bool dpad_pressed = dpad_direction <= 0x07;
     const bool mute_pressed = (report[9] & kMuteButtonBit) != 0;
+    mute_button_pressed_now = mute_pressed;
     const uint32_t now = time_us_32();
     if (mute_pressed && !mute_button_last_pressed && mute_keyboard_chord_starter_enabled()) {
         begin_mute_keyboard_chord_window(now);
