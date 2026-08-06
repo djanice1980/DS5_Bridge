@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BridgeSnapshot } from '../shared/types';
 import type { ControllerInputSnapshot, DualSenseInputState } from '../shared/dualsense-input';
-import { ControllerDiagram, GyroDial, AccelVector } from './ControllerDiagram';
+import { ControllerDiagram, GyroDial, AccelVector, type AccelZero } from './ControllerDiagram';
 import {
   TRIGGER_EFFECT_TYPES,
   TRIGGER_FREQUENCY_MAX,
@@ -181,6 +181,9 @@ export function TesterApp() {
   const [sendError, setSendError] = useState<string | null>(null);
   const [pollMs, setPollMs] = useState<number | null>(null);
   const [holdInput, setHoldInput] = useState(true);
+  // Deliberately not persisted: a zero captured in one session must not silently apply in the
+  // next, where the controller is somewhere else entirely.
+  const [accelZero, setAccelZero] = useState<AccelZero | null>(null);
 
   const pollBusy = useRef(false);
 
@@ -353,12 +356,18 @@ export function TesterApp() {
         <section className="tester-card">
           <h2>Acceleration</h2>
           <p className="tester-subtle">
-            Needle shows tilt in the plane of the desk, so a controller lying flat sits centred.
-            Lift is the vertical axis measured from that resting point &mdash; right when raised,
-            left when dropped.
+            Needle shows tilt in the plane of the desk; Lift is the vertical axis, right when
+            raised and left when dropped.
           </p>
           {state ? (
-            <AccelVector x={state.accelX} y={state.accelY} z={state.accelZ} />
+            <AccelVector
+              x={state.accelX}
+              y={state.accelY}
+              z={state.accelZ}
+              zero={accelZero}
+              onZero={() => setAccelZero({ x: state.accelX, y: state.accelY, z: state.accelZ })}
+              onClearZero={() => setAccelZero(null)}
+            />
           ) : <p className="tester-subtle">Waiting for input.</p>}
         </section>
 

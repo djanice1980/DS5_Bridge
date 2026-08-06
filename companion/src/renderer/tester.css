@@ -360,6 +360,37 @@ html {
   stroke-linecap: round;
 }
 
+.tester-accel-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tester-accel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tester-accel-actions button {
+  background: transparent;
+  border: 1px solid var(--border, #263243);
+  color: var(--text, #e6edf6);
+  border-radius: 8px;
+  padding: 5px 11px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.tester-accel-actions .tester-subtle {
+  margin: 0;
+  flex: 1;
+  min-width: 180px;
+}
+
 .tester-axis-readout {
   display: flex;
   gap: 14px;

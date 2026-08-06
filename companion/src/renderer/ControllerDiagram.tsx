@@ -190,73 +190,108 @@ export function GyroDial({ label, value }: { label: string; value: number }) {
  * Acceleration as a vector.
  *
  * The needle plots X and Z -- the plane PARALLEL to a desk -- and the vertical axis goes on the
- * bar. Laid flat, a DualSense puts gravity almost entirely on Y, so the needle sits centred and
- * the bar sits at its middle. Plotting X/Y instead pinned the needle at full deflection just
- * from the controller sitting still, which says nothing.
+ * bar. Plotting X/Y instead pinned the needle at full deflection just from the controller sitting
+ * still, which says nothing. The bar is centre-zero for the same reason: measured absolute it
+ * parked at ~96% and never moved.
  *
- * The bar is CENTRE-ZERO at resting gravity for the same reason: measured absolute it parked at
- * ~96% and never moved, so it carried no information either. Centred, it reads the thing you can
- * actually cause -- lifting the controller or letting it drop.
+ * A DualSense resting on a desk is NOT level. Measured on hardware it reads X=1, Y=7998, Z=1390 --
+ * an X of 1 says the sensor zero is excellent, so that Z is a real ~9.9 degree nose-up tilt from
+ * the controller sitting on its grips, not drift. The needle showing an offset there is correct.
+ *
+ * Hence `zero`: an EXPLICIT capture of the current reading as the origin, so the resting pose can
+ * be made the centre when that is what you want to watch movement against. It is never applied
+ * automatically and never persists across sessions -- a tester that zeroed itself on open would
+ * define away the fault it exists to find, since a genuinely offset sensor would read perfect
+ * every time. While a capture is active the panel says so.
  */
 
 /**
- * Accelerometer magnitude at 1g, measured on hardware HELD LEVEL (~8000, not the 8192 the scale
- * implies). Taken level on purpose: a DualSense rests on its grips nose-up, so a reading taken
- * on a desk is a few degrees off and lands low (~7900) because part of gravity has moved onto
- * X and Z.
- * Used as the needle full-scale AND as the bar centre, so "level and still" is the origin of
- * both. Units vary a little between sensors; this is a nominal figure, not a per-device
- * calibration, and it does not need to be exact for either reading to be useful.
+ * Magnitude at 1g, from the measured resting vector (~8118, not the 8192 the scale implies).
+ * Only sets the needle full-scale and the bar centre, so it does not need to be exact.
  */
-const ACCEL_REST = 8000;
+const ACCEL_REST = 8118;
 
-export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
-  const nx = Math.max(-1, Math.min(1, x / ACCEL_REST));
-  const nz = Math.max(-1, Math.min(1, z / ACCEL_REST));
+export interface AccelZero {
+  x: number;
+  y: number;
+  z: number;
+}
+
+/** The origin used when nothing has been captured: an ideally level controller. */
+export const ACCEL_ZERO_LEVEL: AccelZero = { x: 0, y: ACCEL_REST, z: 0 };
+
+export function AccelVector({
+  x,
+  y,
+  z,
+  zero,
+  onZero,
+  onClearZero
+}: {
+  x: number;
+  y: number;
+  z: number;
+  zero: AccelZero | null;
+  onZero: () => void;
+  onClearZero: () => void;
+}) {
+  const origin = zero ?? ACCEL_ZERO_LEVEL;
+  const nx = Math.max(-1, Math.min(1, (x - origin.x) / ACCEL_REST));
+  const nz = Math.max(-1, Math.min(1, (z - origin.z) / ACCEL_REST));
   const radius = 30;
-  const tilted = Math.hypot(nx, nz) > 0.04;
+  const tilted = Math.hypot(nx, nz) > 0.02;
   // Both axes are negated: the sensor positive X and Z point opposite to the direction the
-  // controller is tilted as seen on screen, so plotting them raw sent the needle the wrong way
-  // on both. Confirmed against hardware.
+  // controller is tilted as seen on screen. Confirmed against hardware.
   const needleX = 40 - nx * radius;
   const needleY = 40 - nz * radius;
 
-  // Deviation from resting gravity, spanning -1..+1 across the bar.
-  const lift = Math.max(-1, Math.min(1, (y - ACCEL_REST) / ACCEL_REST));
+  const lift = Math.max(-1, Math.min(1, (y - origin.y) / ACCEL_REST));
   const fillWidth = Math.abs(lift) * 50;
   const fillLeft = lift < 0 ? 50 - fillWidth : 50;
 
   return (
-    <div className="tester-accel">
-      <svg viewBox="0 0 80 80" aria-label="Acceleration vector">
-        <circle cx={40} cy={40} r={radius} className="tester-dial-track" />
-        <circle cx={40} cy={40} r={radius / 2} className="tester-dial-track" />
-        {/* Centre mark, so "level" is a visible target rather than an inferred one. */}
-        <line x1={34} y1={40} x2={46} y2={40} className="tester-dial-neutral" />
-        <line x1={40} y1={34} x2={40} y2={46} className="tester-dial-neutral" />
-        {tilted && (
-          <line x1={40} y1={40} x2={needleX} y2={needleY} className="tester-accel-needle" />
-        )}
-        <circle cx={needleX} cy={needleY} r={4} className="tester-dial-head" />
-      </svg>
-      <div className="tester-accel-z">
-        <span className="tester-field-label">Lift</span>
-        <div className="tester-bar tester-bar-centred">
-          <div
-            className="tester-bar-fill"
-            style={{ width: `${fillWidth}%`, marginLeft: `${fillLeft}%` }}
-          />
+    <div className="tester-accel-panel">
+      <div className="tester-accel">
+        <svg viewBox="0 0 80 80" aria-label="Acceleration vector">
+          <circle cx={40} cy={40} r={radius} className="tester-dial-track" />
+          <circle cx={40} cy={40} r={radius / 2} className="tester-dial-track" />
+          {/* Centre mark, so "level" is a visible target rather than an inferred one. */}
+          <line x1={34} y1={40} x2={46} y2={40} className="tester-dial-neutral" />
+          <line x1={40} y1={34} x2={40} y2={46} className="tester-dial-neutral" />
+          {tilted && (
+            <line x1={40} y1={40} x2={needleX} y2={needleY} className="tester-accel-needle" />
+          )}
+          <circle cx={needleX} cy={needleY} r={4} className="tester-dial-head" />
+        </svg>
+        <div className="tester-accel-z">
+          <span className="tester-field-label">Lift</span>
+          <div className="tester-bar tester-bar-centred">
+            <div
+              className="tester-bar-fill"
+              style={{ width: `${fillWidth}%`, marginLeft: `${fillLeft}%` }}
+            />
+          </div>
+          {/*
+            Per-axis numbers, because the needle is driven by X and Z and without them an
+            off-centre dot cannot be told apart from a sensor offset. These stay RAW even when a
+            zero is captured, so the underlying reading is always visible.
+          */}
+          <dl className="tester-axis-readout">
+            <div><dt>X</dt><dd className="tester-mono">{x}</dd></div>
+            <div><dt>Y</dt><dd className="tester-mono">{y}</dd></div>
+            <div><dt>Z</dt><dd className="tester-mono">{z}</dd></div>
+          </dl>
         </div>
-        {/*
-          Per-axis numbers, because the needle is driven by X and Z and without them an
-          off-centre dot cannot be told apart from a sensor offset. Guessing between those two
-          from the Y value alone is exactly what went wrong before these were shown.
-        */}
-        <dl className="tester-axis-readout">
-          <div><dt>X</dt><dd className="tester-mono">{x}</dd></div>
-          <div><dt>Y</dt><dd className="tester-mono">{y}</dd></div>
-          <div><dt>Z</dt><dd className="tester-mono">{z}</dd></div>
-        </dl>
+      </div>
+      <div className="tester-accel-actions">
+        <button type="button" onClick={zero ? onClearZero : onZero}>
+          {zero ? 'Clear zero' : 'Zero here'}
+        </button>
+        <span className="tester-subtle">
+          {zero
+            ? 'Centred on a captured pose, not on level. Numbers above are still raw.'
+            : 'Centred on level. A DualSense rests nose-up, so flat on a desk reads slightly off.'}
+        </span>
       </div>
     </div>
   );
