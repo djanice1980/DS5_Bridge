@@ -353,7 +353,8 @@ export function TesterApp() {
         <section className="tester-card">
           <h2>Acceleration</h2>
           <p className="tester-subtle">
-            At rest the needle points along gravity, so resting orientation is directly readable.
+            Needle shows tilt in the plane of the desk, so a controller lying flat sits centred.
+            The bar is the vertical axis, which reads about 1g at rest.
           </p>
           {state ? (
             <AccelVector x={state.accelX} y={state.accelY} z={state.accelZ} />

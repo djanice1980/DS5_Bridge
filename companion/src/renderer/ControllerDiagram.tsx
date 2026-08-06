@@ -187,9 +187,14 @@ export function GyroDial({ label, value }: { label: string; value: number }) {
 }
 
 /**
- * Acceleration as a vector: X/Y as a needle in the plane, Z as a bar. At rest the needle points
- * along gravity, so the controller's resting orientation is directly readable -- and a needle
- * that does not settle is a bad sensor.
+ * Acceleration as a vector.
+ *
+ * The needle plots X and Z -- the plane PARALLEL to a desk -- and Y, the vertical axis, goes on
+ * the bar. Laid flat, a DualSense puts gravity almost entirely on Y, so the needle sits centred
+ * and the bar reads about 1g. Plotting X/Y instead pinned the needle at full deflection just
+ * from the controller sitting still, which says nothing.
+ *
+ * Centred therefore means level, and the needle leans the way the controller is tilted.
  */
 export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
   // ~1g at rest on this sensor's scale.
@@ -198,30 +203,36 @@ export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
   const ny = Math.max(-1, Math.min(1, y / ONE_G));
   const nz = Math.max(-1, Math.min(1, z / ONE_G));
   const radius = 30;
+  const tilted = Math.hypot(nx, nz) > 0.04;
 
   return (
     <div className="tester-accel">
       <svg viewBox="0 0 80 80" aria-label="Acceleration vector">
         <circle cx={40} cy={40} r={radius} className="tester-dial-track" />
         <circle cx={40} cy={40} r={radius / 2} className="tester-dial-track" />
-        <line
-          x1={40}
-          y1={40}
-          x2={40 + nx * radius}
-          y2={40 + ny * radius}
-          className="tester-accel-needle"
-        />
-        <circle cx={40 + nx * radius} cy={40 + ny * radius} r={4} className="tester-dial-head" />
+        {/* Centre mark, so "level" is a visible target rather than an inferred one. */}
+        <line x1={34} y1={40} x2={46} y2={40} className="tester-dial-neutral" />
+        <line x1={40} y1={34} x2={40} y2={46} className="tester-dial-neutral" />
+        {tilted && (
+          <line
+            x1={40}
+            y1={40}
+            x2={40 + nx * radius}
+            y2={40 + nz * radius}
+            className="tester-accel-needle"
+          />
+        )}
+        <circle cx={40 + nx * radius} cy={40 + nz * radius} r={4} className="tester-dial-head" />
       </svg>
       <div className="tester-accel-z">
-        <span className="tester-field-label">Z</span>
+        <span className="tester-field-label">Y (vertical)</span>
         <div className="tester-bar">
           <div
             className="tester-bar-fill"
-            style={{ width: `${Math.abs(nz) * 100}%`, marginLeft: nz < 0 ? 'auto' : undefined }}
+            style={{ width: `${Math.abs(ny) * 100}%`, marginLeft: ny < 0 ? 'auto' : undefined }}
           />
         </div>
-        <span className="tester-mono">{z}</span>
+        <span className="tester-mono">{y}</span>
       </div>
     </div>
   );
