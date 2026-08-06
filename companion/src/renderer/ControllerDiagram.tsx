@@ -200,12 +200,15 @@ export function GyroDial({ label, value }: { label: string; value: number }) {
  */
 
 /**
- * Accelerometer magnitude at rest, measured on hardware (~7900, not the 8192 the scale implies).
+ * Accelerometer magnitude at 1g, measured on hardware HELD LEVEL (~8000, not the 8192 the scale
+ * implies). Taken level on purpose: a DualSense rests on its grips nose-up, so a reading taken
+ * on a desk is a few degrees off and lands low (~7900) because part of gravity has moved onto
+ * X and Z.
  * Used as the needle full-scale AND as the bar centre, so "level and still" is the origin of
  * both. Units vary a little between sensors; this is a nominal figure, not a per-device
  * calibration, and it does not need to be exact for either reading to be useful.
  */
-const ACCEL_REST = 7900;
+const ACCEL_REST = 8000;
 
 export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
   const nx = Math.max(-1, Math.min(1, x / ACCEL_REST));
