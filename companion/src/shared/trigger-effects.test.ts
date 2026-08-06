@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { PROTOCOL_MAJOR, PROTOCOL_MINOR } from './protocol';
 import {
   TRIGGER_EFFECT_ID,
   TRIGGER_EFFECT_SIZE,
@@ -8,6 +12,36 @@ import {
 } from './trigger-effects';
 import { buildRawTriggerEffectReport, COMMAND_ID, REPORT_ID, parseControllerInputReport } from './protocol';
 import { decodeDualSenseInputReport } from './dualsense-input';
+
+describe('companion protocol version', () => {
+  const firmwareSource = readFileSync(
+    path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', 'src', 'companion.cpp'),
+    'utf8'
+  );
+
+  function firmwareConstant(name: string): number {
+    const match = new RegExp(`constexpr uint8_t ${name} = (\\d+);`).exec(firmwareSource);
+    if (!match) {
+      throw new Error(`Could not read ${name} from src/companion.cpp`);
+    }
+    return Number(match[1]);
+  }
+
+  it('matches the firmware exactly', () => {
+    // parseStatusReport uses assertVersion, which requires an EXACT minor match. So a bump on
+    // either side alone makes the app reject the other's status report, and the bridge shows as
+    // not detected even with a controller happily connected -- which is what a bump to 18 did.
+    //
+    // Adding a report id or command id does NOT need a bump: the firmware accepts commands from
+    // an older app (buffer[5] <= kProtocolMinor), an unknown report id fails its GET_REPORT and
+    // the reader handles that, and an unknown command is refused with ERR_UNKNOWN_COMMAND.
+    // Features are gated on status firmwareFlags capability bits instead -- see the *Supported
+    // flags in App.tsx. The minor has not moved since the initial commit; adding to these tables
+    // is not a reason to move it.
+    expect(PROTOCOL_MAJOR).toBe(firmwareConstant('kProtocolMajor'));
+    expect(PROTOCOL_MINOR).toBe(firmwareConstant('kProtocolMinor'));
+  });
+});
 
 describe('trigger effect encoding', () => {
   it('encodes every effect type to exactly the effect size', () => {
@@ -112,8 +146,8 @@ function controllerInputReport(
   report[2] = 'S'.charCodeAt(0);
   report[3] = '5'.charCodeAt(0);
   report[4] = 'B'.charCodeAt(0);
-  report[5] = 1;
-  report[6] = 18;
+  report[5] = PROTOCOL_MAJOR;
+  report[6] = PROTOCOL_MINOR;
   report[7] = options.connected === false ? 0 : 1;
   report[8] = options.declaredLength ?? inputBytes.length;
   for (let index = 0; index < inputBytes.length; index += 1) {
