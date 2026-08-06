@@ -4605,13 +4605,21 @@ export class BridgeService extends EventEmitter {
     }
     const identities = this.settingsStore.get().bridgeIdentities;
     const existing = identities[uniqueId];
-    if (existing?.containerId === container) {
+    const known = existing?.containerIds ?? [];
+    if (existing?.containerId === container && known.includes(container)) {
       return;
     }
+    // Accumulate rather than replace. This bridge alternates between two containers as it
+    // switches product id, and remembering only the latest is what left the OTHER bridge
+    // unlabelled whenever it happened to be in its other shape.
     this.snapshot.settings = this.settingsStore.update({
       bridgeIdentities: {
         ...identities,
-        [uniqueId]: { label: existing?.label ?? null, containerId: container }
+        [uniqueId]: {
+          label: existing?.label ?? null,
+          containerId: container,
+          containerIds: [...new Set([...known, container])].slice(-6)
+        }
       }
     });
   }
@@ -4624,7 +4632,10 @@ export class BridgeService extends EventEmitter {
         ...identities,
         [uniqueId]: {
           label: trimmed && trimmed.length > 0 ? trimmed : null,
-          containerId: identities[uniqueId]?.containerId ?? null
+          // Renaming must not discard the containers that let this bridge be recognised
+          // while it is not the connected one.
+          containerId: identities[uniqueId]?.containerId ?? null,
+          containerIds: identities[uniqueId]?.containerIds ?? []
         }
       }
     });
@@ -4647,8 +4658,11 @@ export class BridgeService extends EventEmitter {
     if (!container) {
       return null;
     }
+    // Match against every container this board has been seen under, not just the latest one.
     return Object.entries(this.settingsStore.get().bridgeIdentities)
-      .find(([, record]) => record.containerId === container)?.[0] ?? null;
+      .find(([, record]) => (
+        record.containerId === container || record.containerIds.includes(container)
+      ))?.[0] ?? null;
   }
 
   private bridgeDevicesSnapshot(): BridgeDeviceCensus | null {

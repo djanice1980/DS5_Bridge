@@ -2763,6 +2763,67 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().settings.controllerBindings[mac]).toBeUndefined();
   });
 
+  it('labels a bridge seen under either of its containers', async () => {
+    // A bridge alternates container as it switches product id (companion-only vs full).
+    // Remembering only the latest container meant a bridge that was not the connected one
+    // resolved to no identity and showed unlabelled whenever it sat in its other shape.
+    const fullPath = String.raw`\\?\usb#vid_054c&pid_0ce6&mi_05#8&aaaa&1&0005#{guid}`;
+    const idlePath = String.raw`\\?\usb#vid_054c&pid_0ce7#8&aaaa&0&3#{guid}`;
+    const service = serviceFixture({
+      bridgeIdentities: {
+        aabbccddeeff0011: {
+          label: "David's Bridge",
+          containerId: 'container-full',
+          containerIds: ['container-full', 'container-idle']
+        }
+      }
+    });
+
+    // Neither bridge is the connected one, so both resolve purely from the container record.
+    audioHelperMock.listBridges.mockResolvedValue({
+      bridges: [
+        { path: fullPath, containerId: 'container-full' },
+        { path: idlePath, containerId: 'container-idle' }
+      ],
+      hidDevices: []
+    });
+    await service.refreshBridgeDevices();
+
+    const bridges = service.getSnapshot().bridgeDevices?.bridges ?? [];
+    expect(bridges.map((bridge) => bridge.name)).toEqual(["David's Bridge", "David's Bridge"]);
+  });
+
+  it('accumulates the containers a bridge has been seen under', async () => {
+    // The lookup above only helps if both containers actually get recorded. This is the write
+    // side: the bridge changes container when it changes product id, and replacing rather
+    // than accumulating is what left the record stale.
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.uniqueId = 'aabbccddeeff0011';
+    // The census is matched against the OPEN transport's path, which defaults to winusb-path.
+    device.path = 'companion-path';
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    audioHelperMock.listBridges.mockResolvedValue({
+      bridges: [{ path: 'companion-path', containerId: 'container-full' }],
+      hidDevices: []
+    });
+    await poll(service);
+    await service.refreshBridgeDevices();
+
+    // Same board, other shape.
+    audioHelperMock.listBridges.mockResolvedValue({
+      bridges: [{ path: 'companion-path', containerId: 'container-idle' }],
+      hidDevices: []
+    });
+    await service.refreshBridgeDevices();
+
+    const record = service.getSnapshot().settings.bridgeIdentities['aabbccddeeff0011'];
+    expect(record?.containerIds).toEqual(['container-full', 'container-idle']);
+  });
+
   it('re-sends settings when a controller with an already-selected profile reconnects', async () => {
     // A red lightbar came back blue after a power cycle. The assignment was correct and the
     // profile was already selected, so the connect path had "nothing to switch" and returned

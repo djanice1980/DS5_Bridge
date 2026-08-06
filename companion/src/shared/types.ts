@@ -211,7 +211,15 @@ export interface DirectControllerInfo {
 
 export interface BridgeIdentityRecord {
   label: string | null;
+  // Most recently seen container. Kept for compatibility with settings written before
+  // containerIds existed, and as the "current" one.
   containerId: string | null;
+  // EVERY container this board has been seen under. A bridge changes product id between
+  // companion-only (0x0CE7) and full (0x0CE6), and a product-id change generally yields a NEW
+  // container -- so a single last-seen container goes stale the moment the bridge changes
+  // shape, and a bridge that is not the connected one then resolves to no identity and shows
+  // unlabelled. Both of its containers map to the same board, so remember both.
+  containerIds: string[];
 }
 
 // Devices tab: controllers this companion has seen, keyed by Bluetooth address.

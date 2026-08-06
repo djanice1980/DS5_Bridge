@@ -40,6 +40,7 @@ import type {
   RemapButtonId
 } from '../shared/protocol';
 import type {
+  BridgeIdentityRecord,
   CompanionSettings,
   ControllerHistoryEntry,
   UiScalePercent,
@@ -1368,27 +1369,40 @@ export class SettingsStore {
   }
 }
 
-function normalizeBridgeIdentities(value: unknown): Record<string, { label: string | null; containerId: string | null }> {
+function normalizeBridgeIdentities(value: unknown): Record<string, BridgeIdentityRecord> {
   if (!value || typeof value !== 'object') {
     return {};
   }
-  const result: Record<string, { label: string | null; containerId: string | null }> = {};
+  const result: Record<string, BridgeIdentityRecord> = {};
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
     if (!/^[0-9a-f]{2,32}$/.test(key) || !raw || typeof raw !== 'object') {
       continue;
     }
-    const entry = raw as { label?: unknown; containerId?: unknown };
+    const entry = raw as { label?: unknown; containerId?: unknown; containerIds?: unknown };
+    const containerId = typeof entry.containerId === 'string' && entry.containerId.length > 0
+      ? entry.containerId
+      : null;
+    // Settings written before containerIds existed carry only the single last-seen container;
+    // seed the set from it so an upgrade does not start with an empty history.
+    const stored = Array.isArray(entry.containerIds)
+      ? entry.containerIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : [];
+    const containerIds = [...new Set([...stored, ...(containerId ? [containerId] : [])])]
+      .slice(-MAX_BRIDGE_CONTAINERS);
     result[key] = {
       label: typeof entry.label === 'string' && entry.label.trim().length > 0
         ? entry.label.trim().slice(0, 32)
         : null,
-      containerId: typeof entry.containerId === 'string' && entry.containerId.length > 0
-        ? entry.containerId
-        : null
+      containerId,
+      containerIds
     };
   }
   return result;
 }
+
+// A bridge realistically has two containers (companion-only and full). A few spare covers a
+// re-plug into a different port without letting the list grow without bound.
+const MAX_BRIDGE_CONTAINERS = 6;
 
 const MAX_CONTROLLER_HISTORY = 8;
 
