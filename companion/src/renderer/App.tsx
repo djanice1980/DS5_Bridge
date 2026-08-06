@@ -7954,13 +7954,6 @@ export function App() {
                   <p>{triggerLabOpen ? 'Experimental adaptive trigger profile editor' : 'Set trigger effect intensity and test mode'}</p>
                 </div>
                 <div className="triggers-heading-controls">
-                  <button
-                    type="button"
-                    className="secondary-action tester-launch-button"
-                    onClick={() => { void window.bridge.openTesterWindow(); }}
-                  >
-                    Open Tester
-                  </button>
                   <div className="inline-switch trigger-lab-switch-control">
                     {triggerLabAnyActive ? (
                       <span className="inline-state-badge warn trigger-lab-state">
@@ -9367,6 +9360,15 @@ export function App() {
                 <p>Controllers this bridge has paired with.</p>
               </div>
               <div className="audio-heading-controls">
+                {/* Not gated on a controller: the tester is also how you confirm a bridge is
+                    alive and what it is reporting when nothing is attached. */}
+                <button
+                  type="button"
+                  className="secondary-action"
+                  onClick={() => { void window.bridge.openTesterWindow(); }}
+                >
+                  Open Tester
+                </button>
                 <button
                   type="button"
                   className="secondary-action"

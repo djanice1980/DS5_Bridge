@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BridgeSnapshot } from '../shared/types';
 import type { ControllerInputSnapshot, DualSenseInputState } from '../shared/dualsense-input';
-import { DUALSENSE_TOUCHPAD_HEIGHT, DUALSENSE_TOUCHPAD_WIDTH } from '../shared/dualsense-input';
+import { ControllerDiagram, GyroDial, AccelVector } from './ControllerDiagram';
 import {
   TRIGGER_EFFECT_TYPES,
   TRIGGER_FREQUENCY_MAX,
@@ -21,94 +21,6 @@ import {
  * USB -- and it stops entirely when the window closes.
  */
 const INPUT_POLL_INTERVAL_MS = 40;
-
-function clamp01(value: number): number {
-  return Math.max(0, Math.min(1, value));
-}
-
-/** Stick bytes are 0-255 with 128 nominal centre; map to -1..1 for display. */
-function stickAxis(value: number): number {
-  return (value - 128) / 127;
-}
-
-function StickView({ x, y, label, pressed }: { x: number; y: number; label: string; pressed: boolean }) {
-  const nx = stickAxis(x);
-  const ny = stickAxis(y);
-  return (
-    <div className="tester-stick">
-      <div className={`tester-stick-well${pressed ? ' is-pressed' : ''}`}>
-        <div className="tester-stick-crosshair" />
-        <div
-          className="tester-stick-dot"
-          style={{
-            left: `${50 + clamp01((nx + 1) / 2) * 100 - 50}%`,
-            top: `${50 + clamp01((ny + 1) / 2) * 100 - 50}%`
-          }}
-        />
-      </div>
-      <div className="tester-stick-label">
-        {label}
-        <span className="tester-mono">
-          {x.toString().padStart(3, ' ')}, {y.toString().padStart(3, ' ')}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function TriggerBar({ label, value, pressed }: { label: string; value: number; pressed: boolean }) {
-  return (
-    <div className="tester-trigger">
-      <div className="tester-trigger-head">
-        <span>{label}</span>
-        <span className="tester-mono">{value}</span>
-      </div>
-      <div className="tester-bar">
-        <div className="tester-bar-fill" style={{ width: `${(value / 255) * 100}%` }} />
-      </div>
-      <div className={`tester-pill${pressed ? ' is-on' : ''}`}>digital</div>
-    </div>
-  );
-}
-
-function ButtonLamp({ label, on }: { label: string; on: boolean }) {
-  return <div className={`tester-lamp${on ? ' is-on' : ''}`}>{label}</div>;
-}
-
-function TouchpadView({ state }: { state: DualSenseInputState }) {
-  return (
-    <div className={`tester-touchpad${state.touchpadButton ? ' is-pressed' : ''}`}>
-      {state.touchPoints.map((point, index) => (
-        point.active
-          ? (
-            <div
-              key={index}
-              className={`tester-touch-dot tester-touch-${index}`}
-              style={{
-                left: `${clamp01(point.x / DUALSENSE_TOUCHPAD_WIDTH) * 100}%`,
-                top: `${clamp01(point.y / DUALSENSE_TOUCHPAD_HEIGHT) * 100}%`
-              }}
-              title={`id ${point.contactId} — ${point.x}, ${point.y}`}
-            />
-          )
-          : null
-      ))}
-    </div>
-  );
-}
-
-function MotionRow({ label, x, y, z }: { label: string; x: number; y: number; z: number }) {
-  return (
-    <div className="tester-motion-row">
-      <span className="tester-motion-label">{label}</span>
-      {[x, y, z].map((value, index) => (
-        <span key={index} className="tester-mono tester-motion-value">
-          {value > 0 ? '+' : ''}{value}
-        </span>
-      ))}
-    </div>
-  );
-}
 
 function EffectEditor({
   title,
@@ -366,62 +278,37 @@ export function TesterApp() {
       </div>
 
       <div className="tester-grid">
-        <section className="tester-card">
-          <h2>Sticks &amp; triggers</h2>
-          {state ? (
-            <>
-              <div className="tester-sticks">
-                <StickView label="Left" x={state.leftStickX} y={state.leftStickY} pressed={state.l3} />
-                <StickView label="Right" x={state.rightStickX} y={state.rightStickY} pressed={state.r3} />
-              </div>
-              <div className="tester-triggers">
-                <TriggerBar label="L2" value={state.leftTrigger} pressed={state.l2Pressed} />
-                <TriggerBar label="R2" value={state.rightTrigger} pressed={state.r2Pressed} />
-              </div>
-            </>
-          ) : <p className="tester-subtle">Waiting for input.</p>}
+        <section className="tester-card tester-card-wide">
+          <h2>Controller</h2>
+          <p className="tester-subtle">
+            Digital buttons snap on and off. Analogue inputs &mdash; triggers and sticks &mdash;
+            fade in proportion to their value, so a sticky trigger or a drifting stick shows up
+            as colour that never fully clears.
+          </p>
+          <div className="tester-stage">
+            <ControllerDiagram state={state} />
+          </div>
         </section>
 
         <section className="tester-card">
-          <h2>Buttons</h2>
+          <h2>Gyro</h2>
+          <p className="tester-subtle">Angular rate per axis. At rest every dial should sit at neutral.</p>
           {state ? (
-            <div className="tester-lamps">
-              <ButtonLamp label="△" on={state.triangle} />
-              <ButtonLamp label="○" on={state.circle} />
-              <ButtonLamp label="✕" on={state.cross} />
-              <ButtonLamp label="□" on={state.square} />
-              <ButtonLamp label="↑" on={state.dpadUp} />
-              <ButtonLamp label="→" on={state.dpadRight} />
-              <ButtonLamp label="↓" on={state.dpadDown} />
-              <ButtonLamp label="←" on={state.dpadLeft} />
-              <ButtonLamp label="L1" on={state.l1} />
-              <ButtonLamp label="R1" on={state.r1} />
-              <ButtonLamp label="L3" on={state.l3} />
-              <ButtonLamp label="R3" on={state.r3} />
-              <ButtonLamp label="Create" on={state.create} />
-              <ButtonLamp label="Options" on={state.options} />
-              <ButtonLamp label="PS" on={state.home} />
-              <ButtonLamp label="Mute" on={state.mute} />
+            <div className="tester-dials">
+              <GyroDial label="Pitch" value={state.gyroX} />
+              <GyroDial label="Yaw" value={state.gyroY} />
+              <GyroDial label="Roll" value={state.gyroZ} />
             </div>
           ) : <p className="tester-subtle">Waiting for input.</p>}
         </section>
 
         <section className="tester-card">
-          <h2>Touchpad</h2>
-          {state ? <TouchpadView state={state} /> : <p className="tester-subtle">Waiting for input.</p>}
-        </section>
-
-        <section className="tester-card">
-          <h2>Motion</h2>
+          <h2>Acceleration</h2>
+          <p className="tester-subtle">
+            At rest the needle points along gravity, so resting orientation is directly readable.
+          </p>
           {state ? (
-            <div className="tester-motion">
-              <MotionRow label="Gyro" x={state.gyroX} y={state.gyroY} z={state.gyroZ} />
-              <MotionRow label="Accel" x={state.accelX} y={state.accelY} z={state.accelZ} />
-              <div className="tester-motion-row">
-                <span className="tester-motion-label">Timestamp</span>
-                <span className="tester-mono tester-motion-value">{state.sensorTimestamp}</span>
-              </div>
-            </div>
+            <AccelVector x={state.accelX} y={state.accelY} z={state.accelZ} />
           ) : <p className="tester-subtle">Waiting for input.</p>}
         </section>
 
@@ -439,6 +326,30 @@ export function TesterApp() {
           ) : <p className="tester-subtle">Waiting for input.</p>}
         </section>
 
+
+        <section className="tester-card tester-card-wide">
+          <h2>Trigger effects</h2>
+          <p className="tester-subtle">
+            Composed in the app and sent verbatim. These are the controller&rsquo;s native ranges,
+            not the percentages the main Triggers page maps onto zones.
+          </p>
+          <div className="tester-effects">
+            <EffectEditor title="L2" effect={leftEffect} onChange={setLeftEffect} />
+            <EffectEditor title="R2" effect={rightEffect} onChange={setRightEffect} />
+          </div>
+          <div className="tester-actions">
+            <button type="button" onClick={() => void sendEffects(rightEffect, leftEffect)}>
+              Send to controller
+            </button>
+            {/* Sends OFF to the controller but leaves the editors alone. Rewriting them to
+                'off' discarded whatever you had dialled in, and left the panel in a state the
+                app never starts in -- so re-sending meant rebuilding the effect from scratch. */}
+            <button type="button" onClick={() => void sendEffects({ type: 'off' }, { type: 'off' })}>
+              Stop both
+            </button>
+          </div>
+          {sendError && <p className="tester-error">{sendError}</p>}
+        </section>
         <section className="tester-card tester-card-wide">
           <h2>Raw input report</h2>
           <p className="tester-subtle">
@@ -454,34 +365,6 @@ export function TesterApp() {
               ))
               : '—'}
           </code>
-        </section>
-
-        <section className="tester-card tester-card-wide">
-          <h2>Trigger effects</h2>
-          <p className="tester-subtle">
-            Composed in the app and sent verbatim. These are the controller&rsquo;s native ranges,
-            not the percentages the main Triggers page maps onto zones.
-          </p>
-          <div className="tester-effects">
-            <EffectEditor title="R2" effect={rightEffect} onChange={setRightEffect} />
-            <EffectEditor title="L2" effect={leftEffect} onChange={setLeftEffect} />
-          </div>
-          <div className="tester-actions">
-            <button type="button" onClick={() => void sendEffects(rightEffect, leftEffect)}>
-              Send to controller
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setRightEffect({ type: 'off' });
-                setLeftEffect({ type: 'off' });
-                void sendEffects({ type: 'off' }, { type: 'off' });
-              }}
-            >
-              Clear both
-            </button>
-          </div>
-          {sendError && <p className="tester-error">{sendError}</p>}
         </section>
       </div>
     </div>

@@ -5,6 +5,29 @@
  * same app.
  */
 
+/*
+ * styles.css pins body to overflow:hidden and min-width:100vw, which is right for the main
+ * window -- it is frameless with a fixed layout that zooms to fit. This window is an ordinary
+ * resizable one whose content is taller than the viewport, so without this override the page
+ * simply cannot be scrolled and everything below the fold is unreachable.
+ */
+html,
+body {
+  overflow: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/*
+ * Reserve the scrollbar's width whether or not it is showing. Without this the page gets
+ * narrower the moment a scrollbar appears, and every centred element -- the controller most
+ * visibly -- jumps sideways as content grows or shrinks.
+ */
+html {
+  scrollbar-gutter: stable;
+}
+
 .tester-root {
   padding: 20px 24px 32px;
   min-height: 100vh;
@@ -61,6 +84,7 @@
 }
 
 .tester-status {
+  display: inline-block;
   border: 1px solid var(--border, #263243);
   border-radius: 10px;
   padding: 8px 12px;
@@ -103,79 +127,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Sticks */
-.tester-sticks {
-  display: flex;
-  gap: 20px;
-  justify-content: space-around;
-}
-
-.tester-stick {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-
-.tester-stick-well {
-  position: relative;
-  width: 116px;
-  height: 116px;
-  border-radius: 50%;
-  border: 1px solid var(--border, #263243);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.tester-stick-well.is-pressed {
-  border-color: #8532c0;
-  box-shadow: 0 0 0 3px rgba(133, 50, 192, 0.25);
-}
-
-.tester-stick-crosshair {
-  position: absolute;
-  inset: 0;
-  background:
-    linear-gradient(to right, transparent calc(50% - 0.5px), var(--border, #263243) calc(50% - 0.5px), var(--border, #263243) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
-    linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--border, #263243) calc(50% - 0.5px), var(--border, #263243) calc(50% + 0.5px), transparent calc(50% + 0.5px));
-  border-radius: 50%;
-  opacity: 0.7;
-}
-
-.tester-stick-dot {
-  position: absolute;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
-  border-radius: 50%;
-  background: #8532c0;
-}
-
-.tester-stick-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  font-size: 12px;
-}
-
-/* Triggers */
-.tester-triggers {
-  display: flex;
-  gap: 16px;
-  margin-top: 18px;
-}
-
-.tester-trigger {
-  flex: 1;
-}
-
-.tester-trigger-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  margin-bottom: 5px;
-}
-
 .tester-bar {
   height: 10px;
   border-radius: 999px;
@@ -188,82 +139,7 @@
   background: linear-gradient(90deg, #6d28a8, #a855f7);
 }
 
-.tester-pill {
-  display: inline-block;
-  margin-top: 6px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border, #263243);
-  color: var(--text-muted, #8fa3bb);
-}
-
-.tester-pill.is-on {
-  border-color: #8532c0;
-  background: rgba(133, 50, 192, 0.2);
-  color: var(--text, #e6edf6);
-}
-
-/* Buttons */
-.tester-lamps {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-
-.tester-lamp {
-  border: 1px solid var(--border, #263243);
-  border-radius: 8px;
-  padding: 9px 4px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-muted, #8fa3bb);
-}
-
-.tester-lamp.is-on {
-  border-color: #8532c0;
-  background: rgba(133, 50, 192, 0.25);
-  color: #fff;
-}
-
-/* Touchpad */
-.tester-touchpad {
-  position: relative;
-  aspect-ratio: 16 / 9;
-  border: 1px solid var(--border, #263243);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.tester-touchpad.is-pressed {
-  border-color: #8532c0;
-}
-
-.tester-touch-dot {
-  position: absolute;
-  width: 16px;
-  height: 16px;
-  margin: -8px 0 0 -8px;
-  border-radius: 50%;
-}
-
-.tester-touch-0 { background: #a855f7; }
-.tester-touch-1 { background: #38bdf8; }
-
-/* Motion + facts */
-.tester-motion-row {
-  display: grid;
-  grid-template-columns: 80px repeat(3, 1fr);
-  gap: 8px;
-  padding: 5px 0;
-  font-size: 12px;
-}
-
-.tester-motion-label { color: var(--text-muted, #8fa3bb); }
-.tester-motion-value { text-align: right; }
-
+/* Facts */
 .tester-facts {
   margin: 0;
   display: grid;
@@ -278,6 +154,176 @@
 
 .tester-facts dt { color: var(--text-muted, #8fa3bb); }
 .tester-facts dd { margin: 0; }
+
+/* ---- Controller diagram ---------------------------------------------------
+ * The digital/analogue split is enforced here, not just in the markup:
+ *   .tester-digital  has NO transition -- it snaps, because the input is binary.
+ *   .tester-analogue-fill transitions briefly -- it fades, because the input is continuous.
+ * Giving digital controls a fade would draw states the controller never reported.
+ */
+
+.tester-stage {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 4px;
+}
+
+.tester-controller {
+  width: 100%;
+  max-width: 620px;
+  height: auto;
+  display: block;
+}
+
+.tester-shell {
+  fill: rgba(255, 255, 255, 0.015);
+  stroke: #8ea2bd;
+  stroke-width: 2.5;
+}
+
+.tester-outline {
+  fill: none;
+  stroke: #8ea2bd;
+  stroke-width: 2.5;
+}
+
+.tester-digital {
+  stroke: #8ea2bd;
+  stroke-width: 2.5;
+  fill: transparent;
+  /* No transition: digital is instant, by design. */
+}
+
+.tester-digital.is-on {
+  stroke: #c084fc;
+  fill: #8532c0;
+  fill-opacity: 0.85;
+}
+
+.tester-analogue {
+  stroke: var(--border, #3a4a63);
+  stroke-width: 2;
+  fill: #8532c0;
+}
+
+.tester-analogue-fill {
+  fill: #a855f7;
+  stroke: none;
+  transition: fill-opacity 70ms linear;
+}
+
+.tester-stick-thumb {
+  fill: #c084fc;
+  transition: cx 60ms linear, cy 60ms linear;
+}
+
+.tester-touch-contact {
+  stroke: none;
+}
+
+.tester-touch-contact-0 { fill: #a855f7; }
+.tester-touch-contact-1 { fill: #38bdf8; }
+
+.tester-svg-label,
+.tester-svg-glyph,
+.tester-svg-glyph-small {
+  fill: var(--text-muted, #8fa3bb);
+  text-anchor: middle;
+  font-family: inherit;
+  pointer-events: none;
+}
+
+.tester-svg-label { font-size: 11px; }
+.tester-svg-glyph { font-size: 13px; }
+.tester-svg-glyph-small { font-size: 8px; letter-spacing: 0.5px; }
+
+.tester-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.tester-inline-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-muted, #8fa3bb);
+}
+
+/* ---- Motion dials --------------------------------------------------------- */
+
+.tester-dials {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.tester-dial {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+}
+
+.tester-dial svg,
+.tester-accel svg {
+  width: 100%;
+  max-width: 96px;
+  height: auto;
+}
+
+.tester-dial-track {
+  fill: none;
+  stroke: var(--border, #263243);
+  stroke-width: 2;
+}
+
+.tester-dial-neutral {
+  stroke: var(--border, #3a4a63);
+  stroke-width: 1.5;
+  stroke-dasharray: 2 2;
+}
+
+.tester-dial-arc {
+  fill: none;
+  stroke: #a855f7;
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.tester-dial-head {
+  fill: #c084fc;
+}
+
+.tester-dial-label {
+  font-size: 11px;
+  color: var(--text-muted, #8fa3bb);
+}
+
+.tester-dial-value { font-size: 11px; }
+
+.tester-accel {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.tester-accel-needle {
+  stroke: #a855f7;
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.tester-accel-z {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+}
 
 /* Raw hex */
 .tester-hex {
