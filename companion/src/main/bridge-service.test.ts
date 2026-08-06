@@ -104,7 +104,7 @@ vi.mock('./audio-helper', async (importOriginal) => {
   };
 });
 
-import { BridgeService } from './bridge-service';
+import { BridgeService, BUNDLED_FIRMWARE_VERSION } from './bridge-service';
 import { SettingsStore } from './settings-store';
 
 type StatusOverrides = {
@@ -750,7 +750,7 @@ describe('BridgeService', () => {
     expect(snapshot.diagnostics.lastError).toBeNull();
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toEqual({
       currentVersion: '1.6.2',
-      availableVersion: '1.6.59'
+      availableVersion: BUNDLED_FIRMWARE_VERSION
     });
   });
 
@@ -890,7 +890,8 @@ describe('BridgeService', () => {
   it('does not surface an available update for the bundled bridge firmware', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
-    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 59 });
+    const [major, minor, patch] = BUNDLED_FIRMWARE_VERSION.split('.').map(Number);
+    device.status = statusReport({ firmwareMajor: major, firmwareMinor: minor, firmwarePatch: patch });
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
@@ -898,7 +899,7 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('connected');
-    expect(snapshot.status?.firmwareVersion).toBe('1.6.59');
+    expect(snapshot.status?.firmwareVersion).toBe(BUNDLED_FIRMWARE_VERSION);
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toBeNull();
   });
 

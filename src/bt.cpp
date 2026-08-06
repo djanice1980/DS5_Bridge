@@ -279,10 +279,17 @@ static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 // and a pairing window re-derived from the clock mid-handshake. Deriving is cheap; AGREEING is
 // what is expensive, so the state gets one owner.
 //
-// MIGRATION STEP 1/2: the phase is maintained at every real transition but NOTHING is gated on
-// it yet, so behaviour is unchanged. check_connection_phase_agreement() reports where it
-// disagrees with the legacy booleans; only once hardware shows agreement do the watchdogs and
-// event guards move over and the shadow booleans get deleted.
+// MIGRATION COMPLETE (step 3, firmware 1.6.60). Steps 1 and 2 maintained the phase at every
+// real transition and reported, via breadcrumb stage 12, wherever it disagreed with the phase
+// derived from the legacy booleans. Hardware ran clean across 1.6.56-1.6.59, so the security
+// watchdog now keys on the phase and its clock, the derive/agreement scaffolding is gone, and
+// securing_started_us -- the last timer that duplicated the phase -- is deleted.
+//
+// The booleans that remain are NOT shadows of the phase: hid_control_ready/hid_interrupt_ready
+// say WHICH channel is missing (HidOpening only says one of them is), device_found says the
+// target came from an outbound inquiry rather than an incoming request, and new_pair says the
+// channels must be created rather than reconnected. Deleting those would lose information the
+// phase does not carry. See assert_security_watchdog_keys_on_the_phase in the firmware guards.
 enum class BtConnectionPhase : uint8_t {
     Listening = 0,
     Connecting = 1,
@@ -292,18 +299,21 @@ enum class BtConnectionPhase : uint8_t {
     Disconnecting = 5,
 };
 static BtConnectionPhase connection_phase = BtConnectionPhase::Listening;
+// When the current phase began. Stamped on every real transition, and re-stamped where a phase
+// carries a deadline that must be armed from a specific instant rather than from whenever the
+// phase happened to change (see the ACL-connected branch). This is the clock the security
+// watchdog runs on.
+static uint32_t connection_phase_started_us = 0;
 // Bumped per connection attempt so a late async event from a previous connection is
-// distinguishable even if BTstack reuses the handle value. (connection_phase_started_us
-// arrives in step 3, when the watchdogs move off securing_started_us and it has a reader.)
+// distinguishable even if BTstack reuses the handle value.
 static uint32_t connection_generation = 0;
-static bool phase_disagreement_reported = false;
 // Security-phase watchdogs. Before these, the fork had NO recovery between ACL connect and
 // the HID channels opening: the idle-disconnect check is nested inside the interrupt-data
 // branch so it never runs when no data arrives, and ACL_CONNECTION_PENDING_TIMEOUT_US cannot
 // fire once a handle exists -- a stalled authentication or encryption hung the link until the
 // user power-cycled the Pico. (The span AFTER encryption is already covered by
-// schedule_hid_channel_recovery()/HID_CHANNEL_RECOVERY_MAX_ATTEMPTS.)
-static uint32_t securing_started_us = 0; // Non-zero from auth request until encryption is up.
+// schedule_hid_channel_recovery()/HID_CHANNEL_RECOVERY_MAX_ATTEMPTS.) The span itself is now
+// bounded by BtConnectionPhase::Securing rather than by a parallel timer.
 static bool encryption_completion_pending = false;
 static hci_con_handle_t encryption_command_handle = HCI_CON_HANDLE_INVALID;
 static uint32_t encryption_command_generation = 0;
@@ -460,19 +470,19 @@ static void note_connection_phase(BtConnectionPhase next) {
         return;
     }
     connection_phase = next;
-    phase_disagreement_reported = false; // Re-arm reporting for the new phase.
+    connection_phase_started_us = time_us_32();
 }
 
-// derive_connection_phase() calls it Connecting as soon as device_found or
-// acl_connection_pending is set with no ACL handle yet. The tracked phase only moved at
-// begin_connection_attempt(), which runs on INQUIRY_COMPLETE -- but the target is latched
-// earlier, on the inquiry RESULT, and gap_inquiry_stop() is asynchronous. That gap is a real
-// window in which the two disagree, and it is what breadcrumb 12/1 (tracked Listening,
-// derived Connecting) reported from hardware.
+// Connecting begins as soon as device_found or acl_connection_pending is set with no ACL
+// handle yet. The phase used to move only at begin_connection_attempt(), which runs on
+// INQUIRY_COMPLETE -- but the target is latched earlier, on the inquiry RESULT, and
+// gap_inquiry_stop() is asynchronous. That gap was a real window in which the phase lagged the
+// state, and it is what breadcrumb 12/1 (tracked Listening, derived Connecting) reported from
+// hardware during the migration.
 //
-// Rather than add another call site that has to remember, the phase now follows the state
-// that derives it. Guarded on the handle because Connecting is only the right answer while
-// there is no ACL connection -- with one up, the phase belongs to Securing or later.
+// Rather than add another call site that has to remember, the phase follows the state that
+// derives it. Guarded on the handle because Connecting is only the right answer while there is
+// no ACL connection -- with one up, the phase belongs to Securing or later.
 static void note_connection_phase_connecting_if_idle() {
     if (acl_handle != HCI_CON_HANDLE_INVALID) {
         return;
@@ -489,7 +499,6 @@ static void begin_connection_attempt() {
 }
 
 static void clear_security_watchdogs() {
-    securing_started_us = 0;
     encryption_completion_pending = false;
     encryption_command_handle = HCI_CON_HANDLE_INVALID;
     encryption_command_generation = 0;
@@ -1369,52 +1378,8 @@ static void cancel_hid_channel_recovery_if_ready() {
     }
 }
 
-// MIGRATION STEP 2: derive the phase from the legacy state and report disagreement. This is
-// what earns the right to gate behaviour on connection_phase; until hardware says these agree,
-// the phase is bookkeeping only.
-static BtConnectionPhase derive_connection_phase() {
-    if (acl_handle == HCI_CON_HANDLE_INVALID) {
-        return (acl_connection_pending || device_found)
-            ? BtConnectionPhase::Connecting
-            : BtConnectionPhase::Listening;
-    }
-    if (hid_control_ready && hid_interrupt_ready) {
-        return BtConnectionPhase::Ready;
-    }
-    // securing_started_us is cleared when encryption comes up, so a live handle with no
-    // securing deadline means security is done and the HID channels are still opening.
-    return securing_started_us != 0
-        ? BtConnectionPhase::Securing
-        : BtConnectionPhase::HidOpening;
-}
-
-static void check_connection_phase_agreement() {
-    // Disconnecting has no legacy equivalent -- the old code had no notion of teardown in
-    // progress -- so a mismatch there is expected rather than a finding.
-    if (connection_phase == BtConnectionPhase::Disconnecting) {
-        return;
-    }
-    const BtConnectionPhase derived = derive_connection_phase();
-    if (derived == connection_phase) {
-        phase_disagreement_reported = false;
-        return;
-    }
-    if (phase_disagreement_reported) {
-        return; // One breadcrumb per episode; the ring only holds 10.
-    }
-    phase_disagreement_reported = true;
-    // High nibble = tracked phase, low nibble = derived phase.
-    bt_note_pairing_event(12, static_cast<uint8_t>(
-        (static_cast<uint8_t>(connection_phase) << 4) | static_cast<uint8_t>(derived)
-    ));
-    DS5_LOG("[HCI] Connection phase disagreement tracked=%u derived=%u\n",
-            static_cast<unsigned>(connection_phase),
-            static_cast<unsigned>(derived));
-}
-
 void bt_connection_recovery_loop() {
     const uint32_t recovery_now = time_us_32();
-    check_connection_phase_agreement();
 
     // Re-issue authentication after a transient collision, on the same ACL. Upstream does this
     // with gap_request_security_level(); this fork drives HCI directly, so re-issue the same
@@ -1450,9 +1415,10 @@ void bt_connection_recovery_loop() {
     // The whole authenticate-then-encrypt phase wedged (no auth-complete at all, or a peer that
     // keeps colliding). Recycle rather than hanging until the user power-cycles.
     if (
-        securing_started_us != 0
+        connection_phase == BtConnectionPhase::Securing
         && acl_handle != HCI_CON_HANDLE_INVALID
-        && static_cast<uint32_t>(recovery_now - securing_started_us) >= SECURITY_PHASE_TIMEOUT_US
+        && static_cast<uint32_t>(recovery_now - connection_phase_started_us)
+            >= SECURITY_PHASE_TIMEOUT_US
     ) {
         DS5_LOG("[HCI] Security phase timed out; recycling the ACL (pairing preserved)\n");
         clear_security_watchdogs();
@@ -2353,7 +2319,10 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 usb_wake_host_if_suspended();
                 DS5_LOG("[HCI] Request authentication on handle=0x%04X\n", handle);
                 clear_security_watchdogs();
-                securing_started_us = time_us_32(); // Arm the security-phase deadline.
+                // Arm the security-phase deadline from THIS instant. note_connection_phase()
+                // stamps the clock only on a real transition, so a reconnect that never left
+                // Securing would otherwise be judged against the previous attempt's clock.
+                connection_phase_started_us = time_us_32();
                 HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
             } else {
                 clear_outbound_inquiry_target();
@@ -2539,8 +2508,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             encryption_command_handle = HCI_CON_HANDLE_INVALID;
             encryption_command_generation = 0;
             if (status == ERROR_CODE_SUCCESS && enabled) {
-                securing_started_us = 0; // Security phase done; HID opening is covered by
-                                         // schedule_hid_channel_recovery() below.
+                // Security phase done, so leaving Securing disarms its deadline. The span
+                // after this is covered by schedule_hid_channel_recovery() below.
                 note_connection_phase(BtConnectionPhase::HidOpening);
                 DS5_LOG("[L2CAP] Open HID channels\n");
                 schedule_hid_channel_recovery();

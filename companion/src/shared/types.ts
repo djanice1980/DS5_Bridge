@@ -173,8 +173,9 @@ export interface BridgeDiagnostics {
   /** Set when the bridge's previous reset was a watchdog timeout (a main-loop hang),
    *  naming the phase that was running. Null when the last boot was clean. */
   lastWatchdogHang: string | null;
-  /** Firmware pairing breadcrumbs, newest last, as "stage/status" pairs. Stage 12 is a
-   *  connection-phase disagreement -- the evidence the phase machine migration is gated on. */
+  /** Firmware pairing breadcrumbs, newest last, as "stage/status" pairs. Stage 12 was the
+   *  connection-phase disagreement the phase-machine migration was gated on; the migration
+   *  landed in firmware 1.6.60 and nothing emits it now. */
   pairingBreadcrumbs: string | null;
 }
 

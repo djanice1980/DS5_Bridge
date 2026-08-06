@@ -12,7 +12,6 @@ import {
   REPORT_ID,
   REPORT_LENGTH,
   WATCHDOG_PHASE_NAMES,
-  PAIRING_BREADCRUMB_PHASE_DISAGREEMENT_STAGE,
   isFaultPhase,
   CHORD_FUNCTION_EVENT_BASE,
   MAX_CHORD_ASSIGNMENTS,
@@ -122,7 +121,9 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const BUNDLED_FIRMWARE_VERSION = '1.6.59';
+// Exported so the update-surfacing tests assert against "the bundled version" rather than
+// against a literal that has to be chased down and re-typed on every firmware bump.
+export const BUNDLED_FIRMWARE_VERSION = '1.6.60';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -4231,15 +4232,12 @@ export class BridgeService extends EventEmitter {
       // Always report something on firmware that supports it. Showing nothing after a hang is
       // indistinguishable from the telemetry being broken -- which is exactly what happened the
       // first time this shipped.
-      // Pairing breadcrumbs. Stage 12 is a connection-phase disagreement, which is the
-      // evidence the phase-machine migration is gated on -- flagged so it cannot be missed
-      // in a row of otherwise unremarkable stage/status pairs.
+      // Pairing breadcrumbs, verbatim. Stage 12 used to be called out here as a
+      // connection-phase disagreement; the phase-machine migration landed in firmware 1.6.60
+      // and no firmware emits it, so there is nothing left to flag.
       this.snapshot.diagnostics.pairingBreadcrumbs = identity.pairingEvents.length === 0
         ? null
-        : identity.pairingEvents.map((event) => `${event.stage}/${event.status}`).join(' ')
-          + (identity.pairingEvents.some(
-            (event) => event.stage === PAIRING_BREADCRUMB_PHASE_DISAGREEMENT_STAGE
-          ) ? '  <- PHASE DISAGREEMENT (stage 12)' : '');
+        : identity.pairingEvents.map((event) => `${event.stage}/${event.status}`).join(' ');
       const wdt = identity.watchdog;
       this.snapshot.diagnostics.lastWatchdogHang = wdt === null
         ? null

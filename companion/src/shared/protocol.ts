@@ -1143,8 +1143,10 @@ export function isFaultPhase(phase: number): boolean {
  * count and [23..42] are up to ten {stage, status} pairs -- but nothing parsed them, so the
  * phase-machine migration sat blocked on evidence that could not be read.
  *
- * Stage 12 is the one that matters for that: a connection-phase disagreement between the
- * tracked phase and the phase derived from the shadow booleans.
+ * Stage 12 was the one that mattered for that: a connection-phase disagreement between the
+ * tracked phase and the phase derived from the shadow booleans. Hardware ran clean, the
+ * migration landed in firmware 1.6.60, and no firmware emits stage 12 any more -- so the
+ * breadcrumbs are now just breadcrumbs, displayed verbatim.
  */
 export interface PairingBreadcrumb {
   stage: number;
@@ -1152,7 +1154,6 @@ export interface PairingBreadcrumb {
 }
 
 export const PAIRING_BREADCRUMB_MAX = 10;
-export const PAIRING_BREADCRUMB_PHASE_DISAGREEMENT_STAGE = 12;
 
 export interface DeviceIdentityPayload {
   uniqueId: string | null;

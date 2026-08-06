@@ -763,14 +763,13 @@ void assert_mic_pass_through_defaults_to_enabled(std::filesystem::path const &ro
 // connection_phase drifts away from the state it is supposed to describe. Losing ONE channel
 // was the path that did not: it cleared the ready flag, scheduled recovery, and left the phase
 // at Ready, which is what the tracked=Ready / derived=HidOpening breadcrumb (12/67) reported
-// from hardware. The phase is still bookkeeping-only, so a drift like this is silent until
-// something starts gating on it -- hence a guard rather than trust.
-// derive_connection_phase() reads device_found and acl_connection_pending, so whatever sets
-// them has to move the tracked phase in the same breath. Setting one without the other is a
-// silent disagreement -- breadcrumb 12/1 (tracked Listening, derived Connecting) came from
-// latching the inquiry target on the inquiry RESULT while the phase waited for
-// INQUIRY_COMPLETE. Both setters go through the same helper so a new call site cannot
-// reintroduce the gap by forgetting.
+// from hardware. The security watchdog now runs on the phase, so a drift like this is no longer
+// merely cosmetic -- hence a guard rather than trust.
+// device_found and acl_connection_pending both mean "connecting", so whatever sets them has to
+// move the phase in the same breath. Setting one without the other was a silent disagreement --
+// breadcrumb 12/1 (tracked Listening, derived Connecting) came from latching the inquiry target
+// on the inquiry RESULT while the phase waited for INQUIRY_COMPLETE. Both setters go through the
+// same helper so a new call site cannot reintroduce the gap by forgetting.
 void assert_connection_target_state_moves_the_phase(std::filesystem::path const &root) {
     const auto bt_cpp = remove_comments(read_text(root / "src" / "bt.cpp"));
 
@@ -789,6 +788,48 @@ void assert_connection_target_state_moves_the_phase(std::filesystem::path const 
     if (found.find("note_connection_phase_connecting_if_idle();") == std::string::npos) {
         throw std::runtime_error(
             "Latching an inquiry target must move the connection phase to Connecting"
+        );
+    }
+}
+
+// The auth-to-encryption span used to be bounded by securing_started_us, a timer that meant
+// exactly what BtConnectionPhase::Securing means. Two names for one fact is how the phase and
+// the legacy state drifted apart in the first place, so the watchdog reads the phase and its
+// clock, and no separate securing timer exists to fall out of step with it.
+//
+// The clock is only useful if the phase is left when the span ends: ENCRYPTION_CHANGE moving to
+// HidOpening is what disarms this deadline now that clearing a timer no longer does.
+void assert_security_watchdog_keys_on_the_phase(std::filesystem::path const &root) {
+    const auto bt_cpp = remove_comments(read_text(root / "src" / "bt.cpp"));
+
+    if (bt_cpp.find("securing_started_us") != std::string::npos) {
+        throw std::runtime_error(
+            "securing_started_us duplicates BtConnectionPhase::Securing; the security watchdog "
+            "must key on the phase and connection_phase_started_us instead"
+        );
+    }
+
+    const std::string recovery = extract_between(
+        bt_cpp,
+        "void bt_connection_recovery_loop()",
+        "\n}\n"
+    );
+    if (recovery.find("connection_phase == BtConnectionPhase::Securing") == std::string::npos
+        || recovery.find("connection_phase_started_us") == std::string::npos) {
+        throw std::runtime_error(
+            "The security-phase timeout must be bounded by the Securing phase and its clock"
+        );
+    }
+
+    const std::string note_phase = extract_between(
+        bt_cpp,
+        "static void note_connection_phase(BtConnectionPhase next)",
+        "\n}\n"
+    );
+    if (note_phase.find("connection_phase_started_us = time_us_32();") == std::string::npos) {
+        throw std::runtime_error(
+            "note_connection_phase must stamp connection_phase_started_us, or the watchdog "
+            "measures against whenever some earlier phase began"
         );
     }
 }
@@ -974,6 +1015,7 @@ int main() {
         assert_hid_channel_close_notes_the_phase(source_root);
         assert_vendor_control_gates_share_one_interface_predicate(source_root);
         assert_connection_target_state_moves_the_phase(source_root);
+        assert_security_watchdog_keys_on_the_phase(source_root);
         assert_connect_does_not_overwrite_the_saved_lightbar(source_root);
         assert_host_lightbar_reclaim_is_bounded(source_root);
         assert_lightbar_override_applies_to_every_path(source_root);
