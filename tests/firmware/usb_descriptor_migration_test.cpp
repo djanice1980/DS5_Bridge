@@ -792,6 +792,59 @@ void assert_connection_target_state_moves_the_phase(std::filesystem::path const 
     }
 }
 
+// A persistent trigger effect is re-asserted on an interval. An app-composed (raw) effect sent
+// AROUND that system is therefore overwritten by the next re-apply a fraction of a second later
+// -- the same shape as the audio snapshot replaying stale trigger state over a fresh effect,
+// which is the bug that made triggers appear dead under audio for months.
+//
+// So the raw bytes live INSIDE PersistentTriggerEffect, and the re-apply reduces both triggers
+// to bytes and sends them down one path. Sending a raw effect straight to bt_ from the command
+// handler would pass a manual test and fail a second later.
+void assert_raw_trigger_effect_goes_through_the_persistent_system(std::filesystem::path const &root) {
+    const auto companion_cpp = remove_comments(read_text(root / "src" / "companion.cpp"));
+
+    const std::string handler = extract_between(
+        companion_cpp,
+        "case CommandSetRawTriggerEffect:",
+        "case CommandSetClassicRumbleGain:"
+    );
+    if (handler.find("set_persistent_raw_trigger_effect(") == std::string::npos) {
+        throw std::runtime_error(
+            "The raw trigger command must route through set_persistent_raw_trigger_effect"
+        );
+    }
+    if (handler.find("bt_set_raw_adaptive_trigger_effects(") != std::string::npos) {
+        throw std::runtime_error(
+            "The raw trigger command must NOT send directly; the persistent re-apply would "
+            "overwrite the effect moments later"
+        );
+    }
+
+    const std::string reapply = extract_between(
+        companion_cpp,
+        "void apply_persistent_trigger_effect(bool force",
+        "\n}\n"
+    );
+    if (reapply.find("persistent_trigger_effect_bytes(") == std::string::npos) {
+        throw std::runtime_error(
+            "The persistent re-apply must reduce both triggers to bytes, or a raw effect on one "
+            "trigger and a percent effect on the other cannot both be sent"
+        );
+    }
+
+    const std::string percent_setter = extract_between(
+        companion_cpp,
+        "void set_persistent_trigger_effect_state(",
+        "\n}\n"
+    );
+    if (percent_setter.find("effect.raw = false;") == std::string::npos) {
+        throw std::runtime_error(
+            "Setting a percent effect must clear the raw flag, or stale raw bytes keep winning "
+            "and the slider appears dead"
+        );
+    }
+}
+
 // The auth-to-encryption span used to be bounded by securing_started_us, a timer that meant
 // exactly what BtConnectionPhase::Securing means. Two names for one fact is how the phase and
 // the legacy state drifted apart in the first place, so the watchdog reads the phase and its
@@ -1016,6 +1069,7 @@ int main() {
         assert_vendor_control_gates_share_one_interface_predicate(source_root);
         assert_connection_target_state_moves_the_phase(source_root);
         assert_security_watchdog_keys_on_the_phase(source_root);
+        assert_raw_trigger_effect_goes_through_the_persistent_system(source_root);
         assert_connect_does_not_overwrite_the_saved_lightbar(source_root);
         assert_host_lightbar_reclaim_is_bounded(source_root);
         assert_lightbar_override_applies_to_every_path(source_root);

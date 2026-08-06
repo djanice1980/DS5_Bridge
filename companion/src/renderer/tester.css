@@ -1,0 +1,388 @@
+/*
+ * Tester window styling. Deliberately independent of the main window's chrome: this window has
+ * no title bar of its own, no tab strip, and is meant to be resized and parked next to a game.
+ * It reuses the shared colour variables from styles.css so the two windows stay recognisably the
+ * same app.
+ */
+
+.tester-root {
+  padding: 20px 24px 32px;
+  min-height: 100vh;
+  background: var(--bg, #0b1017);
+  color: var(--text, #e6edf6);
+  font-family: inherit;
+}
+
+.tester-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.tester-header h1 {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: 0.2px;
+}
+
+.tester-subtle {
+  margin: 4px 0 0;
+  color: var(--text-muted, #8fa3bb);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 62ch;
+}
+
+.tester-bridge-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 240px;
+}
+
+.tester-bridge-picker select,
+.tester-effect-head select {
+  background: var(--bg-elevated, #151d29);
+  color: inherit;
+  border: 1px solid var(--border, #263243);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+}
+
+.tester-field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted, #8fa3bb);
+}
+
+.tester-status {
+  border: 1px solid var(--border, #263243);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted, #8fa3bb);
+  margin-bottom: 16px;
+}
+
+.tester-status.is-live {
+  border-color: rgba(133, 50, 192, 0.55);
+  color: var(--text, #e6edf6);
+}
+
+.tester-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.tester-card {
+  background: var(--bg-elevated, #131a25);
+  border: 1px solid var(--border, #263243);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.tester-card-wide {
+  grid-column: 1 / -1;
+}
+
+.tester-card h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  letter-spacing: 0.3px;
+}
+
+.tester-mono {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sticks */
+.tester-sticks {
+  display: flex;
+  gap: 20px;
+  justify-content: space-around;
+}
+
+.tester-stick {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.tester-stick-well {
+  position: relative;
+  width: 116px;
+  height: 116px;
+  border-radius: 50%;
+  border: 1px solid var(--border, #263243);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tester-stick-well.is-pressed {
+  border-color: #8532c0;
+  box-shadow: 0 0 0 3px rgba(133, 50, 192, 0.25);
+}
+
+.tester-stick-crosshair {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to right, transparent calc(50% - 0.5px), var(--border, #263243) calc(50% - 0.5px), var(--border, #263243) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(to bottom, transparent calc(50% - 0.5px), var(--border, #263243) calc(50% - 0.5px), var(--border, #263243) calc(50% + 0.5px), transparent calc(50% + 0.5px));
+  border-radius: 50%;
+  opacity: 0.7;
+}
+
+.tester-stick-dot {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: #8532c0;
+}
+
+.tester-stick-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+}
+
+/* Triggers */
+.tester-triggers {
+  display: flex;
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.tester-trigger {
+  flex: 1;
+}
+
+.tester-trigger-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 5px;
+}
+
+.tester-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.tester-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6d28a8, #a855f7);
+}
+
+.tester-pill {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #263243);
+  color: var(--text-muted, #8fa3bb);
+}
+
+.tester-pill.is-on {
+  border-color: #8532c0;
+  background: rgba(133, 50, 192, 0.2);
+  color: var(--text, #e6edf6);
+}
+
+/* Buttons */
+.tester-lamps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.tester-lamp {
+  border: 1px solid var(--border, #263243);
+  border-radius: 8px;
+  padding: 9px 4px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted, #8fa3bb);
+}
+
+.tester-lamp.is-on {
+  border-color: #8532c0;
+  background: rgba(133, 50, 192, 0.25);
+  color: #fff;
+}
+
+/* Touchpad */
+.tester-touchpad {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border: 1px solid var(--border, #263243);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tester-touchpad.is-pressed {
+  border-color: #8532c0;
+}
+
+.tester-touch-dot {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+}
+
+.tester-touch-0 { background: #a855f7; }
+.tester-touch-1 { background: #38bdf8; }
+
+/* Motion + facts */
+.tester-motion-row {
+  display: grid;
+  grid-template-columns: 80px repeat(3, 1fr);
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 12px;
+}
+
+.tester-motion-label { color: var(--text-muted, #8fa3bb); }
+.tester-motion-value { text-align: right; }
+
+.tester-facts {
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.tester-facts div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.tester-facts dt { color: var(--text-muted, #8fa3bb); }
+.tester-facts dd { margin: 0; }
+
+/* Raw hex */
+.tester-hex {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.tester-hex-byte {
+  min-width: 2ch;
+  color: var(--text, #e6edf6);
+}
+
+/* Effects */
+.tester-effects {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.tester-effect {
+  border: 1px solid var(--border, #263243);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.tester-effect-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tester-effect-head h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.tester-slider {
+  display: grid;
+  grid-template-columns: 84px 1fr 44px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.tester-slider-value { text-align: right; font-size: 12px; }
+
+.tester-zone-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.tester-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+}
+
+.tester-zone input[type='range'] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 18px;
+  height: 76px;
+}
+
+.tester-bytes {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.tester-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.tester-actions button {
+  background: #8532c0;
+  color: #fff;
+  border: 0;
+  border-radius: 9px;
+  padding: 9px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tester-actions button:last-child {
+  background: transparent;
+  border: 1px solid var(--border, #263243);
+  color: var(--text, #e6edf6);
+}
+
+.tester-error {
+  margin-top: 12px;
+  color: #f87171;
+  font-size: 12px;
+}

@@ -15,6 +15,11 @@
 #define COMPANION_REPORT_AUDIO_STATUS 0x08
 #define COMPANION_REPORT_TRIGGER_TRACE 0x09
 #define COMPANION_REPORT_FEEDBACK_TRACE 0x0A
+// The raw DualSense input report the bridge last forwarded to the host, served on demand.
+// Pull-model on purpose: nothing streams, so a closed tester window costs nothing, and the
+// data already crosses Bluetooth to reach the host -- reading the cached copy over USB adds
+// no load to the BT link.
+#define COMPANION_REPORT_CONTROLLER_INPUT 0x0B
 // Stable physical identity (RP2350 unique board ID) so the app can name and
 // re-recognize individual bridges regardless of USB port. Same report id
 // upstream uses for its device-identity concept.

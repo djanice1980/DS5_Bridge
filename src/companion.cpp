@@ -10,6 +10,7 @@
 
 extern "C" void flash_probe_stats(uint32_t *worst_us, uint32_t *count);
 #include "controller_output_policy.h"
+#include "controller_report.h"
 #include "controller_output_submit.h"
 #include "dualsense_output.h"
 #include "host_bridge.h"
@@ -26,11 +27,11 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 17;
+constexpr uint8_t kProtocolMinor = 18;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 60;
+constexpr uint8_t kFirmwarePatch = 61;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -157,6 +158,8 @@ enum CommandId : uint8_t {
     CommandForgetControllerPairings = 0x28,
     CommandForgetControllerPairing = 0x2E,
     CommandSetWakeOnConnect = 0x35,
+    // App-composed effect bytes. See bt_set_raw_adaptive_trigger_effects.
+    CommandSetRawTriggerEffect = 0x36,
 };
 
 enum AckResult : uint8_t {
@@ -364,6 +367,13 @@ struct PersistentTriggerEffect {
     uint8_t start_percent = 0;
     uint8_t wall_percent = 0;
     uint8_t force_percent = 0;
+    // An app-composed effect is carried as bytes rather than as percentages, because the
+    // percent form quantizes to zones and 3-bit force and cannot represent it. It lives HERE,
+    // inside the persistent effect, rather than being sent around it: apply_persistent_trigger_effect
+    // re-asserts on an interval, so a raw effect sent outside this struct would be silently
+    // overwritten by the next re-apply.
+    bool raw = false;
+    uint8_t raw_bytes[kTriggerEffectSize]{};
 };
 PersistentTriggerEffect persistent_trigger_effect_left;
 PersistentTriggerEffect persistent_trigger_effect_right;
@@ -1374,6 +1384,33 @@ void set_persistent_trigger_effect_state(
     effect.wall_percent = wall_percent;
     effect.force_percent = force_percent;
     effect.active = force_percent > 0;
+    // A percent effect REPLACES an app-composed one on this trigger. Without this the stale raw
+    // bytes keep winning in persistent_trigger_effect_bytes and the Lab's slider appears dead.
+    effect.raw = false;
+}
+
+void set_persistent_raw_trigger_effect_state(
+    PersistentTriggerEffect &effect,
+    uint8_t const *bytes,
+    bool active
+) {
+    effect.raw = true;
+    effect.active = active;
+    memcpy(effect.raw_bytes, bytes, kTriggerEffectSize);
+}
+
+void persistent_trigger_effect_bytes(PersistentTriggerEffect const &effect, uint8_t *out) {
+    if (effect.raw) {
+        memcpy(out, effect.raw_bytes, kTriggerEffectSize);
+        return;
+    }
+    bt_encode_custom_trigger_effect(
+        out,
+        effect.mode,
+        effect.start_percent,
+        effect.wall_percent,
+        effect.force_percent
+    );
 }
 
 void apply_persistent_trigger_effect(bool force = false) {
@@ -1390,16 +1427,19 @@ void apply_persistent_trigger_effect(bool force = false) {
         return;
     }
 
-    bt_set_custom_adaptive_trigger_effects(
-        persistent_trigger_effect_right.mode,
-        persistent_trigger_effect_right.start_percent,
-        persistent_trigger_effect_right.wall_percent,
-        persistent_trigger_effect_right.force_percent,
+    // Reduce both triggers to bytes and send down one path. A raw effect on one trigger and a
+    // percent effect on the other is a legitimate state, and branching on which sender to call
+    // is how that case gets dropped. The percent branch encodes to exactly the bytes
+    // bt_set_custom_adaptive_trigger_effects would have sent, so this is not a behaviour change
+    // for effects that were never raw.
+    uint8_t right_bytes[kTriggerEffectSize]{};
+    uint8_t left_bytes[kTriggerEffectSize]{};
+    persistent_trigger_effect_bytes(persistent_trigger_effect_right, right_bytes);
+    persistent_trigger_effect_bytes(persistent_trigger_effect_left, left_bytes);
+    bt_set_raw_adaptive_trigger_effects(
+        right_bytes,
         persistent_trigger_effect_right.active,
-        persistent_trigger_effect_left.mode,
-        persistent_trigger_effect_left.start_percent,
-        persistent_trigger_effect_left.wall_percent,
-        persistent_trigger_effect_left.force_percent,
+        left_bytes,
         persistent_trigger_effect_left.active
     );
     persistent_trigger_effect_last_apply_us = now;
@@ -1433,6 +1473,38 @@ bool set_persistent_trigger_effect(
             wall_percent,
             force_percent
         );
+    }
+    persistent_trigger_effect_last_apply_us = 0;
+
+    if (persistent_trigger_effect_any_active()) {
+        adaptive_trigger_test_active = false;
+        apply_persistent_trigger_effect(true);
+    } else {
+        bt_reset_adaptive_triggers();
+    }
+    return true;
+}
+
+// Same lifecycle as set_persistent_trigger_effect, with app-composed bytes instead of the
+// percent form. "Active" is decided by the app, not inferred from a force field, because the
+// force byte is at a different offset in every effect family -- guessing it here is how the
+// firmware would silently disagree with what the app believes it sent.
+bool set_persistent_raw_trigger_effect(
+    uint8_t target,
+    uint8_t const *right_bytes,
+    bool right_active,
+    uint8_t const *left_bytes,
+    bool left_active
+) {
+    if (!bt_is_controller_connected()) {
+        return false;
+    }
+
+    if (target == kTriggerTargetLeft || target == kTriggerTargetBoth) {
+        set_persistent_raw_trigger_effect_state(persistent_trigger_effect_left, left_bytes, left_active);
+    }
+    if (target == kTriggerTargetRight || target == kTriggerTargetBoth) {
+        set_persistent_raw_trigger_effect_state(persistent_trigger_effect_right, right_bytes, right_active);
     }
     persistent_trigger_effect_last_apply_us = 0;
 
@@ -1745,6 +1817,28 @@ uint16_t build_shortcut_event(uint8_t *buffer, uint16_t reqlen) {
 
     memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
     buffer[0] = take_shortcut_event();
+    return COMPANION_PAYLOAD_SIZE;
+}
+
+// The raw DualSense input report, unparsed. The app decodes it -- see controller_report.h for
+// why the firmware deliberately does not. 55 bytes reaches the battery/status fields, which are
+// the last ones of interest; the tail of the report is padding and BT CRC.
+constexpr uint16_t kControllerInputHeaderSize = 8;
+constexpr uint16_t kControllerInputMaxBytes = COMPANION_PAYLOAD_SIZE - kControllerInputHeaderSize;
+
+uint16_t build_controller_input(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+    buffer[6] = bt_is_controller_connected() ? 0x01 : 0x00;
+    const size_t copied = controller_input_report_snapshot(
+        buffer + kControllerInputHeaderSize,
+        kControllerInputMaxBytes
+    );
+    buffer[7] = static_cast<uint8_t>(copied);
     return COMPANION_PAYLOAD_SIZE;
 }
 
@@ -2134,6 +2228,38 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
+
+        case CommandSetRawTriggerEffect:
+            {
+            // value low byte = target, high byte bit0/bit1 = right/left active.
+            // buffer[10..20] = right effect bytes, buffer[21..31] = left effect bytes.
+            const uint8_t target = static_cast<uint8_t>(value & 0xff);
+            const uint8_t flags = static_cast<uint8_t>((value >> 8) & 0xff);
+            if (!valid_trigger_target(target) || (flags & ~0x03u) != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!bt_is_controller_connected()) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            uint8_t const *right_bytes = buffer + 10;
+            uint8_t const *left_bytes = buffer + 10 + kTriggerEffectSize;
+            if (
+                !set_persistent_raw_trigger_effect(
+                    target,
+                    right_bytes,
+                    (flags & 0x01u) != 0,
+                    left_bytes,
+                    (flags & 0x02u) != 0
+                )
+            ) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
 
         case CommandSetClassicRumbleGain:
             if (value > kMaxFeedbackGainPercent) {
@@ -3257,6 +3383,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_ack(buffer, reqlen);
         case COMPANION_REPORT_INPUT:
             return build_shortcut_event(buffer, reqlen);
+        case COMPANION_REPORT_CONTROLLER_INPUT:
+            return build_controller_input(buffer, reqlen);
 #if DS5_AUDIO_DEBUG_ENABLED
         case COMPANION_REPORT_AUDIO_DEBUG:
             return build_audio_debug(buffer, reqlen);

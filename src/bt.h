@@ -96,6 +96,28 @@ void bt_set_custom_adaptive_trigger_effects(
     uint8_t left_force_percent,
     bool left_active
 );
+// Send effect bytes the app composed itself. The firmware does NOT interpret or validate them --
+// deliberately, so the app can drive any effect the controller understands, including ones this
+// firmware has no encoder for, without a reflash per effect type. The controller rejects what it
+// does not recognise. This is what the advanced tester window and the native-range sliders use;
+// the percent-based helpers above quantize to zones and 3-bit force and cannot express them.
+// Encode the percent form into the same 11 bytes bt_set_custom_adaptive_trigger_effects would
+// have sent. Exposed so a caller holding a mix of percent-form and app-composed effects can
+// reduce both to bytes and send them down ONE path, instead of branching on which sender to use
+// and getting the mixed case wrong. Writes exactly 11 bytes.
+void bt_encode_custom_trigger_effect(
+    uint8_t *out,
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+);
+void bt_set_raw_adaptive_trigger_effects(
+    uint8_t const *right_trigger,
+    bool right_active,
+    uint8_t const *left_trigger,
+    bool left_active
+);
 void bt_replay_adaptive_trigger_effect(
     uint8_t const *right_trigger,
     bool right_valid,

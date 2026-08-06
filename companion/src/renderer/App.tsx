@@ -7954,6 +7954,13 @@ export function App() {
                   <p>{triggerLabOpen ? 'Experimental adaptive trigger profile editor' : 'Set trigger effect intensity and test mode'}</p>
                 </div>
                 <div className="triggers-heading-controls">
+                  <button
+                    type="button"
+                    className="secondary-action tester-launch-button"
+                    onClick={() => { void window.bridge.openTesterWindow(); }}
+                  >
+                    Open Tester
+                  </button>
                   <div className="inline-switch trigger-lab-switch-control">
                     {triggerLabAnyActive ? (
                       <span className="inline-state-badge warn trigger-lab-state">

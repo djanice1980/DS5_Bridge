@@ -27,6 +27,7 @@ import type {
   TriggerTestMode,
   TriggerTestTarget
 } from '../shared/protocol';
+import type { TriggerEffect } from '../shared/trigger-effects';
 import type { BridgeToast } from './bridge-service';
 import type {
   AudioHapticsSession,
@@ -509,6 +510,72 @@ function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
     applyWindowScale(window, uiScalePercent, false);
   });
   return window;
+}
+
+let testerWindow: BrowserWindow | null = null;
+
+/**
+ * The advanced tester: live input, raw report bytes, and app-composed trigger effects.
+ *
+ * A real second window rather than a tab, because its whole point is to stay visible while you
+ * drive the controller and watch something else. It shares the main window's preload and so the
+ * same BridgeService and the same selected bridge -- two independent selections would let you
+ * watch one controller while sending effects to another, which would make every reading it
+ * shows untrustworthy.
+ */
+function openTesterWindow(): void {
+  if (testerWindow && !testerWindow.isDestroyed()) {
+    if (testerWindow.isMinimized()) {
+      testerWindow.restore();
+    }
+    testerWindow.focus();
+    return;
+  }
+
+  const testerIndexPath = path.join(__dirname, '..', '..', 'renderer', 'tester.html');
+  const window = new BrowserWindow({
+    width: 1180,
+    height: 900,
+    minWidth: 900,
+    minHeight: 640,
+    show: false,
+    title: 'DS5 Bridge Tester',
+    backgroundColor: '#0b1017',
+    icon: createRuntimeIcon(),
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+
+  window.setMenuBarVisibility(false);
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (isAppFileUrl(url, testerIndexPath)) {
+      return;
+    }
+    event.preventDefault();
+  });
+
+  // Closing it really closes it -- unlike the main window, which hides to tray. Its polling
+  // stops with it, which is the whole reason the input report is pull-model.
+  window.on('closed', () => {
+    testerWindow = null;
+  });
+
+  window.loadFile(testerIndexPath);
+  if (process.env.DS5_DEBUG === '1') {
+    window.webContents.openDevTools({ mode: 'detach' });
+  }
+  window.once('ready-to-show', () => window.show());
+  testerWindow = window;
 }
 
 function sendWindowMaximizedState(): void {
@@ -1210,6 +1277,16 @@ function registerIpc(service: BridgeService): void {
     service.applyAdaptiveTriggerEffect(effect)
   ));
   ipcMain.handle('bridge:resetAdaptiveTriggers', () => service.resetAdaptiveTriggers());
+  ipcMain.handle('bridge:setRawTriggerEffect', (
+    _event,
+    target: TriggerTestTarget,
+    rightEffect: TriggerEffect,
+    leftEffect: TriggerEffect
+  ) => service.setRawTriggerEffect(target, rightEffect, leftEffect));
+  ipcMain.handle('bridge:readControllerInput', () => service.readControllerInput());
+  ipcMain.handle('bridge:openTesterWindow', () => {
+    openTesterWindow();
+  });
   ipcMain.handle('bridge:restoreDefaults', async () => {
     const snapshot = await service.restoreDefaults();
     applySnapshotWindowScale(snapshot);

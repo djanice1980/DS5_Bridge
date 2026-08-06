@@ -12,6 +12,8 @@ import {
   REPORT_ID,
   REPORT_LENGTH,
   WATCHDOG_PHASE_NAMES,
+  buildRawTriggerEffectReport,
+  parseControllerInputReport,
   isFaultPhase,
   CHORD_FUNCTION_EVENT_BASE,
   MAX_CHORD_ASSIGNMENTS,
@@ -40,6 +42,8 @@ import {
   DEFAULT_CONTROLLER_PROFILE_ID,
   DEFAULT_BUTTON_REMAP_PROFILE_ID
 } from '../shared/protocol';
+import { TRIGGER_EFFECT_SIZE, type TriggerEffect } from '../shared/trigger-effects';
+import type { ControllerInputSnapshot } from '../shared/dualsense-input';
 import type {
   AdaptiveTriggerPreviewEffect,
   AudioReactiveHapticsAttack,
@@ -123,7 +127,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.60';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.61';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -2997,6 +3001,47 @@ export class BridgeService extends EventEmitter {
       throwOnCommandError: false
     });
     return this.getSnapshot();
+  }
+
+  /**
+   * Send app-composed effect bytes. Unlike the percent-based preview/apply above, this can
+   * express the controller's native ranges -- full-byte force, per-zone levels, frequency --
+   * because nothing quantizes it on the way down.
+   *
+   * sendCommand cannot take the pre-built report, so the payload is built here the same way
+   * buildRawTriggerEffectReport does. The shared builder stays the single definition of the
+   * wire format, and a protocol test asserts the two agree.
+   */
+  async setRawTriggerEffect(
+    target: TriggerTestTarget,
+    rightEffect: TriggerEffect,
+    leftEffect: TriggerEffect
+  ): Promise<BridgeSnapshot> {
+    const report = buildRawTriggerEffectReport(0, target, rightEffect, leftEffect);
+    // report[9..10] is the command value; report[11..] the effect bytes.
+    const value = report[9] | (report[10] << 8);
+    await this.sendCommand(COMMAND_ID.SET_RAW_TRIGGER_EFFECT, value, {
+      extraPayload: report.slice(11, 11 + TRIGGER_EFFECT_SIZE * 2),
+      throwOnCommandError: false
+    });
+    return this.getSnapshot();
+  }
+
+  /**
+   * Read the controller's current input. Returns null when there is no bridge, or when the
+   * firmware predates the report -- an older bridge answers the unknown report id with zeros or
+   * an error, and neither means "controller centred".
+   */
+  async readControllerInput(): Promise<ControllerInputSnapshot | null> {
+    if (!this.device) {
+      return null;
+    }
+    try {
+      const report = await this.device.getFeatureReport(REPORT_ID.CONTROLLER_INPUT, REPORT_LENGTH);
+      return parseControllerInputReport(report);
+    } catch {
+      return null;
+    }
   }
 
   async resetAdaptiveTriggers(): Promise<BridgeSnapshot> {

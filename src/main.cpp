@@ -308,6 +308,17 @@ void host_input_note_usb_mounted() {
     host_input_fallback_until_us = 0;
 }
 
+size_t controller_input_report_snapshot(uint8_t *out, size_t capacity) {
+    if (out == nullptr || capacity == 0) {
+        return 0;
+    }
+    const size_t length = capacity < sizeof(interrupt_in_data) ? capacity : sizeof(interrupt_in_data);
+    critical_section_enter_blocking(&report_cs);
+    memcpy(out, interrupt_in_data, length);
+    critical_section_exit(&report_cs);
+    return length;
+}
+
 void reset_controller_input_report_cache() {
     BridgeControllerState default_state{};
     (void)dualsense_decode_usb_input_report(

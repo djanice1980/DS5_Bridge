@@ -988,6 +988,54 @@ void bt_set_custom_adaptive_trigger_effects(
     bt_write(report, sizeof(report));
 }
 
+void bt_encode_custom_trigger_effect(
+    uint8_t *out,
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    if (out == nullptr) {
+        return;
+    }
+    set_custom_trigger_effect(out, mode, start_percent, wall_percent, force_percent);
+}
+
+void bt_set_raw_adaptive_trigger_effects(
+    uint8_t const *right_trigger,
+    bool right_active,
+    uint8_t const *left_trigger,
+    bool left_active
+) {
+    if (hid_interrupt_cid == 0) {
+        return;
+    }
+
+    uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
+    init_state_report(report);
+    report[3] = 0x04 | 0x08;
+    uint8_t *right = report + 3 + DS_TRIGGER_EFFECT_RIGHT_OFFSET;
+    uint8_t *left = report + 3 + DS_TRIGGER_EFFECT_LEFT_OFFSET;
+
+    if (right_active && right_trigger != nullptr) {
+        memcpy(right, right_trigger, DS_TRIGGER_EFFECT_SIZE);
+    } else {
+        set_trigger_off(right);
+    }
+    if (left_active && left_trigger != nullptr) {
+        memcpy(left, left_trigger, DS_TRIGGER_EFFECT_SIZE);
+    } else {
+        set_trigger_off(left);
+    }
+
+    // Same reason as every other trigger sender: the audio path memcpys the whole controller
+    // state into each composed packet, so an effect that is not published here is cancelled by
+    // the next audio packet.
+    audio_set_adaptive_trigger_state(right, true, left, true, 0, false);
+
+    bt_write(report, sizeof(report));
+}
+
 void bt_set_custom_adaptive_trigger_effect(
     uint8_t mode,
     uint8_t start_percent,

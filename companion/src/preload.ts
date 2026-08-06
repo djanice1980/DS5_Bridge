@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { TriggerEffect } from './shared/trigger-effects';
+import type { ControllerInputSnapshot } from './shared/dualsense-input';
 import type {
   AdaptiveTriggerPreviewEffect,
   AudioReactiveHapticsConfig,
@@ -195,6 +197,17 @@ const api = {
     ipcRenderer.invoke('bridge:applyAdaptiveTriggerEffect', effect)
   ),
   resetAdaptiveTriggers: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:resetAdaptiveTriggers'),
+  setRawTriggerEffect: (
+    target: TriggerTestTarget,
+    rightEffect: TriggerEffect,
+    leftEffect: TriggerEffect
+  ): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setRawTriggerEffect', target, rightEffect, leftEffect)
+  ),
+  readControllerInput: (): Promise<ControllerInputSnapshot | null> => (
+    ipcRenderer.invoke('bridge:readControllerInput')
+  ),
+  openTesterWindow: (): Promise<void> => ipcRenderer.invoke('bridge:openTesterWindow'),
   restoreDefaults: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:restoreDefaults'),
   setButtonRemap: (buttonId: RemapButtonId, targetId: RemapButtonId): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setButtonRemap', buttonId, targetId)

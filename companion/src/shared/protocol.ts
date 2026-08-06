@@ -1,10 +1,13 @@
+import { decodeDualSenseInputReport, type ControllerInputSnapshot } from './dualsense-input';
+import { encodeTriggerEffect, TRIGGER_EFFECT_SIZE, type TriggerEffect } from './trigger-effects';
+
 export const COMPANION_USAGE_PAGE = 0xff5d;
 export const COMPANION_USAGE = 0x0001;
 export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 17;
+export const PROTOCOL_MINOR = 18;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -16,7 +19,11 @@ export const REPORT_ID = {
   AUDIO_STATUS: 0x08,
   TRIGGER_TRACE: 0x09,
   FEEDBACK_TRACE: 0x0a,
-  DEVICE_IDENTITY: 0x0d
+  DEVICE_IDENTITY: 0x0d,
+  // Raw DualSense input, decoded app-side (see parseControllerInputReport). Pull-model: the
+  // firmware serves its cached copy on demand, so nothing is streamed and a closed tester
+  // window costs nothing.
+  CONTROLLER_INPUT: 0x0b
 } as const;
 
 export const SHORTCUT_EVENT = {
@@ -100,7 +107,10 @@ export const COMMAND_ID = {
   // which buildCommandReport places at report[11..16] -- payload[10..15], exactly where the
   // firmware reads it.
   FORGET_CONTROLLER_PAIRING: 0x2e,
-  SET_WAKE_ON_CONNECT: 0x35
+  SET_WAKE_ON_CONNECT: 0x35,
+  // App-composed trigger effect bytes. The percent-based PREVIEW/APPLY commands quantize to
+  // zones and 3-bit force; this one carries the effect verbatim.
+  SET_RAW_TRIGGER_EFFECT: 0x36
 } as const;
 
 export const ACK_RESULT = {
@@ -1168,6 +1178,93 @@ export interface DeviceIdentityPayload {
 
 // Firmware 1.6.19+: stable physical identity (RP2350 unique board ID);
 // 1.6.20+ adds the connected controller's BT address.
+/**
+ * The raw input report the bridge last forwarded to the host.
+ *
+ * Payload layout (firmware build_controller_input): [7] flags, [8] byte count, [9..] the report.
+ * Indices are one past the firmware's because report[0] is the report id.
+ */
+export function parseControllerInputReport(report: ArrayLike<number>): ControllerInputSnapshot {
+  assertReport(report, REPORT_ID.CONTROLLER_INPUT);
+  assertCurrentOrOlderVersion(report);
+
+  const controllerConnected = (report[7] & 0x01) !== 0;
+  const declared = report[8] & 0xff;
+  // Trust the smaller of what the firmware declared and what actually arrived, so a truncated
+  // transfer decodes as "too short" rather than reading whatever follows in the buffer.
+  const available = Math.max(0, report.length - 9);
+  const length = Math.min(declared, available);
+
+  const raw: number[] = [];
+  for (let index = 0; index < length; index += 1) {
+    raw.push(report[9 + index] & 0xff);
+  }
+
+  return {
+    controllerConnected,
+    raw,
+    // A disconnected controller leaves the firmware's cache holding the neutral report. Decoding
+    // it would render a centred, fully-released controller that looks live -- worse than nothing.
+    state: controllerConnected ? decodeDualSenseInputReport(raw) : null
+  };
+}
+
+export const TRIGGER_RAW_TARGET = {
+  BOTH: 0x00,
+  LEFT: 0x01,
+  RIGHT: 0x02
+} as const;
+
+/**
+ * Build the SET_RAW_TRIGGER_EFFECT command.
+ *
+ * value low byte = target, high byte bit0/bit1 = right/left active. The two 11-byte effects ride
+ * in the extra payload, which buildCommandReport places at report[11..], exactly where the
+ * firmware reads them.
+ *
+ * "Active" is explicit rather than inferred from the effect: the force byte sits at a different
+ * offset in every family, so guessing it is how the firmware and the app end up disagreeing
+ * about what was sent.
+ */
+export function buildRawTriggerEffectReport(
+  sequence: number,
+  target: TriggerTestTarget,
+  rightEffect: TriggerEffect,
+  leftEffect: TriggerEffect,
+  options: { protocolMinor?: number } = {}
+): number[] {
+  const rightBytes = encodeTriggerEffect(rightEffect);
+  const leftBytes = encodeTriggerEffect(leftEffect);
+
+  const targetCode = target === 'l2'
+    ? TRIGGER_RAW_TARGET.LEFT
+    : target === 'r2'
+      ? TRIGGER_RAW_TARGET.RIGHT
+      : TRIGGER_RAW_TARGET.BOTH;
+
+  const rightTargeted = target === 'both' || target === 'r2';
+  const leftTargeted = target === 'both' || target === 'l2';
+  const rightActive = rightTargeted && rightEffect.type !== 'off';
+  const leftActive = leftTargeted && leftEffect.type !== 'off';
+
+  const flags = (rightActive ? 0x01 : 0x00) | (leftActive ? 0x02 : 0x00);
+  const value = (targetCode & 0xff) | ((flags & 0xff) << 8);
+
+  const payload = new Array<number>(TRIGGER_EFFECT_SIZE * 2).fill(0);
+  for (let index = 0; index < TRIGGER_EFFECT_SIZE; index += 1) {
+    payload[index] = rightBytes[index];
+    payload[TRIGGER_EFFECT_SIZE + index] = leftBytes[index];
+  }
+
+  return buildCommandReport(
+    COMMAND_ID.SET_RAW_TRIGGER_EFFECT,
+    sequence,
+    value,
+    payload,
+    options
+  );
+}
+
 export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIdentityPayload {
   assertReport(report, REPORT_ID.DEVICE_IDENTITY);
   assertCurrentOrOlderVersion(report);
