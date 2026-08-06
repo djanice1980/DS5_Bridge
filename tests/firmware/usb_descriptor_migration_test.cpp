@@ -832,6 +832,21 @@ void assert_host_lightbar_reclaim_is_bounded(std::filesystem::path const &root) 
     }
 }
 
+// Light Bar Override has to hold on EVERY route to the controller. The audio-state copy feeds
+// controller_output_state, whose audio snapshot memcpys the whole state -- lightbar bytes
+// included -- so sanitizing that copy with a literal false let the host's colour through while
+// audio was active, even with the override on.
+void assert_lightbar_override_applies_to_every_path(std::filesystem::path const &root) {
+    const auto main_cpp = remove_comments(read_text(root / "src" / "main.cpp"));
+    if (main_cpp.find("sanitize_host_lightbar_payload(audioStateData, payloadLen, false)")
+        != std::string::npos) {
+        throw std::runtime_error(
+            "The audio-state lightbar sanitize must honour lightbarOverride, not false; "
+            "the audio snapshot carries lightbar bytes to the controller"
+        );
+    }
+}
+
 void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const std::string closed = extract_between(
@@ -897,6 +912,7 @@ int main() {
         assert_connection_target_state_moves_the_phase(source_root);
         assert_connect_does_not_overwrite_the_saved_lightbar(source_root);
         assert_host_lightbar_reclaim_is_bounded(source_root);
+        assert_lightbar_override_applies_to_every_path(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

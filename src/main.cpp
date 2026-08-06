@@ -146,7 +146,12 @@ void controller_output_submit_usb_payload(uint8_t const *payload, uint16_t paylo
     if (payloadLen > 0) {
         memcpy(audioStateData, outputData + 3, payloadLen);
     }
-    controller_output_policy_sanitize_host_lightbar_payload(audioStateData, payloadLen, false);
+    // Must honour the override too. This copy feeds controller_output_state, and
+    // controller_output_state_copy_audio_snapshot() memcpys the WHOLE state -- lightbar RGB
+    // and LED flags included -- into the composed audio+state packets. Passing false here let
+    // the host's lightbar reach the controller by that route while audio was active, so the
+    // override held on the direct path and leaked on the audio one.
+    controller_output_policy_sanitize_host_lightbar_payload(audioStateData, payloadLen, lightbarOverride);
     controller_output_policy_sanitize_host_speaker_amp_payload(audioStateData, payloadLen);
     controller_output_policy_sanitize_host_mic_payload(audioStateData, payloadLen);
     controller_output_policy_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
