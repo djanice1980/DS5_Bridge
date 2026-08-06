@@ -175,67 +175,54 @@ html {
   display: block;
 }
 
-.tester-shell {
-  fill: rgba(255, 255, 255, 0.015);
-  stroke: #8ea2bd;
-  stroke-width: 2.5;
+/*
+ * Traced artwork: every visible line is the GAP between filled regions, so these fills must stay
+ * lighter than the card behind them. Fill the parts dark and the drawing vanishes.
+ */
+.ds-part {
+  /* No transition on the base fill: digital controls must snap. */
+  fill: #9fb2cc;
 }
 
-.tester-outline {
-  fill: none;
-  stroke: #8ea2bd;
-  stroke-width: 2.5;
+.ds-shell {
+  fill: #64748f;
 }
 
-.tester-digital {
-  stroke: #8ea2bd;
-  stroke-width: 2.5;
-  fill: transparent;
-  /* No transition: digital is instant, by design. */
+.ds-control {
+  fill: #9fb2cc;
 }
 
-.tester-digital.is-on {
-  stroke: #c084fc;
-  fill: #8532c0;
-  fill-opacity: 0.85;
+.ds-control.is-on {
+  fill: #b072f0;
 }
 
-.tester-analogue {
-  stroke: var(--border, #3a4a63);
-  stroke-width: 2;
-  fill: #8532c0;
-}
-
-.tester-analogue-fill {
-  fill: #a855f7;
-  stroke: none;
+/* Analogue overlay: the only thing here that eases, because its value is continuous. */
+.ds-analogue {
+  fill: #b072f0;
   transition: fill-opacity 70ms linear;
 }
 
-.tester-stick-thumb {
-  fill: #c084fc;
+/*
+ * The PS button is linework in the artwork, so this overlay sits on top of it. It stays
+ * invisible until pressed -- drawn idle it just blots out the logo. .ds-control.is-on is more
+ * specific, so the pressed fill still wins.
+ */
+.ds-ps {
+  fill: transparent;
+}
+
+.ds-stick-dot {
+  fill: #2b3446;
   transition: cx 60ms linear, cy 60ms linear;
 }
 
-.tester-touch-contact {
-  stroke: none;
+.ds-touch {
+  fill: #38bdf8;
 }
 
-.tester-touch-contact-0 { fill: #a855f7; }
-.tester-touch-contact-1 { fill: #38bdf8; }
-
-.tester-svg-label,
-.tester-svg-glyph,
-.tester-svg-glyph-small {
-  fill: var(--text-muted, #8fa3bb);
-  text-anchor: middle;
-  font-family: inherit;
-  pointer-events: none;
+.ds-touch-1 {
+  fill: #f0a672;
 }
-
-.tester-svg-label { font-size: 11px; }
-.tester-svg-glyph { font-size: 13px; }
-.tester-svg-glyph-small { font-size: 8px; letter-spacing: 0.5px; }
 
 .tester-card-head {
   display: flex;
