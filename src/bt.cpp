@@ -900,12 +900,33 @@ void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uin
         }
     };
 
-    if (target == DS_TRIGGER_TARGET_LEFT || target == DS_TRIGGER_TARGET_BOTH) {
+    const bool left_targeted = target == DS_TRIGGER_TARGET_LEFT || target == DS_TRIGGER_TARGET_BOTH;
+    const bool right_targeted = target == DS_TRIGGER_TARGET_RIGHT || target == DS_TRIGGER_TARGET_BOTH;
+    if (left_targeted) {
         apply_effect(left_trigger);
     }
-    if (target == DS_TRIGGER_TARGET_RIGHT || target == DS_TRIGGER_TARGET_BOTH) {
+    if (right_targeted) {
         apply_effect(right_trigger);
     }
+
+    // Publish into the shared controller state BEFORE sending, exactly as
+    // bt_replay_adaptive_trigger_effect does.
+    //
+    // controller_output_state carries the trigger effect bytes, and the audio path memcpys
+    // that WHOLE state into every composed audio+state packet. A test that only wrote its own
+    // report left the state holding the previous (off) effect, so while audio streamed the
+    // next composed packet cancelled the effect immediately -- the test worked in silence and
+    // did nothing under audio. The host path never had this problem because host reports go
+    // through controller_output_state on their way in.
+    audio_set_adaptive_trigger_state(
+        right_trigger,
+        right_targeted,
+        left_trigger,
+        left_targeted,
+        0,
+        false
+    );
+
     bt_write(report, sizeof(report));
 }
 
@@ -962,6 +983,10 @@ void bt_set_custom_adaptive_trigger_effects(
     left_active
         ? set_custom_trigger_effect(left_trigger, left_mode, left_start_percent, left_wall_percent, left_force_percent)
         : set_trigger_off(left_trigger);
+
+    // Same reason as bt_set_adaptive_trigger_effect: without this the next composed audio
+    // packet replays the previous trigger state over the Lab's effect.
+    audio_set_adaptive_trigger_state(right_trigger, true, left_trigger, true, 0, false);
 
     bt_write(report, sizeof(report));
 }

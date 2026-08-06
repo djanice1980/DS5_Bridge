@@ -890,6 +890,27 @@ void assert_game_trigger_activity_ignores_off_effects(std::filesystem::path cons
     }
 }
 
+// Anything that sets a trigger effect must publish it into controller_output_state as well as
+// sending its own report. The audio path memcpys that whole state into every composed
+// audio+state packet, so an effect that lives only in its own report is cancelled by the next
+// audio packet -- which is why the built-in trigger tests worked in silence and did nothing
+// while audio streamed.
+void assert_trigger_effect_senders_publish_state(std::filesystem::path const &root) {
+    const auto bt_cpp = remove_comments(read_text(root / "src" / "bt.cpp"));
+    for (const char *sender : {
+        "void bt_set_adaptive_trigger_effect(",
+        "void bt_set_custom_adaptive_trigger_effects("
+    }) {
+        const std::string body = extract_between(bt_cpp, sender, "\n}\n");
+        if (body.find("audio_set_adaptive_trigger_state(") == std::string::npos) {
+            throw std::runtime_error(
+                std::string(sender) + " must publish the effect via audio_set_adaptive_trigger_state, "
+                "or the next composed audio packet replays the previous trigger state over it"
+            );
+        }
+    }
+}
+
 void assert_hid_channel_close_notes_the_phase(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const std::string closed = extract_between(
@@ -958,6 +979,7 @@ int main() {
         assert_lightbar_override_applies_to_every_path(source_root);
         assert_trigger_presets_use_the_simple_family(source_root);
         assert_game_trigger_activity_ignores_off_effects(source_root);
+        assert_trigger_effect_senders_publish_state(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex
