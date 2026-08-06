@@ -77,22 +77,45 @@ describe('trigger effect encoding', () => {
     expect(bytes[3]).toBe(15);
   });
 
-  it('omits zero-force zones from the active mask', () => {
-    // An active zone at zero force is a dead band, not an absent zone. Zones 0 and 1 are off
-    // here, so only bits 2..9 may be set.
+  it('excludes only null zones from the active mask', () => {
     const bytes = encodeTriggerEffect({
       type: 'zoned-feedback',
-      zones: [0, 0, 7, 7, 7, 7, 7, 7, 7, 7]
+      zones: [null, null, 7, 7, 7, 7, 7, 7, 7, 7]
     });
     const mask = bytes[1] | (bytes[2] << 8);
     expect(mask & 0b11).toBe(0);
     expect(mask).toBe(0b1111111100);
   });
 
+  it('keeps a zone set to zero ACTIVE at zero force', () => {
+    // Zero force and "not participating" are different effects on the controller: zero is the
+    // weakest real setting. Treating them alike made the faintest effects vanish, and made the
+    // firmware's own percent-mapped effects impossible to reproduce.
+    const bytes = encodeTriggerEffect({
+      type: 'zoned-feedback',
+      zones: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    });
+    const mask = bytes[1] | (bytes[2] << 8);
+    expect(mask).toBe(0b1111111111);
+    const forceBits = bytes[3] | (bytes[4] << 8) | (bytes[5] << 16) | (bytes[6] << 24);
+    expect(forceBits).toBe(0);
+  });
+
+  it('carries a zone-packed vibration frequency above the simple family limit', () => {
+    // Byte 9 is a whole byte here; clamping it to the simple auto effect's 15 silently altered
+    // any effect built with a higher frequency, including migrated percent profiles.
+    const bytes = encodeTriggerEffect({
+      type: 'zoned-vibration',
+      zones: [null, null, 4, 4, 4, 4, 4, 4, 4, 4],
+      frequency: 28
+    });
+    expect(bytes[9]).toBe(28);
+  });
+
   it('packs zone force levels three bits apart', () => {
     const bytes = encodeTriggerEffect({
       type: 'zoned-feedback',
-      zones: [1, 2, 0, 0, 0, 0, 0, 0, 0, 0]
+      zones: [1, 2, null, null, null, null, null, null, null, null]
     });
     const forceBits = bytes[3] | (bytes[4] << 8) | (bytes[5] << 16) | (bytes[6] << 24);
     expect(forceBits & 0b111).toBe(1);

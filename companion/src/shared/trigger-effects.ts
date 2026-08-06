@@ -27,8 +27,24 @@ export const TRIGGER_EFFECT_ID = {
 export const TRIGGER_ZONE_COUNT = 10;
 /** Zone force is a 3-bit field, so a zone carries one of eight levels. */
 export const TRIGGER_ZONE_FORCE_MAX = 7;
-/** The auto/vibration frequency field is small; the controller ignores values above this. */
+/** The SIMPLE auto effect frequency field is small; the controller ignores values above this. */
 export const TRIGGER_FREQUENCY_MAX = 15;
+/**
+ * The zone-packed vibration effect carries frequency in a whole byte (index 9), so it is not
+ * bound by the simple family limit above. Applying that limit here silently altered any effect
+ * built with a higher frequency.
+ */
+export const TRIGGER_ZONE_FREQUENCY_MAX = 255;
+
+/**
+ * One entry per zone. null means the zone is NOT in the active mask; a number means it is
+ * active at that force level, INCLUDING zero.
+ *
+ * Those are different effects on the controller and collapsing them loses one: a zone active
+ * at level 0 is the weakest setting, not an absent one. Treating 0 as absent made every
+ * lowest-force effect disappear instead of being faint.
+ */
+export type TriggerZones = Array<number | null>;
 
 export type TriggerEffect =
   | { type: 'off' }
@@ -38,12 +54,12 @@ export type TriggerEffect =
   | { type: 'weapon'; start: number; end: number; force: number }
   /** Vibration from `start` onward at `frequency` Hz-ish. */
   | { type: 'auto'; start: number; force: number; frequency: number }
-  /** Per-zone resistance. `zones` is 10 entries of 0-7. */
-  | { type: 'zoned-feedback'; zones: number[] }
+  /** Per-zone resistance. 10 entries: null for a zone that does not participate, else 0-7. */
+  | { type: 'zoned-feedback'; zones: TriggerZones }
   /** Per-zone weapon: active zones from `start` to `end`, one force level. */
   | { type: 'zoned-weapon'; start: number; end: number; force: number }
   /** Per-zone vibration amplitude plus a frequency. */
-  | { type: 'zoned-vibration'; zones: number[]; frequency: number };
+  | { type: 'zoned-vibration'; zones: TriggerZones; frequency: number };
 
 export type TriggerEffectType = TriggerEffect['type'];
 
@@ -79,21 +95,22 @@ function clampZoneForce(value: number): number {
 }
 
 /**
- * Pack ten 3-bit zone values into the effect's active-zone mask and force words, the layout
- * the zone-packed family uses: a 16-bit mask of which zones participate, then 30 bits of
- * per-zone level.
+ * Pack ten zones into the active-zone mask and force words the zone-packed family uses: a
+ * 16-bit mask of which zones participate, then 30 bits of per-zone level.
  *
- * A zone with level 0 is left OUT of the mask. Including it would mark the zone active at zero
- * force, which reads on the controller as a dead band rather than as absence.
+ * null is the ONLY thing that leaves a zone out of the mask. A zone set to 0 is active at zero
+ * force, which is the weakest real setting -- excluding it made the faintest effects vanish
+ * entirely, and made the firmware's own percent-mapped effects impossible to reproduce.
  */
-function packZones(effect: number[], out: number[], offset: number): void {
+function packZones(zones: TriggerZones, out: number[], offset: number): void {
   let activeMask = 0;
   let forceBits = 0n;
   for (let zone = 0; zone < TRIGGER_ZONE_COUNT; zone += 1) {
-    const level = clampZoneForce(effect[zone] ?? 0);
-    if (level === 0) {
+    const entry = zones[zone];
+    if (entry === null || entry === undefined) {
       continue;
     }
+    const level = clampZoneForce(entry);
     activeMask |= 1 << zone;
     forceBits |= BigInt(level) << BigInt(3 * zone);
   }
@@ -158,7 +175,7 @@ export function encodeTriggerEffect(effect: TriggerEffect): number[] {
     case 'zoned-vibration':
       bytes[0] = TRIGGER_EFFECT_ID.ZONED_VIBRATION;
       packZones(effect.zones, bytes, 1);
-      bytes[9] = Math.max(0, Math.min(TRIGGER_FREQUENCY_MAX, Math.round(effect.frequency)));
+      bytes[9] = Math.max(0, Math.min(TRIGGER_ZONE_FREQUENCY_MAX, Math.round(effect.frequency)));
       return bytes;
 
     default: {
@@ -180,11 +197,11 @@ export function defaultTriggerEffect(type: TriggerEffectType): TriggerEffect {
     case 'auto':
       return { type: 'auto', start: 20, force: 200, frequency: 10 };
     case 'zoned-feedback':
-      return { type: 'zoned-feedback', zones: [0, 0, 3, 4, 5, 5, 5, 5, 5, 5] };
+      return { type: 'zoned-feedback', zones: [null, null, 3, 4, 5, 5, 5, 5, 5, 5] };
     case 'zoned-weapon':
       return { type: 'zoned-weapon', start: 3, end: 7, force: 6 };
     case 'zoned-vibration':
-      return { type: 'zoned-vibration', zones: [0, 0, 4, 4, 4, 4, 4, 4, 4, 4], frequency: 8 };
+      return { type: 'zoned-vibration', zones: [null, null, 4, 4, 4, 4, 4, 4, 4, 4], frequency: 8 };
     default: {
       const unreachable: never = type;
       throw new Error(`Unknown trigger effect type: ${String(unreachable)}`);
