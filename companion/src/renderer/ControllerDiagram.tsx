@@ -242,8 +242,11 @@ export function AccelVector({
   const tilted = Math.hypot(nx, nz) > 0.02;
   // Both axes are negated: the sensor positive X and Z point opposite to the direction the
   // controller is tilted as seen on screen. Confirmed against hardware.
-  const needleX = 40 - nx * radius;
-  const needleY = 40 - nz * radius;
+  // Snap to the exact centre inside the deadband. Sensor noise of a few tens of units offsets
+  // the dot by a fraction of a pixel, which antialiasing renders as a smear slightly off the
+  // crosshair -- so a controller sitting still never looked properly centred even when it was.
+  const needleX = tilted ? 40 - nx * radius : 40;
+  const needleY = tilted ? 40 - nz * radius : 40;
 
   const lift = Math.max(-1, Math.min(1, (y - origin.y) / ACCEL_REST));
   const fillWidth = Math.abs(lift) * 50;

@@ -28,6 +28,26 @@ html {
   scrollbar-gutter: stable;
 }
 
+/*
+ * Focus styling. Without this the window falls back to the browser default ring, which is a
+ * bright orange that belongs to no theme here -- and it lingers on a button after a click.
+ *
+ * :focus-visible only, so the ring appears for keyboard navigation and not for a mouse press,
+ * and it uses the same --focus-ring the main window uses so it follows the theme preset.
+ */
+.tester-root button:focus-visible,
+.tester-root select:focus-visible,
+.tester-root input:focus-visible {
+  outline: 2px solid var(--focus-ring, #4d93ff);
+  outline-offset: 2px;
+}
+
+.tester-root button:focus:not(:focus-visible),
+.tester-root select:focus:not(:focus-visible),
+.tester-root input:focus:not(:focus-visible) {
+  outline: none;
+}
+
 .tester-root {
   padding: 20px 24px 32px;
   min-height: 100vh;
