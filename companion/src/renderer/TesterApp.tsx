@@ -1,17 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BridgeSnapshot } from '../shared/types';
 import type { ControllerInputSnapshot, DualSenseInputState } from '../shared/dualsense-input';
 import { ControllerDiagram, GyroDial, AccelVector, type AccelZero } from './ControllerDiagram';
+import { TriggerEffectEditor } from './TriggerEffectEditor';
 import {
-  TRIGGER_EFFECT_TYPES,
-  TRIGGER_FREQUENCY_MAX,
-  TRIGGER_ZONE_COUNT,
-  TRIGGER_ZONE_FORCE_MAX,
   defaultTriggerEffect,
-  encodeTriggerEffect,
-  formatTriggerEffectBytes,
-  type TriggerEffect,
-  type TriggerEffectType
+  type TriggerEffect
 } from '../shared/trigger-effects';
 
 /**
@@ -33,145 +27,6 @@ const INPUT_POLL_INTERVAL_MS = 40;
  */
 const INPUT_HOLD_MS = 2000;
 const INPUT_HOLD_RENEW_MS = 700;
-
-function EffectEditor({
-  title,
-  effect,
-  onChange
-}: {
-  title: string;
-  effect: TriggerEffect;
-  onChange: (next: TriggerEffect) => void;
-}) {
-  const bytes = useMemo(() => encodeTriggerEffect(effect), [effect]);
-
-  function setZone(index: number, value: number): void {
-    if (effect.type !== 'zoned-feedback' && effect.type !== 'zoned-vibration') {
-      return;
-    }
-    const zones = [...effect.zones];
-    zones[index] = value;
-    onChange({ ...effect, zones });
-  }
-
-  return (
-    <div className="tester-effect">
-      <div className="tester-effect-head">
-        <h3>{title}</h3>
-        <select
-          aria-label={`${title} effect type`}
-          value={effect.type}
-          onChange={(event) => onChange(defaultTriggerEffect(event.target.value as TriggerEffectType))}
-        >
-          {TRIGGER_EFFECT_TYPES.map((type) => (
-            <option key={type} value={type}>{type}</option>
-          ))}
-        </select>
-      </div>
-
-      {effect.type === 'resistance' && (
-        <>
-          <Slider label="Start" min={0} max={255} value={effect.start} onChange={(v) => onChange({ ...effect, start: v })} />
-          <Slider label="Force" min={0} max={255} value={effect.force} onChange={(v) => onChange({ ...effect, force: v })} />
-        </>
-      )}
-
-      {effect.type === 'weapon' && (
-        <>
-          <Slider label="Start" min={0} max={254} value={effect.start} onChange={(v) => onChange({ ...effect, start: v })} />
-          <Slider label="End" min={1} max={255} value={effect.end} onChange={(v) => onChange({ ...effect, end: v })} />
-          <Slider label="Force" min={0} max={255} value={effect.force} onChange={(v) => onChange({ ...effect, force: v })} />
-        </>
-      )}
-
-      {effect.type === 'auto' && (
-        <>
-          <Slider label="Start" min={0} max={255} value={effect.start} onChange={(v) => onChange({ ...effect, start: v })} />
-          <Slider label="Force" min={0} max={255} value={effect.force} onChange={(v) => onChange({ ...effect, force: v })} />
-          <Slider
-            label="Frequency"
-            min={0}
-            max={TRIGGER_FREQUENCY_MAX}
-            value={effect.frequency}
-            onChange={(v) => onChange({ ...effect, frequency: v })}
-          />
-        </>
-      )}
-
-      {effect.type === 'zoned-weapon' && (
-        <>
-          <Slider label="Start zone" min={0} max={TRIGGER_ZONE_COUNT - 2} value={effect.start} onChange={(v) => onChange({ ...effect, start: v })} />
-          <Slider label="End zone" min={1} max={TRIGGER_ZONE_COUNT - 1} value={effect.end} onChange={(v) => onChange({ ...effect, end: v })} />
-          <Slider label="Force" min={0} max={TRIGGER_ZONE_FORCE_MAX} value={effect.force} onChange={(v) => onChange({ ...effect, force: v })} />
-        </>
-      )}
-
-      {(effect.type === 'zoned-feedback' || effect.type === 'zoned-vibration') && (
-        <div className="tester-zones">
-          <span className="tester-field-label">Zones (0&ndash;{TRIGGER_ZONE_FORCE_MAX})</span>
-          <div className="tester-zone-grid">
-            {effect.zones.map((level, index) => (
-              <label key={index} className="tester-zone">
-                <input
-                  type="range"
-                  aria-label={`Zone ${index}`}
-                  min={0}
-                  max={TRIGGER_ZONE_FORCE_MAX}
-                  value={level}
-                  onChange={(event) => setZone(index, Number(event.target.value))}
-                />
-                <span className="tester-mono">{index}</span>
-              </label>
-            ))}
-          </div>
-          {effect.type === 'zoned-vibration' && (
-            <Slider
-              label="Frequency"
-              min={0}
-              max={TRIGGER_FREQUENCY_MAX}
-              value={effect.frequency}
-              onChange={(v) => onChange({ ...effect, frequency: v })}
-            />
-          )}
-        </div>
-      )}
-
-      <div className="tester-bytes">
-        <span className="tester-field-label">Bytes on the wire</span>
-        <code className="tester-mono">{formatTriggerEffectBytes(bytes)}</code>
-      </div>
-    </div>
-  );
-}
-
-function Slider({
-  label,
-  min,
-  max,
-  value,
-  onChange
-}: {
-  label: string;
-  min: number;
-  max: number;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="tester-slider">
-      <span className="tester-field-label">{label}</span>
-      <input
-        type="range"
-        aria-label={label}
-        min={min}
-        max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-      <span className="tester-mono tester-slider-value">{value}</span>
-    </label>
-  );
-}
 
 export function TesterApp() {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
@@ -393,8 +248,8 @@ export function TesterApp() {
             not the percentages the main Triggers page maps onto zones.
           </p>
           <div className="tester-effects">
-            <EffectEditor title="L2" effect={leftEffect} onChange={setLeftEffect} />
-            <EffectEditor title="R2" effect={rightEffect} onChange={setRightEffect} />
+            <TriggerEffectEditor title="L2" effect={leftEffect} onChange={setLeftEffect} />
+            <TriggerEffectEditor title="R2" effect={rightEffect} onChange={setRightEffect} />
           </div>
           <div className="tester-actions">
             <button type="button" onClick={() => void sendEffects(rightEffect, leftEffect)}>
