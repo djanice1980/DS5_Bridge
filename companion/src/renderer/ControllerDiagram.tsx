@@ -204,6 +204,11 @@ export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
   const nz = Math.max(-1, Math.min(1, z / ONE_G));
   const radius = 30;
   const tilted = Math.hypot(nx, nz) > 0.04;
+  // Both axes are negated: the sensor's positive X and Z point opposite to the direction the
+  // controller is tilted as seen on screen, so plotting them raw sent the needle the wrong way
+  // on both. Confirmed against hardware.
+  const needleX = 40 - nx * radius;
+  const needleY = 40 - nz * radius;
 
   return (
     <div className="tester-accel">
@@ -217,12 +222,12 @@ export function AccelVector({ x, y, z }: { x: number; y: number; z: number }) {
           <line
             x1={40}
             y1={40}
-            x2={40 + nx * radius}
-            y2={40 + nz * radius}
+            x2={needleX}
+            y2={needleY}
             className="tester-accel-needle"
           />
         )}
-        <circle cx={40 + nx * radius} cy={40 + nz * radius} r={4} className="tester-dial-head" />
+        <circle cx={needleX} cy={needleY} r={4} className="tester-dial-head" />
       </svg>
       <div className="tester-accel-z">
         <span className="tester-field-label">Y (vertical)</span>
