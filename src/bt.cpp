@@ -2044,6 +2044,62 @@ static bool mark_pairing_transaction_key_accepted(bd_addr_t addr) {
     return write_pairing_transaction(transaction);
 }
 
+/**
+ * The controller has told us the bond is gone, so the staged prior key is a dead key.
+ *
+ * The rollback exists to undo a re-pair that failed, and it does that by putting the prior key
+ * back. That is right for every failure EXCEPT this one: here the failure IS the controller
+ * saying it does not have that key, so restoring it hands back the exact bond that was just
+ * rejected. The next attempt offers it, gets 0x06 again, and rolls back again -- the controller
+ * can never pair while the record keeps resurrecting the reason it cannot.
+ *
+ * Clearing prior_key_valid rather than discarding the record keeps the rollback ARMED: the
+ * transaction still runs, it just takes the branch that clears a partial key instead of the one
+ * that restores a dead one. Discarding it here would abandon the guarantee mid-re-pair.
+ *
+ * Fail-closed throughout, including on a record staged for a different controller -- that is a
+ * state this cannot reason about, and guessing which record is authoritative is how a good bond
+ * gets destroyed.
+ */
+static bool invalidate_rejected_prior_pairing_key(bd_addr_t addr) {
+    bool transaction_present = false;
+    if (!pairing_transaction_storage_status(transaction_present)) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    if (!transaction_present) {
+        return true;
+    }
+
+    pairing_transaction transaction{};
+    if (!read_pairing_transaction(transaction)) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    if (bd_addr_cmp(transaction.addr, addr) != 0) {
+        DS5_LOG("[PAIR] Rejected key does not match the staged transaction for %s\n",
+               bd_addr_to_str(addr));
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    if (
+        transaction.state != pairing_transaction_state::AwaitingKey
+        || !transaction.prior_key_valid
+    ) {
+        return true;
+    }
+
+    transaction.prior_key_valid = false;
+    memset(transaction.prior_key, 0, LINK_KEY_LEN);
+    transaction.prior_type = INVALID_LINK_KEY;
+    if (!write_pairing_transaction(transaction)) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    DS5_LOG("[PAIR] Discarded staged prior key rejected by %s\n", bd_addr_to_str(addr));
+    return true;
+}
+
 // The rollback. Past KeyAccepted the new bond is real and must be kept -- undoing it there
 // would destroy a working pairing. Before that, put the prior key back (or clear a partial
 // one), and verify it actually landed.
@@ -2626,7 +2682,18 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 if (status == AUTHENTICATION_PIN_OR_KEY_MISSING) {
                     DS5_LOG("[HCI] Remote reports missing key, drop stored key for %s\n",
                            bd_addr_to_str(current_device_addr));
+                    // BEFORE the drop: a staged re-pair holds this same dead bond as its prior
+                    // key, and the rollback below would put it straight back. Order matters --
+                    // invalidating after the drop leaves a window where a reset restores it.
+                    (void)invalidate_rejected_prior_pairing_key(current_device_addr);
                     gap_drop_link_key_for_bd_addr(current_device_addr);
+                    link_key_t dropped_key;
+                    link_key_type_t dropped_type;
+                    if (gap_get_link_key_for_bd_addr(current_device_addr, dropped_key, &dropped_type)) {
+                        DS5_LOG("[PAIR] Rejected key survived the drop for %s\n",
+                               bd_addr_to_str(current_device_addr));
+                        pairing_transaction_recovery_failed = true;
+                    }
                 } else {
                     DS5_LOG("[HCI] Transient authentication failure status=0x%02X, preserve stored pairing\n",
                            status);

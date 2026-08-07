@@ -917,6 +917,42 @@ void assert_security_watchdog_keys_on_the_phase(std::filesystem::path const &roo
     }
 }
 
+/**
+ * A key the controller has REJECTED must never be restored by the rollback.
+ *
+ * The pairing rollback puts the prior key back when a re-pair fails, which is right for every
+ * failure except this one: authentication status 0x06 is the controller saying it does not hold
+ * that bond, so restoring it re-offers the exact key that was just refused. The same handler
+ * calls the rollback a few lines later, so without this the drop and the restore sit in one
+ * block and cancel each other out.
+ *
+ * The ORDER is the load-bearing part. Invalidating after the drop leaves a window in which a
+ * reset restores a dead key, which is the failure the durable record exists to prevent.
+ */
+void assert_rejected_pairing_key_is_not_rolled_back(std::filesystem::path const &root) {
+    const auto bt_cpp = remove_comments(read_text(root / "src" / "bt.cpp"));
+
+    if (bt_cpp.find("static bool invalidate_rejected_prior_pairing_key(") == std::string::npos) {
+        throw std::runtime_error(
+            "A key rejected with PIN_OR_KEY_MISSING must invalidate the staged prior key, or the "
+            "rollback restores the bond the controller just said it does not have"
+        );
+    }
+
+    const auto handler = bt_cpp.find("if (status == AUTHENTICATION_PIN_OR_KEY_MISSING) {");
+    if (handler == std::string::npos) {
+        throw std::runtime_error("The PIN_OR_KEY_MISSING branch moved; this guard needs updating");
+    }
+    const auto invalidate = bt_cpp.find("invalidate_rejected_prior_pairing_key(", handler);
+    const auto drop = bt_cpp.find("gap_drop_link_key_for_bd_addr(", handler);
+    if (invalidate == std::string::npos || drop == std::string::npos || invalidate > drop) {
+        throw std::runtime_error(
+            "The staged prior key must be invalidated BEFORE the live key is dropped, or a reset "
+            "in between restores a key the controller has already rejected"
+        );
+    }
+}
+
 // hci_disconnect going out with no DISCONNECTION_COMPLETE coming back parked the phase at
 // Disconnecting with a live handle and no watchdog. Every other recovery path in the loop
 // escalates by calling bt_disconnect(), so this was the one phase with nothing left to escalate
@@ -1159,6 +1195,7 @@ int main() {
         assert_connection_target_state_moves_the_phase(source_root);
         assert_security_watchdog_keys_on_the_phase(source_root);
         assert_disconnect_stall_has_a_watchdog(source_root);
+        assert_rejected_pairing_key_is_not_rolled_back(source_root);
         assert_raw_trigger_effect_goes_through_the_persistent_system(source_root);
         assert_connect_does_not_overwrite_the_saved_lightbar(source_root);
         assert_host_lightbar_reclaim_is_bounded(source_root);
