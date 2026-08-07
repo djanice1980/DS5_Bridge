@@ -66,7 +66,6 @@ add_executable(ds5-bridge
         src/watchdog_telemetry.cpp
         src/panic_hook.cpp
         src/fault_hooks.cpp
-        src/flash_probe.cpp
         src/audio.cpp
         src/bt.cpp
 )
@@ -261,16 +260,10 @@ target_link_libraries(ds5-bridge
 # Redirect panic() to src/panic_hook.cpp so a panic leaves a breadcrumb instead of looking
 # like an ordinary main-loop stall. Applied at link time because the SDK's PICO_PANIC_FUNCTION
 # define is consumed when it compiles its own panic.c, not by our target.
+# The USB send-path and flash-stall wraps were removed in 1.6.67; both questions were answered
+# and the send-path ones ran on every HID report and audio packet. See docs/diagnostic-scaffolding.md.
 target_link_options(ds5-bridge PRIVATE
         -Wl,--wrap=panic
-        # Breadcrumbs inside the USB send path (src/fault_hooks.cpp).
-        -Wl,--wrap=usbd_edpt_claim
-        -Wl,--wrap=usbd_edpt_xfer
-        -Wl,--wrap=dcd_edpt_xfer
-        # Flash stall measurement (src/flash_probe.cpp).
-        -Wl,--wrap=flash_range_erase
-        -Wl,--wrap=flash_range_program
-        -Wl,--wrap=flash_safe_execute
 )
 
 pico_add_extra_outputs(ds5-bridge)

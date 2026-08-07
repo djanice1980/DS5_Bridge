@@ -40,11 +40,10 @@ enum class WatchdogMainLoopPhase : uint8_t {
     FaultMemManage = 25,
     FaultBus = 26,
     FaultUsage = 27,
-    // Steps within the USB send, to separate "waiting on the endpoint" from "stuck in the
-    // hardware layer". The last one entered before a reset is the one that did not return.
-    SendClaim = 28,
-    SendXfer = 29,
-    SendDcdXfer = 30,
+    // 28-30 were SendClaim / SendXfer / SendDcdXfer, breadcrumbs inside the USB send path,
+    // removed in 1.6.67 once they had separated "waiting on the endpoint" from "stuck in the
+    // hardware layer". Left unused rather than reassigned: the companion still names them so a
+    // breadcrumb retained from firmware 1.6.66 or earlier decodes to what it meant then.
 };
 
 struct WatchdogTelemetrySnapshot {

@@ -90,25 +90,20 @@ That is how the hook was proven installed rather than assumed
 
 ---
 
-## 5. USB send-path breadcrumbs — REMOVE WHEN DONE (hot path)
+## 5. USB send-path breadcrumbs — REMOVED in firmware 1.6.67
 
-`src/fault_hooks.cpp` bottom section, plus these in `CMakeLists.txt`:
-
-```
--Wl,--wrap=usbd_edpt_claim
--Wl,--wrap=usbd_edpt_xfer
--Wl,--wrap=dcd_edpt_xfer
-```
+Was `src/fault_hooks.cpp` bottom section plus `--wrap` on `usbd_edpt_claim`, `usbd_edpt_xfer`
+and `dcd_edpt_xfer`.
 
 Added to split the crash between "waiting on the endpoint" and "stuck in the hardware layer"
-(`send/claim` vs `send/xfer` vs `send/dcd-xfer`). **That question is answered.**
+(`send/claim` vs `send/xfer` vs `send/dcd-xfer`). That question was answered — the crash was
+in the claim — and this was the only piece of the scaffolding on a hot path:
+`usbd_edpt_xfer` ran for every HID report and every audio packet, thousands per second, each
+stamp paying the §6 cost.
 
-**Cost: this is the expensive one.** `usbd_edpt_xfer` runs on *every* USB transfer — every
-HID report and every audio packet, thousands per second — and each stamp pays the §6 cost.
-
-**To remove:** delete the three `__wrap_*`/`__real_*` pairs at the bottom of
-`src/fault_hooks.cpp`, remove the three `--wrap` link options, and drop the `SendClaim`,
-`SendXfer`, `SendDcdXfer` enum values and their companion phase names.
+Phases 28–30 are now unused and were **left unassigned rather than reused**. The companion
+still names them, so a breadcrumb retained from firmware 1.6.66 or earlier decodes to what it
+meant at the time instead of to something else entirely.
 
 ---
 
@@ -129,28 +124,22 @@ garbage scratch registers after a cold boot — it does not need to be strong.
 
 ---
 
-## 7. Flash-stall probe — REMOVE WHEN DONE
+## 7. Flash-stall probe — REMOVED in firmware 1.6.67
 
-`src/flash_probe.cpp`, plus in `CMakeLists.txt`:
-
-```
--Wl,--wrap=flash_range_erase
--Wl,--wrap=flash_range_program
--Wl,--wrap=flash_safe_execute
-```
+Was `src/flash_probe.cpp` plus `--wrap` on `flash_range_erase`, `flash_range_program` and
+`flash_safe_execute`.
 
 Added to test whether BTstack link-key flash writes explained a 172ms main-loop stall.
 **They did not** — measured `flash worst 0ms over 829 ops`, and the real cause was a
-`sleep_ms(150)` re-init running inside a BT callback. Its job is done.
+`sleep_ms(150)` re-init running inside a BT callback.
 
-Note the op count is dominated by the BOOTSEL `flash_safe_execute` polling in
-`button_check()`, not by link-key writes — do not read it as "829 erases".
+Worth preserving from that measurement: the op count was dominated by the BOOTSEL
+`flash_safe_execute` polling in `button_check()`, not by link-key writes — it was never
+"829 erases".
 
-**Cost:** negligible per call, but it is dead weight now.
-
-**To remove:** drop `src/flash_probe.cpp` from `CMakeLists.txt`, remove the three `--wrap`
-options, and remove the `flash_probe_stats` extern and the `[56..59]` payload writes in
-`src/companion.cpp`.
+The companion-side readout went with it, rather than being left to render `0ms over 0 ops`
+against firmware that no longer measures. Payload bytes `[56..59]` are free again on non-fault
+records.
 
 ---
 
@@ -182,10 +171,12 @@ it was perfectly deterministic at `mutex_enter_block_until+48` every time).
 
 ---
 
-## Suggested order if trimming
+## What is left
 
-1. §5 USB send-path wrappers — the only piece on a hot path.
-2. §7 flash probe — question answered.
-3. §6 per-stamp cost — cheap win, keeps the capability.
-4. Keep §1, §3, §4, §9 indefinitely. They cost nothing until something breaks, and they are
-   the difference between a named crash address and another ten-build investigation.
+§5 and §7 were removed in firmware 1.6.67; §8's flash reporting went with §7. Everything still
+here — §1 per-phase feed, §2 phase breadcrumbs, §3 fault vectors, §4 `--wrap=panic`, §9 the CI
+link map — **stays indefinitely.** All of it costs nothing until something breaks, and it is the
+difference between a named crash address and another ten-build investigation.
+
+The one remaining trim is §6, the per-stamp cost. It keeps the capability and just makes it
+cheaper, so it can be done whenever rather than being scheduled.

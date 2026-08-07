@@ -4394,12 +4394,6 @@ export class BridgeService extends EventEmitter {
           ` @ PC 0x${pc.toString(16).padStart(8, '0')}${at}${before}${arg0}`
           + ` (CFSR 0x${cfsr.toString(16).padStart(4, '0')}${escalated})`;
       }
-      // Flash-stall telemetry (firmware 1.6.36+). Flash writes park core 1, so they are the
-      // prime suspect for the main-loop stall that became visible once the crash was fixed.
-      if (wdt !== null && !isFaultPhase(wdt.priorPhase) && wdt.flashOpCount > 0) {
-        this.snapshot.diagnostics.lastWatchdogHang +=
-          ` · flash worst ${wdt.flashWorstMs}ms over ${wdt.flashOpCount} ops`;
-      }
       // Live worst-phase timing (firmware 1.6.28+). A phase can be slow enough to matter
       // without ever reaching the 1s watchdog budget, and that is invisible otherwise.
       if (wdt !== null && wdt.worstPhaseMs > 0) {

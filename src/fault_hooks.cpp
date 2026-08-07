@@ -108,27 +108,11 @@ static_assert(static_cast<int>(WatchdogMainLoopPhase::FaultMemManage) == 25);
 static_assert(static_cast<int>(WatchdogMainLoopPhase::FaultBus) == 26);
 static_assert(static_cast<int>(WatchdogMainLoopPhase::FaultUsage) == 27);
 
-// --- transfer path breadcrumbs -------------------------------------------------------
-// These sit on a hot path (every audio packet also lands here), so they only stamp. The
-// last one entered before a reset is the one that did not return.
-
-bool __real_usbd_edpt_claim(uint8_t rhport, uint8_t ep_addr);
-bool __real_usbd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16_t total_bytes);
-bool __real_dcd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16_t total_bytes);
-
-bool __wrap_usbd_edpt_claim(uint8_t rhport, uint8_t ep_addr) {
-    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::SendClaim);
-    return __real_usbd_edpt_claim(rhport, ep_addr);
-}
-
-bool __wrap_usbd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16_t total_bytes) {
-    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::SendXfer);
-    return __real_usbd_edpt_xfer(rhport, ep_addr, buffer, total_bytes);
-}
-
-bool __wrap_dcd_edpt_xfer(uint8_t rhport, uint8_t ep_addr, uint8_t *buffer, uint16_t total_bytes) {
-    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::SendDcdXfer);
-    return __real_dcd_edpt_xfer(rhport, ep_addr, buffer, total_bytes);
-}
+// The transfer-path breadcrumbs that used to live here (SendClaim / SendXfer / SendDcdXfer,
+// wrapping usbd_edpt_claim, usbd_edpt_xfer and dcd_edpt_xfer) were removed in firmware 1.6.67.
+// They answered their question -- the reconnect crash was in the claim, not the hardware layer --
+// and they were the only piece of this file on a hot path: usbd_edpt_xfer runs for every HID
+// report and every audio packet, and each stamp cost a 64-bit division plus a CRC over six words.
+// The fault vectors above cost nothing until something faults, which is why they stay.
 
 } // extern "C"
