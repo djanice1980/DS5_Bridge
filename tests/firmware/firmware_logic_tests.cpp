@@ -850,6 +850,34 @@ void haptics_test_signal_allows_carrier_paced_packets_without_wall_clock_gap() {
     EXPECT_TRUE(haptics_test_signal_packet_due(last_packet_us + 1, 0, interval_us, false));
 }
 
+/**
+ * The controller reports a battery BUCKET, not a percentage, and the difference used to show.
+ *
+ * Reading level b as b*10 reports the bottom of the range every time, so a pad anywhere between
+ * 90% and full displayed 90 and never moved until it dropped a whole bucket. The midpoint is the
+ * better estimate of an unknown value in a known range and is never more than 5 out; the floor is
+ * up to 10 out and always low.
+ */
+void dualsense_decoder_reports_the_middle_of_the_battery_bucket() {
+    auto decode_battery = [](uint8_t power_byte) {
+        auto report = sample_dualsense_input_report();
+        report[52] = power_byte;
+        BridgeControllerState state{};
+        EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+        return state.battery_percent;
+    };
+
+    EXPECT_EQ(decode_battery(0x00), 5);   // 0-10% -> 5
+    EXPECT_EQ(decode_battery(0x05), 55);
+    EXPECT_EQ(decode_battery(0x09), 95);  // the band that used to read a permanent 90
+    EXPECT_EQ(decode_battery(0x0a), 100); // full is full, not "100-110%"
+
+    // Power state no longer overrides the measurement. A charge that has completed reports level
+    // 10 on its own; forcing 100 from the state byte hid a level that disagreed with it.
+    EXPECT_EQ(decode_battery(0x23), 35);
+    EXPECT_EQ(decode_battery(0x2a), 100);
+}
+
 void dualsense_decoder_extracts_normalized_controller_state() {
     const auto report = sample_dualsense_input_report();
     BridgeControllerState state{};
@@ -874,7 +902,8 @@ void dualsense_decoder_extracts_normalized_controller_state() {
     EXPECT_TRUE(state.home);
     EXPECT_TRUE(state.touchpad);
     EXPECT_TRUE(state.edge_left_paddle);
-    EXPECT_EQ(state.battery_percent, 70);
+    // Bucket 7 covers 70-80%, and the midpoint is the estimate. See the battery test below.
+    EXPECT_EQ(state.battery_percent, 75);
     EXPECT_TRUE(state.headset_plugged);
     EXPECT_TRUE(state.microphone_muted);
     EXPECT_TRUE(state.motion_valid);
@@ -1168,6 +1197,7 @@ std::vector<TestCase> tests{
     {"haptics test signal drives left and right actuators opposite phase", haptics_test_signal_drives_left_and_right_actuators_opposite_phase},
     {"haptics test signal allows carrier paced packets without wall clock gap", haptics_test_signal_allows_carrier_paced_packets_without_wall_clock_gap},
     {"dualsense decoder extracts normalized controller state", dualsense_decoder_extracts_normalized_controller_state},
+    {"dualsense decoder reports the middle of the battery bucket", dualsense_decoder_reports_the_middle_of_the_battery_bucket},
     {"dualsense persona preserves native report bytes", dualsense_persona_preserves_native_report_bytes},
     {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},
     {"xusb360 rumble decodes to ds5 classic rumble payload", xusb360_rumble_decodes_to_ds5_classic_rumble_payload},

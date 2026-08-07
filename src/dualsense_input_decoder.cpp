@@ -108,10 +108,18 @@ bool dualsense_decode_usb_input_report(
 
     const uint8_t battery = report[52] & 0x0f;
     next.raw_power_state = static_cast<uint8_t>((report[52] >> 4) & 0x0f);
-    if (next.raw_power_state == 0x02) {
-        next.battery_percent = 100;
-    } else if (battery <= 10) {
-        next.battery_percent = static_cast<uint8_t>(battery * 10);
+    // The controller reports a BUCKET, not a percentage: level b covers [b*10, b*10+10). Taking
+    // b*10 reports the bottom of the bucket every time, so a pad anywhere in 90-100% displayed
+    // 90%. The midpoint is the better estimate of an unknown value inside a known range, and is
+    // never worse than 5% out; the floor is up to 10% out and always in the same direction.
+    //
+    // The full bucket is the exception: 10 means full, not "100-110%".
+    //
+    // Power state no longer forces 100%. It said "charging complete", but a complete charge also
+    // reports level 10 and gets there on its own, while the special case fired even when the
+    // level disagreed -- overriding the measurement with an assumption about it.
+    if (battery <= 10) {
+        next.battery_percent = static_cast<uint8_t>(battery == 10 ? 100 : battery * 10 + 5);
     }
 
     next.headset_plugged = (report[53] & 0x01) != 0;
