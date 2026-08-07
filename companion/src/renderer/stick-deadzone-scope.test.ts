@@ -8,16 +8,26 @@ import {
   type StickDrift
 } from './StickDeadzoneScope';
 
-/** Convenience: a stick position that many counts from centre on the X axis. */
-function atX(counts: number): [number, number] {
-  return [128 + counts, 128];
+const DOMAIN = 0.15;
+
+/** Push the stick right out, which is the gesture that arms a measurement. */
+function push(drift: StickDrift): void {
+  recordDrift(drift, 128 + 120, 128, DOMAIN);
 }
 
-/** Hold a stick still long enough for it to count as at rest. */
-function rest(drift: StickDrift, counts: number, domain = 0.15): void {
-  for (let sample = 0; sample < 12; sample += 1) {
-    recordDrift(drift, 128 + counts, 128, domain);
+/** Hold the stick at a fixed offset for a number of polls. */
+function hold(drift: StickDrift, counts: number, samples: number): void {
+  for (let sample = 0; sample < samples; sample += 1) {
+    recordDrift(drift, 128 + counts, 128, DOMAIN);
   }
+}
+
+/** Push out, release, and let it sit until the reading freezes. */
+function measureAt(counts: number): StickDrift {
+  const drift = createDrift();
+  push(drift);
+  hold(drift, counts, 70);
+  return drift;
 }
 
 describe('scopeDomain', () => {
@@ -27,14 +37,11 @@ describe('scopeDomain', () => {
 
   it('keeps the deadzone disc inside the rim as it grows', () => {
     for (let percent = 0; percent <= 50; percent += 1) {
-      const domain = scopeDomain(percent);
-      expect(percent / 100).toBeLessThanOrEqual(domain);
+      expect(percent / 100).toBeLessThanOrEqual(scopeDomain(percent));
     }
   });
 
   it('snaps between a few sizes rather than rescaling continuously', () => {
-    // Dragging the slider must not resize the view on every step, or the drift being judged
-    // changes size under the user.
     const sizes = new Set<number>();
     for (let percent = 0; percent <= 50; percent += 1) {
       sizes.add(scopeDomain(percent));
@@ -44,74 +51,100 @@ describe('scopeDomain', () => {
 });
 
 describe('recordDrift', () => {
-  it('counts nothing until the stick has been still for a while', () => {
+  it('measures nothing until the stick has been pushed out', () => {
     const drift = createDrift();
-    recordDrift(drift, ...atX(4), 0.15);
-    expect(drift.settled).toBe(false);
+    hold(drift, 4, 70);
+    expect(drift.phase).toBe('idle');
     expect(drift.peak).toBe(0);
   });
 
-  it('keeps the furthest resting excursion, not the latest', () => {
-    const drift = createDrift();
-    rest(drift, 4);
-    rest(drift, 1);
+  it('measures where the stick came to rest after a release', () => {
+    const drift = measureAt(4);
+    expect(drift.phase).toBe('done');
     expect(drift.peak).toBeCloseTo(4 / 127, 5);
   });
 
-  it('ignores a stick being swept back to centre', () => {
-    // The case that broke on real hardware: sweeping a healthy stick and letting it snap back
-    // walked it through the whole view, and every position on the way counted as drift.
+  it('ignores the return journey itself', () => {
+    // The first hardware failure: a swept stick measured every position it passed through.
     const drift = createDrift();
-    for (let counts = 18; counts >= 0; counts -= 1) {
-      recordDrift(drift, ...atX(counts), 0.15);
+    push(drift);
+    for (let counts = 40; counts >= 3; counts -= 1) {
+      recordDrift(drift, 128 + counts, 128, DOMAIN);
     }
-    expect(drift.peak).toBe(0);
+    hold(drift, 3, 70);
+    expect(drift.peak).toBeCloseTo(3 / 127, 5);
   });
 
-  it('measures the stick once it settles after that sweep', () => {
-    const drift = createDrift();
-    for (let counts = 18; counts >= 2; counts -= 1) {
-      recordDrift(drift, ...atX(counts), 0.15);
+  it('cannot be thrown off by moving the stick slowly afterwards', () => {
+    // The second hardware failure: slow movement is locally identical to rest, so no stillness
+    // test can reject it. A frozen reading does not care.
+    const drift = measureAt(3);
+    expect(drift.peak).toBeCloseTo(3 / 127, 5);
+    for (let step = 0; step < 60; step += 1) {
+      recordDrift(drift, 128 + 3 + Math.floor(step / 4), 128, DOMAIN);
     }
-    rest(drift, 2);
-    expect(drift.settled).toBe(true);
+    expect(drift.phase).toBe('done');
+    expect(drift.peak).toBeCloseTo(3 / 127, 5);
+  });
+
+  it('discards the previous reading when the stick is pushed out again', () => {
+    const drift = measureAt(9);
+    expect(drift.peak).toBeCloseTo(9 / 127, 5);
+    push(drift);
+    expect(drift.peak).toBe(0);
+    expect(drift.phase).toBe('returning');
+    hold(drift, 2, 70);
     expect(drift.peak).toBeCloseTo(2 / 127, 5);
   });
 
-  it('still counts a stick that rests off-centre, which is the case worth catching', () => {
+  it('waits out the bounce before it starts counting', () => {
     const drift = createDrift();
-    rest(drift, 9);
-    expect(drift.peak).toBeCloseTo(9 / 127, 5);
+    push(drift);
+    // Overshoot back and forth across centre, as a released stick does.
+    for (const counts of [-14, 10, -7, 5, -3, 2, -1]) {
+      recordDrift(drift, 128 + counts, 128, DOMAIN);
+    }
+    expect(drift.phase).toBe('returning');
+    hold(drift, 1, 70);
+    expect(drift.peak).toBeCloseTo(1 / 127, 5);
+  });
+
+  it('still catches a stick that rests off centre, which is the case worth finding', () => {
+    expect(measureAt(9).peak).toBeCloseTo(9 / 127, 5);
   });
 
   it('counts a jittering stick, since jitter is not the same as being moved', () => {
     const drift = createDrift();
-    for (let sample = 0; sample < 40; sample += 1) {
-      recordDrift(drift, 128 + (sample % 2 === 0 ? 3 : -3), 128, 0.15);
+    push(drift);
+    for (let sample = 0; sample < 90; sample += 1) {
+      recordDrift(drift, 128 + (sample % 2 === 0 ? 3 : -3), 128, DOMAIN);
     }
     expect(drift.peak).toBeCloseTo(3 / 127, 5);
   });
 
-  it('ignores a stick held past the view', () => {
+  it('does not count a thumb resting on the stick out past the view', () => {
     const drift = createDrift();
-    rest(drift, 127);
+    push(drift);
+    hold(drift, 25, 70);
     expect(drift.peak).toBe(0);
+    expect(drift.phase).toBe('returning');
   });
 
   it('measures distance from centre in both axes together', () => {
     const drift = createDrift();
-    for (let sample = 0; sample < 12; sample += 1) {
-      recordDrift(drift, 128 + 3, 128 + 4, 0.15);
+    push(drift);
+    for (let sample = 0; sample < 70; sample += 1) {
+      recordDrift(drift, 128 + 3, 128 + 4, DOMAIN);
     }
     expect(drift.peak).toBeCloseTo(5 / 127, 5);
   });
 
   it('forgets everything on reset', () => {
-    const drift = createDrift();
-    rest(drift, 6);
+    const drift = measureAt(6);
     resetDrift(drift);
     expect(drift.peak).toBe(0);
-    expect(drift.settled).toBe(false);
+    expect(drift.phase).toBe('idle');
+    expect(drift.armed).toBe(false);
   });
 });
 
@@ -122,8 +155,7 @@ describe('suggestedDeadzonePercent', () => {
 
   it('clears the worst bounce seen rather than landing on it', () => {
     const peak = 0.032;
-    const suggestion = suggestedDeadzonePercent(peak);
-    expect(suggestion).toBeGreaterThan(peak * 100);
+    expect(suggestedDeadzonePercent(peak)).toBeGreaterThan(peak * 100);
   });
 
   it('never exceeds the slider, so the suggestion is always settable', () => {

@@ -70,11 +70,20 @@
 
 .dzscope-state {
   font-size: 11px;
+  color: var(--text-muted, #8fa3bb);
+}
+
+.dzscope-state.is-returning {
   color: #f97316;
 }
 
-.dzscope-state.is-settled {
+.dzscope-state.is-measuring,
+.dzscope-state.is-done {
   color: #4ade80;
+}
+
+.dzscope-state.is-done {
+  font-weight: 600;
 }
 
 .dzscope-view {

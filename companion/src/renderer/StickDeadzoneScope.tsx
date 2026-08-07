@@ -52,47 +52,88 @@ const STILL_SPREAD = 8 / 127;
  */
 const STILL_TREND = 2 / 127;
 
+/**
+ * How far out the stick must go to arm a measurement, as a fraction of full travel.
+ *
+ * Deliberately far past anything drift could reach, so pushing it out is unambiguously a gesture
+ * and not something a resting stick can do by accident.
+ */
+const ARM_TRAVEL = 0.4;
+
+/** Samples measured after a release before the reading freezes, at the 40ms poll -- about 2s. */
+const MEASURE_SAMPLES = 50;
+
+export type DriftPhase = 'idle' | 'returning' | 'measuring' | 'done';
+
+export const DRIFT_PHASE_LABEL: Record<DriftPhase, string> = {
+  idle: 'push it out and let go',
+  returning: 'waiting for it to settle',
+  measuring: 'measuring',
+  done: 'done'
+};
+
 export interface StickDrift {
-  /** Furthest from centre the stick has RESTED, 0..1 of full travel. */
+  /** Furthest from centre the stick rested during the LAST measurement, 0..1 of full travel. */
   peak: number;
-  /** Whether the stick is currently sitting still, so the UI can say why nothing is counting. */
-  settled: boolean;
+  phase: DriftPhase;
+  /** Set by pushing the stick out; cleared when a measurement finishes. */
+  armed: boolean;
+  measured: number;
   recent: Array<{ x: number; y: number }>;
 }
 
 export function createDrift(): StickDrift {
-  return { peak: 0, settled: false, recent: [] };
+  return { peak: 0, phase: 'idle', armed: false, measured: 0, recent: [] };
 }
 
 export function resetDrift(drift: StickDrift): void {
   drift.peak = 0;
-  drift.settled = false;
+  drift.phase = 'idle';
+  drift.armed = false;
+  drift.measured = 0;
   drift.recent = [];
 }
 
 /**
- * Fold one sample into the peak, but only while the stick is AT REST. Mutates, because this runs
- * at the input poll rate.
+ * Advance the measurement for one sample. Mutates, because this runs at the input poll rate.
  *
- * Measuring every sample measured the wrong thing: moving a stick and letting it snap back walks
- * it through the whole view, and each of those positions counted as drift, so a healthy pad
- * reported a peak the size of the view. Drift is where a stick SITS when nobody is touching it,
- * so the stick has to be still before anything counts.
+ * Measuring continuously cannot work, and two rounds of it on real hardware showed why. Every
+ * sample counted meant a stick swept and released measured its own return journey. Gating on
+ * stillness fixed that case and not the general one: slow movement is LOCALLY IDENTICAL to rest,
+ * so a stick eased outward a third of a count per sample reads as sitting still no matter how the
+ * window is tuned, and it inflated the reading again.
  *
- * Samples beyond the view are ignored on top of that, for a thumb resting on a pushed stick: that
- * is a held position, not a resting one, and counting it would drive the suggestion toward a
- * deadzone the size of the whole travel. The UI states both rules, so neither is a silent one.
+ * So this stops inferring intent from the signal and takes it from the gesture instead. Push a
+ * stick out past ARM_TRAVEL and the previous reading is discarded; let go, and once it has
+ * settled it is measured for a fixed window and the result freezes. Nothing before the push and
+ * nothing after the window can affect it, which is what makes a slow hand harmless: creeping the
+ * stick outward afterwards cannot touch a finished reading, and creeping it out far enough to
+ * matter re-arms and starts over.
  */
 export function recordDrift(drift: StickDrift, xByte: number, yByte: number, domain: number): void {
   const x = (xByte - 128) / 127;
   const y = (yByte - 128) / 127;
+  const magnitude = Math.hypot(x, y);
+
+  // A deliberate push throws away whatever was measured before and starts a fresh attempt.
+  if (magnitude > ARM_TRAVEL) {
+    drift.peak = 0;
+    drift.phase = 'returning';
+    drift.armed = true;
+    drift.measured = 0;
+    drift.recent = [];
+    return;
+  }
+
+  if (!drift.armed) {
+    return;
+  }
 
   drift.recent.push({ x, y });
   if (drift.recent.length > STILL_WINDOW) {
     drift.recent.shift();
   }
   if (drift.recent.length < STILL_WINDOW) {
-    drift.settled = false;
     return;
   }
 
@@ -109,17 +150,21 @@ export function recordDrift(drift: StickDrift, xByte: number, yByte: number, dom
   const second = mean(drift.recent.slice(half));
   const trend = Math.hypot(second.x - first.x, second.y - first.y);
 
-  drift.settled = spread <= STILL_SPREAD && trend <= STILL_TREND;
-  if (!drift.settled) {
+  // Still waiting out the bounce as it snaps back, or a thumb is still resting on it out past
+  // the view. Either way it is not yet sitting where it will end up.
+  if (spread > STILL_SPREAD || trend > STILL_TREND || magnitude > domain) {
+    drift.phase = 'returning';
     return;
   }
 
-  const magnitude = Math.hypot(x, y);
-  if (magnitude > domain) {
-    return;
-  }
+  drift.phase = 'measuring';
   if (magnitude > drift.peak) {
     drift.peak = magnitude;
+  }
+  drift.measured += 1;
+  if (drift.measured >= MEASURE_SAMPLES) {
+    drift.phase = 'done';
+    drift.armed = false;
   }
 }
 
@@ -138,14 +183,14 @@ export function StickDeadzoneScope({
   y,
   deadzonePercent,
   peak,
-  settled
+  phase
 }: {
   label: string;
   x: number;
   y: number;
   deadzonePercent: number;
   peak: number;
-  settled: boolean;
+  phase: DriftPhase;
 }) {
   const domain = scopeDomain(deadzonePercent);
   const nx = (x - 128) / 127;
@@ -193,11 +238,11 @@ export function StickDeadzoneScope({
       </svg>
       <div className="dzscope-readout">
         <span className="dzscope-label">{label}</span>
-        <span className="tester-mono">peak {(peak * 100).toFixed(1)}%</span>
-        {/* Says WHY nothing is accumulating, so a moving stick does not look like a broken one. */}
-        <span className={`dzscope-state${settled ? ' is-settled' : ''}`}>
-          {settled ? 'measuring' : 'moving — not counting'}
+        <span className="tester-mono">
+          {phase === 'idle' ? 'peak --' : `peak ${(peak * 100).toFixed(1)}%`}
         </span>
+        {/* Names the step, so a reading that is not moving is never mistaken for a finished one. */}
+        <span className={`dzscope-state is-${phase}`}>{DRIFT_PHASE_LABEL[phase]}</span>
         <span className="dzscope-view">view &plusmn;{Math.round(domain * 100)}%</span>
       </div>
     </div>

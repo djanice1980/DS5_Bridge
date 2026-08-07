@@ -221,8 +221,11 @@ html {
   align-items: center;
 }
 
+/* Top of the card, level with the drawing's own top, rather than floating in the middle of a
+   column as tall as the controller. */
 .tester-controller-facts {
-  align-content: center;
+  align-self: start;
+  margin-top: 6px;
 }
 
 /* Below this the two columns crowd each other, so stack instead. */

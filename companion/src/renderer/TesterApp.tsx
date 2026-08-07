@@ -555,12 +555,11 @@ export function TesterApp() {
             <>
               <p className="tester-subtle">
                 Deadzone is off while you tune, so the sticks read exactly what they really do.
-                Sweep them around and let them snap back &mdash; nothing counts until a stick is
-                sitting still, because drift is where a stick RESTS, not where it passes through.
-                The ring is the furthest either has settled, and the shaded disc is the deadzone
-                you are about to set. Raise it until the ring sits inside the disc and turns green.
-                The view is zoomed &mdash; a stick held past it pins at the rim in orange and is
-                not counted either.
+                Push a stick right out and let go: that throws away its last reading, and once it
+                has settled back it is measured for about two seconds and the result freezes.
+                Nothing you do afterwards can change it &mdash; push it out again to re-measure.
+                The ring is where it came to rest, and the shaded disc is the deadzone you are
+                about to set. Raise it until the ring sits inside the disc and turns green.
               </p>
               <div className="tester-dzscopes" data-tick={driftTick}>
                 <StickDeadzoneScope
@@ -569,7 +568,7 @@ export function TesterApp() {
                   y={state?.leftStickY ?? 128}
                   deadzonePercent={dzPreview.left}
                   peak={driftLeft.current.peak}
-                  settled={driftLeft.current.settled}
+                  phase={driftLeft.current.phase}
                 />
                 <StickDeadzoneScope
                   label="Right"
@@ -577,7 +576,7 @@ export function TesterApp() {
                   y={state?.rightStickY ?? 128}
                   deadzonePercent={dzPreview.right}
                   peak={driftRight.current.peak}
-                  settled={driftRight.current.settled}
+                  phase={driftRight.current.phase}
                 />
               </div>
               <div className="tester-deadzone">
@@ -616,6 +615,9 @@ export function TesterApp() {
                 <button
                   type="button"
                   className="secondary"
+                  // Nothing measured yet means a suggestion of 0%, which would read as an answer
+                  // rather than as the absence of one.
+                  disabled={driftLeft.current.phase === 'idle' || driftRight.current.phase === 'idle'}
                   onClick={() => setDzPreview({
                     left: suggestedDeadzonePercent(driftLeft.current.peak),
                     right: suggestedDeadzonePercent(driftRight.current.peak)
