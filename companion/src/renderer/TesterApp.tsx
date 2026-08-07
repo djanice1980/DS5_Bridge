@@ -53,6 +53,14 @@ export function TesterApp() {
   const [accelZero, setAccelZero] = useState<AccelZero | null>(null);
   const [accelZeroIsAutomatic, setAccelZeroIsAutomatic] = useState(false);
   const accelRestSamples = useRef<Array<{ x: number; y: number; z: number }>>([]);
+  /**
+   * The auto-zero fires at most ONCE, and never again after the user has had a say.
+   *
+   * Clearing the sample buffer alone does not stop it: the buffer refills in eight samples, about
+   * a third of a second, and it re-captures. Show absolute therefore flipped straight back and
+   * the button could not be clicked.
+   */
+  const [autoZeroAllowed, setAutoZeroAllowed] = useState(true);
   const [calibrationBusy, setCalibrationBusy] = useState(false);
   const [calibrationStep, setCalibrationStep] = useState<string | null>(null);
   const [calibrationStatus, setCalibrationStatus] = useState<CalibrationStatus | null>(null);
@@ -338,7 +346,7 @@ export function TesterApp() {
    * window opens does not get its tilt baked in as the origin.
    */
   useEffect(() => {
-    if (!state || accelZero !== null) {
+    if (!state || accelZero !== null || !autoZeroAllowed) {
       return;
     }
     const samples = accelRestSamples.current;
@@ -364,7 +372,8 @@ export function TesterApp() {
       Math.round(samples.reduce((total, sample) => total + pick(sample), 0) / samples.length);
     setAccelZero({ x: mean((v) => v.x), y: mean((v) => v.y), z: mean((v) => v.z) });
     setAccelZeroIsAutomatic(true);
-  }, [state, accelZero]);
+    setAutoZeroAllowed(false);
+  }, [state, accelZero, autoZeroAllowed]);
 
   const bridges = snapshot?.bridgeDevices?.bridges ?? [];
 
@@ -498,7 +507,8 @@ export function TesterApp() {
               onClearZero={() => {
                 setAccelZero(null);
                 setAccelZeroIsAutomatic(false);
-                // Do not immediately re-capture: Clear means "show me absolute".
+                // Show absolute MEANS absolute: stop the auto-zero re-arming behind the user.
+                setAutoZeroAllowed(false);
                 accelRestSamples.current = [];
               }}
             />
