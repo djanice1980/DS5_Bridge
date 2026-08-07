@@ -141,6 +141,15 @@
 #define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
 #define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
+// Deadlines for the span AFTER hci_disconnect goes out. Without these the phase could sit at
+// Disconnecting forever with a live handle and no watchdog -- every other recovery path escalates
+// to bt_disconnect(), so a disconnect that never completes had nothing left to escalate to.
+#define DISCONNECT_RETRY_TIMEOUT_US 2000000u
+// Comfortably past the link supervision timeout (~20s), because a controller switched off or
+// carried out of range produces DISCONNECTION_COMPLETE from the chip itself only after it lapses.
+// Give up sooner and this would fire during a perfectly normal disconnect and tear down state
+// while a real completion was still in flight -- manufacturing the stale handle it exists to avoid.
+#define DISCONNECT_GIVE_UP_TIMEOUT_US 30000000u
 
 #define HCI_SEND_CMD_LOGGED(cmd, ...) do { \
     const uint8_t err = hci_send_cmd((cmd), ##__VA_ARGS__); \
@@ -304,6 +313,7 @@ static BtConnectionPhase connection_phase = BtConnectionPhase::Listening;
 // phase happened to change (see the ACL-connected branch). This is the clock the security
 // watchdog runs on.
 static uint32_t connection_phase_started_us = 0;
+static bool disconnect_retry_sent = false;
 // Bumped per connection attempt so a late async event from a previous connection is
 // distinguishable even if BTstack reuses the handle value.
 static uint32_t connection_generation = 0;
@@ -471,6 +481,9 @@ static void note_connection_phase(BtConnectionPhase next) {
     }
     connection_phase = next;
     connection_phase_started_us = time_us_32();
+    // Only meaningful while Disconnecting, and cleared on every transition so it can never carry
+    // over from a previous episode and suppress the one retry the next one is entitled to.
+    disconnect_retry_sent = false;
 }
 
 // Connecting begins as soon as device_found or acl_connection_pending is set with no ACL
@@ -1426,6 +1439,63 @@ static void cancel_hid_channel_recovery_if_ready() {
     }
 }
 
+/**
+ * Everything DISCONNECTION_COMPLETE does to get back to a clean listening state.
+ *
+ * Extracted so the stall path can reach the SAME state rather than a hand-copied approximation of
+ * it. A second copy would drift the moment either one gained a line, and duplicated state in this
+ * file has been the cause of more than one bug already.
+ */
+static void finish_controller_disconnect(uint8_t reason) {
+    const bool host_suspended = usb_host_suspended_active();
+    usb_handle_controller_transport_disconnect();
+    reset_controller_input_report_cache();
+    gap_connectable_control(1);
+    gap_discoverable_control(0); // Stay reconnectable; new pairing needs a button-armed window.
+    clear_outbound_inquiry_target();
+    clear_acl_connection_pending();
+    clear_security_watchdogs();
+    note_connection_phase(BtConnectionPhase::Listening);
+    inquiry_active = false;
+    acl_handle = HCI_CON_HANDLE_INVALID;
+    bt_rssi = 0;
+    bt_rssi_known = false;
+    bt_rssi_request_pending = false;
+    bt_rssi_last_request_us = 0;
+    hid_control_cid = 0;
+    hid_interrupt_cid = 0;
+    hid_control_ready = false;
+    hid_interrupt_ready = false;
+    audio_handle_controller_disconnect();
+    feature_data.clear();
+    controller_type = ControllerTypeUnknown;
+    controller_type_check_pending = false;
+    hid_channel_recovery_pending = false;
+    hid_channel_recovery_attempts = 0;
+    critical_section_enter_blocking(&queue_lock);
+    reset_controller_output_session_locked();
+    critical_section_exit(&queue_lock);
+    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+    if (host_suspended) {
+        DS5_LOG("[HCI] Disconnected reason=0x%02X while USB host suspended; keeping USB on bus\n", reason);
+        return;
+    }
+    // Recover in place rather than restarting. The reboot here was inherited from the base commit
+    // that fixed the headset audio route (61de6c3, 2026-05-16) and predates the explicit route
+    // reset that now runs on every disconnect: audio_handle_controller_disconnect() clears
+    // plug_headset / speaker_route_active / speaker_route_headset,
+    // reset_controller_output_session_locked() clears speaker_output_headset_route, and
+    // bt_rearm_speaker_output_route() re-establishes the route when audio next flows. Everything
+    // else the reboot used to guarantee is reset explicitly above: USB transport, HID channels and
+    // cids, output queues, feature cache, controller type, security watchdogs and RSSI state. Page
+    // scan was re-enabled above, so a bonded controller can page straight back in. Upstream dropped
+    // the same reboot once its teardown became explicit.
+    if (pairing_window_active(time_us_32())) {
+        schedule_inquiry_retry(0); // Window still open; resume discovery for it.
+    }
+    DS5_LOG("[HCI] Disconnected reason=0x%02X, staying alive for reconnect\n", reason);
+}
+
 void bt_connection_recovery_loop() {
     const uint32_t recovery_now = time_us_32();
 
@@ -1471,6 +1541,51 @@ void bt_connection_recovery_loop() {
         DS5_LOG("[HCI] Security phase timed out; recycling the ACL (pairing preserved)\n");
         clear_security_watchdogs();
         bt_disconnect();
+        return;
+    }
+
+    /**
+     * hci_disconnect went out and DISCONNECTION_COMPLETE never came back.
+     *
+     * Every other recovery path here escalates by calling bt_disconnect(), so this phase was the
+     * one with nothing left to escalate to: it would sit at Disconnecting with a live handle and
+     * no watchdog until the user power-cycled the bridge.
+     *
+     * Two rungs, because the two causes want different answers. A command that was simply dropped
+     * is fixed by sending it again; a chip or peer that has stopped answering is not, and only
+     * giving up locally gets the stack usable. The retry is free -- a duplicate disconnect for a
+     * handle already going down errors harmlessly, and completions for handles we no longer own
+     * are ignored by connection_handle_is_current().
+     *
+     * Both are clocked from connection_phase_started_us, which note_connection_phase() stamps only
+     * on a real transition -- so bt_disconnect() being called again mid-episode cannot reset the
+     * deadline and stretch it indefinitely.
+     */
+    if (
+        connection_phase == BtConnectionPhase::Disconnecting
+        && acl_handle != HCI_CON_HANDLE_INVALID
+        && !disconnect_retry_sent
+        && static_cast<uint32_t>(recovery_now - connection_phase_started_us)
+            >= DISCONNECT_RETRY_TIMEOUT_US
+    ) {
+        disconnect_retry_sent = true;
+        bt_note_pairing_event(13, 1);
+        DS5_LOG("[HCI] Disconnect not acknowledged; re-sending on handle=0x%04X\n", acl_handle);
+        bt_disconnect();
+        return;
+    }
+
+    if (
+        connection_phase == BtConnectionPhase::Disconnecting
+        && acl_handle != HCI_CON_HANDLE_INVALID
+        && static_cast<uint32_t>(recovery_now - connection_phase_started_us)
+            >= DISCONNECT_GIVE_UP_TIMEOUT_US
+    ) {
+        // Breadcrumb 13/2 is the whole point of this rung being observable: the hole it closes is
+        // theoretical, and this is how we find out it was ever real.
+        bt_note_pairing_event(13, 2);
+        DS5_LOG("[HCI] Disconnect never completed on handle=0x%04X; tearing down locally\n", acl_handle);
+        finish_controller_disconnect(0x16); // 0x16 = connection terminated by local host
         return;
     }
 
@@ -2631,56 +2746,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                        disconnected_handle, acl_handle);
                 break;
             }
-            const bool host_suspended = usb_host_suspended_active();
-            usb_handle_controller_transport_disconnect();
-            reset_controller_input_report_cache();
-            gap_connectable_control(1);
-            gap_discoverable_control(0); // Stay reconnectable; new pairing needs a button-armed window.
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
             bt_note_pairing_event(9, reason);
-            clear_outbound_inquiry_target();
-            clear_acl_connection_pending();
-            clear_security_watchdogs();
-            note_connection_phase(BtConnectionPhase::Listening);
-            inquiry_active = false;
-            acl_handle = HCI_CON_HANDLE_INVALID;
-            bt_rssi = 0;
-            bt_rssi_known = false;
-            bt_rssi_request_pending = false;
-            bt_rssi_last_request_us = 0;
-            hid_control_cid = 0;
-            hid_interrupt_cid = 0;
-            hid_control_ready = false;
-            hid_interrupt_ready = false;
-            audio_handle_controller_disconnect();
-            feature_data.clear();
-            controller_type = ControllerTypeUnknown;
-            controller_type_check_pending = false;
-            hid_channel_recovery_pending = false;
-            hid_channel_recovery_attempts = 0;
-            critical_section_enter_blocking(&queue_lock);
-            reset_controller_output_session_locked();
-            critical_section_exit(&queue_lock);
-            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
-            if (host_suspended) {
-                DS5_LOG("[HCI] Disconnected reason=0x%02X while USB host suspended; keeping USB on bus\n", reason);
-                break;
-            }
-            // Recover in place rather than restarting. The reboot here was inherited from the
-            // base commit that fixed the headset audio route (61de6c3, 2026-05-16) and predates
-            // the explicit route reset that now runs on every disconnect:
-            // audio_handle_controller_disconnect() clears plug_headset / speaker_route_active /
-            // speaker_route_headset, reset_controller_output_session_locked() clears
-            // speaker_output_headset_route, and bt_rearm_speaker_output_route() re-establishes the
-            // route when audio next flows. Everything else the reboot used to guarantee is reset
-            // explicitly above: USB transport, HID channels and cids, output queues, feature cache,
-            // controller type, security watchdogs and RSSI state. Page scan was re-enabled at the
-            // top of this handler, so a bonded controller can page straight back in. Upstream
-            // dropped the same reboot once its teardown became explicit.
-            if (pairing_window_active(time_us_32())) {
-                schedule_inquiry_retry(0); // Window still open; resume discovery for it.
-            }
-            DS5_LOG("[HCI] Disconnected reason=0x%02X, staying alive for reconnect\n", reason);
+            finish_controller_disconnect(reason);
             break;
         }
 

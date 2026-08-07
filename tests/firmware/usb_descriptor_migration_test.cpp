@@ -543,10 +543,13 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
         throw std::runtime_error("BT disconnect handling must be able to query suspended USB host state");
     }
 
+    // The teardown lives in finish_controller_disconnect() rather than inside the case body, so
+    // the disconnect-stall watchdog can reach the SAME state instead of hand-copying it. These
+    // rules belong to the teardown wherever it lives, and checking it there covers BOTH callers.
     const std::string hci_disconnect = extract_between(
         bt_cpp,
-        "case HCI_EVENT_DISCONNECTION_COMPLETE: {",
-        "\n        }\n\n        case GAP_EVENT_RSSI_MEASUREMENT:"
+        "static void finish_controller_disconnect(uint8_t reason) {",
+        "\n}\n"
     );
     const auto suspended_query = hci_disconnect.find("usb_host_suspended_active()");
     if (
@@ -566,6 +569,23 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
     }
     if (hci_disconnect.find("staying alive for reconnect") == std::string::npos) {
         throw std::runtime_error("BT disconnect must stay on the bus and wait for the controller");
+    }
+
+    // ...and the event path must actually delegate to it, or every rule above is guarding a
+    // function that nothing on the normal disconnect path runs.
+    const std::string disconnect_case = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_DISCONNECTION_COMPLETE: {",
+        "\n        }\n\n        case GAP_EVENT_RSSI_MEASUREMENT:"
+    );
+    if (disconnect_case.find("finish_controller_disconnect(") == std::string::npos) {
+        throw std::runtime_error(
+            "DISCONNECTION_COMPLETE must run finish_controller_disconnect(), or the teardown "
+            "rules above guard a path it no longer takes"
+        );
+    }
+    if (disconnect_case.find("watchdog_reboot") != std::string::npos) {
+        throw std::runtime_error("BT disconnect must recover in place, not reboot the Pico");
     }
 }
 
@@ -887,6 +907,65 @@ void assert_security_watchdog_keys_on_the_phase(std::filesystem::path const &roo
     }
 }
 
+// hci_disconnect going out with no DISCONNECTION_COMPLETE coming back parked the phase at
+// Disconnecting with a live handle and no watchdog. Every other recovery path in the loop
+// escalates by calling bt_disconnect(), so this was the one phase with nothing left to escalate
+// to, and it stayed wedged until the bridge was power-cycled.
+//
+// The give-up deadline must also clear the link supervision timeout. A controller switched off or
+// carried out of range produces DISCONNECTION_COMPLETE from the chip itself only once supervision
+// lapses (~20s), so a shorter deadline would fire during an entirely ordinary disconnect and tear
+// down state with a real completion still in flight -- manufacturing the stale handle it exists to
+// prevent.
+void assert_disconnect_stall_has_a_watchdog(std::filesystem::path const &root) {
+    const auto bt_cpp = remove_comments(read_text(root / "src" / "bt.cpp"));
+
+    const std::string recovery = extract_between(
+        bt_cpp,
+        "void bt_connection_recovery_loop()",
+        "\n}\n"
+    );
+    if (recovery.find("connection_phase == BtConnectionPhase::Disconnecting") == std::string::npos) {
+        throw std::runtime_error(
+            "A disconnect that never completes must be bounded by the Disconnecting phase, or it "
+            "parks there with a live handle until the bridge is power-cycled"
+        );
+    }
+    if (recovery.find("finish_controller_disconnect(") == std::string::npos) {
+        throw std::runtime_error(
+            "The disconnect give-up must reuse finish_controller_disconnect(), not a second copy "
+            "of the teardown that will drift away from the real one"
+        );
+    }
+
+    // Extracting the teardown only helps if the event path uses it too.
+    const std::string handler = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_DISCONNECTION_COMPLETE",
+        "case GAP_EVENT_RSSI_MEASUREMENT"
+    );
+    if (handler.find("finish_controller_disconnect(") == std::string::npos) {
+        throw std::runtime_error(
+            "DISCONNECTION_COMPLETE must run the same finish_controller_disconnect() the stall "
+            "path runs, or the two teardowns drift apart"
+        );
+    }
+
+    const std::string marker = "#define DISCONNECT_GIVE_UP_TIMEOUT_US ";
+    const auto at = bt_cpp.find(marker);
+    if (at == std::string::npos) {
+        throw std::runtime_error("DISCONNECT_GIVE_UP_TIMEOUT_US is missing");
+    }
+    const unsigned long long give_up_us = std::stoull(bt_cpp.substr(at + marker.size()));
+    if (give_up_us < 20000000ull) {
+        throw std::runtime_error(
+            "DISCONNECT_GIVE_UP_TIMEOUT_US must clear the ~20s link supervision timeout, or the "
+            "give-up fires during a normal out-of-range disconnect and tears down state while a "
+            "real DISCONNECTION_COMPLETE is still in flight"
+        );
+    }
+}
+
 // bt_set_lightbar_color() overwrites saved_lightbar_*, so calling it with a literal colour on
 // connect does not just tint the controller -- it discards whatever the user configured, and
 // the scheduled restore then restores the literal. That is why a red lightbar came back blue
@@ -1069,6 +1148,7 @@ int main() {
         assert_vendor_control_gates_share_one_interface_predicate(source_root);
         assert_connection_target_state_moves_the_phase(source_root);
         assert_security_watchdog_keys_on_the_phase(source_root);
+        assert_disconnect_stall_has_a_watchdog(source_root);
         assert_raw_trigger_effect_goes_through_the_persistent_system(source_root);
         assert_connect_does_not_overwrite_the_saved_lightbar(source_root);
         assert_host_lightbar_reclaim_is_bounded(source_root);

@@ -104,6 +104,40 @@ each phase individually. That matters for interpretation: on earlier builds the 
 iteration shared one budget, so the reported phase was only where the clock happened to
 run out, not necessarily the phase that was slow.
 
+## Pairing breadcrumbs
+
+The **Pairing breadcrumbs** row in **System -> Diagnostics** is a ring of the last ten
+connection events, printed verbatim as `stage/status`. They are deliberately not translated
+into prose in the app -- the raw pair is what gets pasted into a bug report, and a wrong
+translation is worse than none.
+
+```text
+1/0    inquiry found the controller -> connecting
+2/0    inbound connection during the pairing window -> drop the stale key
+3/nn   connection complete, nn = HCI status
+4/0    link key requested, none stored -> fresh SSP pairing
+4/1    link key requested, stored key replied (an ordinary reconnect)
+4/2    stored key found during a re-pair -> dropped to force SSP
+5/0    SSP user confirmation -> auto-accepted
+6/0    legacy PIN requested -> replied 0000
+7/nn   authentication complete, nn = HCI status
+8/nn   encryption change, nn = HCI status (0xEE = succeeded but not enabled)
+9/nn   disconnection complete, nn = HCI reason
+10/nn  L2CAP HID channel opened, nn = status
+11/1   a link key drop missed, but the re-drop took
+11/2   the link key DB delete itself is broken
+11/3   the drop on the event's own address did not take
+13/1   hci_disconnect went unacknowledged for 2s -> re-sent
+13/2   it never completed at all for 30s -> torn down locally
+```
+
+`12/nn` appears only on firmware 1.6.59 and earlier: a retired phase-disagreement probe whose
+status byte packed two phase numbers as `(tracked << 4) | derived`, printed in decimal.
+
+**13/2 is the one worth reporting.** It means a disconnect never completed and the bridge
+recovered by giving up on it. The hole it covers is theoretical -- that breadcrumb exists so
+that if it ever stops being theoretical, there is evidence rather than a mystery wedge.
+
 ## Common Recipes
 
 Audio-only firmware and companion diagnostics:
