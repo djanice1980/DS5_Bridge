@@ -32,7 +32,7 @@ constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 64;
+constexpr uint8_t kFirmwarePatch = 65;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -165,6 +165,9 @@ enum CommandId : uint8_t {
     CommandHoldInputForwarding = 0x37,
     // Stick deadzone: low byte left percent, high byte right percent.
     CommandSetStickDeadzone = 0x38,
+    // Stick calibration: low byte op (1 begin, 2 store, 3 sample), high byte target
+    // (1 centre, 2 range). TEMPORARY -- nothing here unlocks the controller's NVS.
+    CommandStickCalibration = 0x39,
 };
 
 enum AckResult : uint8_t {
@@ -1863,6 +1866,27 @@ uint16_t build_controller_input(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+/**
+ * The controller's calibration status (0x83), verbatim.
+ *
+ * [6] = number of bytes that arrived, [7..] the payload. A length of zero means no reply has
+ * been seen yet -- which the app must NOT read as success, because the whole point of this
+ * report is to confirm the controller accepted a step.
+ */
+uint16_t build_calibration_status(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+    const uint8_t copied = bt_stick_calibration_status(buffer + 7, COMPANION_PAYLOAD_SIZE - 7);
+    buffer[6] = copied;
+    // Refresh for the next read, since the reply arrives asynchronously.
+    bt_request_stick_calibration_status();
+    return COMPANION_PAYLOAD_SIZE;
+}
+
 #if DS5_AUDIO_DEBUG_ENABLED
 uint16_t build_audio_debug(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
@@ -2310,6 +2334,30 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             stick_deadzone_left_percent = left;
             stick_deadzone_right_percent = right;
             settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
+
+        case CommandStickCalibration:
+            {
+            const uint8_t op = static_cast<uint8_t>(value & 0xff);
+            const uint8_t target = static_cast<uint8_t>((value >> 8) & 0xff);
+            // Only the three documented ops and two targets. An undocumented op is not a
+            // harmless no-op on a device that stores calibration data.
+            if (op < 1 || op > 3 || target < 1 || target > 2) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!bt_is_controller_connected()) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            if (!bt_send_stick_calibration(op, target)) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            // Ask for the status straight away; the app reads it from report 0x0C.
+            bt_request_stick_calibration_status();
             set_ack(command_id, sequence, AckOk);
             return;
             }
@@ -3485,6 +3533,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_shortcut_event(buffer, reqlen);
         case COMPANION_REPORT_CONTROLLER_INPUT:
             return build_controller_input(buffer, reqlen);
+        case COMPANION_REPORT_CALIBRATION_STATUS:
+            return build_calibration_status(buffer, reqlen);
 #if DS5_AUDIO_DEBUG_ENABLED
         case COMPANION_REPORT_AUDIO_DEBUG:
             return build_audio_debug(buffer, reqlen);

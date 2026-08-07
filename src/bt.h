@@ -146,6 +146,21 @@ bool bt_forget_pairings();
 // window still lets it back in -- that is the intended way to undo this.
 bool bt_forget_pairing(const uint8_t address[6]);
 void bt_connection_recovery_loop();
+/**
+ * Stick calibration, as reverse-engineered by dualshock-tools/ds4-tools.
+ *
+ * op: 1 = begin, 2 = store, 3 = sample. target: 1 = centre, 2 = range.
+ *
+ * TEMPORARY unless the controller's NVS has been unlocked first (feature report 0x80). Without
+ * that unlock the controller reverts on reset, which is what makes the sequence safe to drive
+ * and verify. The unlock is deliberately NOT implemented here.
+ */
+bool bt_send_stick_calibration(uint8_t op, uint8_t target);
+/** Ask for the calibration status report (0x83). The reply lands asynchronously. */
+void bt_request_stick_calibration_status();
+/** Latest cached 0x83 payload. Returns bytes copied; 0 when nothing has arrived yet. */
+uint8_t bt_stick_calibration_status(uint8_t *out, uint8_t capacity);
+
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
 void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len);

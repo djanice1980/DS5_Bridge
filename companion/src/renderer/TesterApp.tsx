@@ -4,6 +4,13 @@ import type { ControllerInputSnapshot, DualSenseInputState } from '../shared/dua
 import { ControllerDiagram, GyroDial, AccelVector, type AccelZero } from './ControllerDiagram';
 import { TriggerEffectEditor } from './TriggerEffectEditor';
 import {
+  CALIBRATION_CODE,
+  CALIBRATION_OP,
+  CALIBRATION_TARGET,
+  calibrationStepAccepted,
+  type CalibrationStatus
+} from '../shared/protocol';
+import {
   defaultTriggerEffect,
   type TriggerEffect
 } from '../shared/trigger-effects';
@@ -39,6 +46,11 @@ export function TesterApp() {
   // Deliberately not persisted: a zero captured in one session must not silently apply in the
   // next, where the controller is somewhere else entirely.
   const [accelZero, setAccelZero] = useState<AccelZero | null>(null);
+  const [calibrationBusy, setCalibrationBusy] = useState(false);
+  const [calibrationStep, setCalibrationStep] = useState<string | null>(null);
+  const [calibrationStatus, setCalibrationStatus] = useState<CalibrationStatus | null>(null);
+  const [calibrationError, setCalibrationError] = useState<string | null>(null);
+  const [calibrationAwaitingSweep, setCalibrationAwaitingSweep] = useState(false);
 
   const pollBusy = useRef(false);
 
@@ -121,6 +133,120 @@ export function TesterApp() {
       clearInterval(timer);
     };
   }, []);
+
+  /**
+   * Run one calibration step and CHECK the controller accepted it.
+   *
+   * Verified against the controller's own 0x83 reply rather than assumed. The expected code
+   * differs by step -- begin and sample answer OPEN, store answers COMMITTED -- so there is no
+   * single success value to test for.
+   */
+  const runStep = useCallback(async (
+    op: number,
+    target: number,
+    expectedCode: number
+  ): Promise<boolean> => {
+    await window.bridge.sendStickCalibration(op, target);
+    // The reply crosses Bluetooth asynchronously; give it a moment before reading.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const status = await window.bridge.readCalibrationStatus();
+    setCalibrationStatus(status);
+    return calibrationStepAccepted(status, target, expectedCode);
+  }, []);
+
+  /**
+   * Begin a calibration, recovering from a session an earlier run left open.
+   *
+   * There is NO cancel opcode. If a previous attempt was interrupted -- controller unplugged, a
+   * step refused -- the session stays open in the controller's firmware and every later begin
+   * fails until the controller is restarted. The only way to close one is to commit it.
+   *
+   * So a refused begin is retried ONCE behind a commit. That commit can itself change the
+   * controller's calibration, which is why it returns whether it fired: the caller has to say so
+   * rather than let the user believe nothing happened.
+   */
+  const beginCalibration = useCallback(async (target: number): Promise<{
+    ok: boolean;
+    committedDuringRepair: boolean;
+  }> => {
+    if (await runStep(CALIBRATION_OP.BEGIN, target, CALIBRATION_CODE.OPEN)) {
+      return { ok: false || true, committedDuringRepair: false };
+    }
+    await runStep(CALIBRATION_OP.STORE, target, CALIBRATION_CODE.COMMITTED);
+    const ok = await runStep(CALIBRATION_OP.BEGIN, target, CALIBRATION_CODE.OPEN);
+    return { ok, committedDuringRepair: true };
+  }, [runStep]);
+
+  const runCalibration = useCallback(async (target: number, label: string) => {
+    setCalibrationBusy(true);
+    setCalibrationError(null);
+    setCalibrationStep(`${label}: starting`);
+    try {
+      const begun = await beginCalibration(target);
+      if (begun.committedDuringRepair) {
+        setCalibrationError(
+          'A previous calibration session was still open and had to be closed to continue. '
+          + "That close is itself a commit, so this controller's calibration may already have "
+          + 'changed. Finish this run, or reset the controller to revert.'
+        );
+      }
+      if (!begun.ok) {
+        setCalibrationStep(null);
+        setCalibrationError(
+          (begun.committedDuringRepair ? '' : '')
+          + 'Could not start calibration. Restart the controller and try again.'
+        );
+        return;
+      }
+
+      if (target === CALIBRATION_TARGET.CENTRE) {
+        setCalibrationStep(`${label}: sampling centre, leave the sticks alone`);
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        if (!await runStep(CALIBRATION_OP.SAMPLE, target, CALIBRATION_CODE.OPEN)) {
+          setCalibrationError('Sampling was refused. Nothing was stored.');
+          setCalibrationStep(null);
+          return;
+        }
+      } else {
+        // The range pass records what the sticks reach while the session is open, so the sweep
+        // happens between begin and store rather than at a sample call.
+        setCalibrationStep(`${label}: sweep both sticks fully, then press Finish`);
+        setCalibrationAwaitingSweep(true);
+        return;
+      }
+
+      setCalibrationStep(`${label}: storing`);
+      const stored = await runStep(CALIBRATION_OP.STORE, target, CALIBRATION_CODE.COMMITTED);
+      setCalibrationStep(null);
+      if (!stored) {
+        setCalibrationError('The controller did not confirm the write.');
+      }
+    } catch (error) {
+      setCalibrationError(error instanceof Error ? error.message : String(error));
+      setCalibrationStep(null);
+    } finally {
+      setCalibrationBusy(false);
+    }
+  }, [beginCalibration, runStep]);
+
+  const finishRangeCalibration = useCallback(async () => {
+    setCalibrationBusy(true);
+    setCalibrationAwaitingSweep(false);
+    setCalibrationStep('Range: storing');
+    try {
+      const stored = await runStep(
+        CALIBRATION_OP.STORE,
+        CALIBRATION_TARGET.RANGE,
+        CALIBRATION_CODE.COMMITTED
+      );
+      if (!stored) {
+        setCalibrationError('The controller did not confirm the write.');
+      }
+    } finally {
+      setCalibrationStep(null);
+      setCalibrationBusy(false);
+    }
+  }, [runStep]);
 
   const sendEffects = useCallback(async (right: TriggerEffect, left: TriggerEffect) => {
     try {
@@ -264,6 +390,58 @@ export function TesterApp() {
           </div>
           {sendError && <p className="tester-error">{sendError}</p>}
         </section>
+        <section className="tester-card tester-card-wide">
+          <h2>Stick calibration</h2>
+          <p className="tester-subtle">
+            Writes to the controller, not the bridge. These changes are <strong>temporary</strong>
+            &mdash; the controller reverts them on reset, because nothing here unlocks its
+            permanent storage. Every step is checked against the controller&rsquo;s own reply.
+          </p>
+          <p className="tester-subtle">
+            <strong>Centre:</strong> begin, leave the sticks alone, sample, then store.{' '}
+            <strong>Range:</strong> begin, sweep both sticks fully around their travel, then store.
+          </p>
+          <div className="tester-calibration">
+            <div className="tester-calibration-row">
+              <span className="tester-field-label">Centre</span>
+              <button
+                type="button"
+                disabled={calibrationBusy || calibrationAwaitingSweep || !connected}
+                onClick={() => void runCalibration(CALIBRATION_TARGET.CENTRE, 'Centre')}
+              >
+                Calibrate centre
+              </button>
+              <span className="tester-subtle">Leave both sticks untouched.</span>
+            </div>
+            <div className="tester-calibration-row">
+              <span className="tester-field-label">Range</span>
+              <button
+                type="button"
+                disabled={calibrationBusy || calibrationAwaitingSweep || !connected}
+                onClick={() => void runCalibration(CALIBRATION_TARGET.RANGE, 'Range')}
+              >
+                Calibrate range
+              </button>
+              <button
+                type="button"
+                disabled={!calibrationAwaitingSweep}
+                onClick={() => void finishRangeCalibration()}
+              >
+                Finish
+              </button>
+              <span className="tester-subtle">Sweep both sticks fully, then Finish.</span>
+            </div>
+          </div>
+          <p className="tester-subtle">
+            {calibrationStep
+              ? calibrationStep
+              : calibrationStatus?.received
+                ? `Controller replied: target ${calibrationStatus.target}, code ${calibrationStatus.code}`
+                : 'No calibration run yet.'}
+          </p>
+          {calibrationError && <p className="tester-error">{calibrationError}</p>}
+        </section>
+
         <section className="tester-card tester-card-wide">
           <h2>Raw input report</h2>
           <p className="tester-subtle">

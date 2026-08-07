@@ -10,7 +10,15 @@ import {
   encodeTriggerEffect,
   TRIGGER_EFFECT_TYPES
 } from './trigger-effects';
-import { buildRawTriggerEffectReport, COMMAND_ID, REPORT_ID, parseControllerInputReport } from './protocol';
+import {
+  buildRawTriggerEffectReport,
+  COMMAND_ID,
+  REPORT_ID,
+  parseControllerInputReport,
+  parseCalibrationStatusReport,
+  calibrationStepAccepted,
+  CALIBRATION_CODE
+} from './protocol';
 import { decodeDualSenseInputReport } from './dualsense-input';
 
 describe('companion protocol version', () => {
@@ -252,5 +260,70 @@ describe('controller input report', () => {
     bytes[15] = 0x00;
     bytes[16] = 0x80; // -32768
     expect(decodeDualSenseInputReport(bytes)?.gyroX).toBe(-32768);
+  });
+});
+
+function calibrationStatusReport(bytes: number[]): number[] {
+  const report = new Array<number>(64).fill(0);
+  report[0] = REPORT_ID.CALIBRATION_STATUS;
+  report[1] = 'D'.charCodeAt(0);
+  report[2] = 'S'.charCodeAt(0);
+  report[3] = '5'.charCodeAt(0);
+  report[4] = 'B'.charCodeAt(0);
+  report[5] = PROTOCOL_MAJOR;
+  report[6] = PROTOCOL_MINOR;
+  report[7] = bytes.length;
+  bytes.forEach((byte, index) => {
+    report[8 + index] = byte;
+  });
+  return report;
+}
+
+/**
+ * These guard the only evidence that a calibration step was accepted. The sequence writes to the
+ * controller, so "assume it worked" is how a half-applied calibration gets stored -- every case
+ * that is not an explicit acceptance has to read as failure.
+ */
+describe('calibration status', () => {
+  const CENTRE = 1;
+  const RANGE = 2;
+
+  it('reads the reply as [0x83, deviceId, target, code]', () => {
+    const status = parseCalibrationStatusReport(calibrationStatusReport([0x83, 1, CENTRE, 1]));
+    expect(status.received).toBe(true);
+    expect(status.target).toBe(CENTRE);
+    expect(status.code).toBe(CALIBRATION_CODE.OPEN);
+  });
+
+  it('accepts OPEN for begin and sample, but NOT for store', () => {
+    // The expected code differs by step. Treating OPEN as success everywhere reported every
+    // successful store as a rejection, which is what a single "ready" flag did.
+    const open = parseCalibrationStatusReport(calibrationStatusReport([0x83, 1, CENTRE, 1]));
+    expect(calibrationStepAccepted(open, CENTRE, CALIBRATION_CODE.OPEN)).toBe(true);
+    expect(calibrationStepAccepted(open, CENTRE, CALIBRATION_CODE.COMMITTED)).toBe(false);
+  });
+
+  it('accepts COMMITTED for store', () => {
+    const committed = parseCalibrationStatusReport(calibrationStatusReport([0x83, 1, CENTRE, 2]));
+    expect(calibrationStepAccepted(committed, CENTRE, CALIBRATION_CODE.COMMITTED)).toBe(true);
+  });
+
+  it('treats ALREADY_CLOSED as a successful close', () => {
+    // Closing a session that was already closed is not a failure to close it.
+    const closed = parseCalibrationStatusReport(calibrationStatusReport([0x83, 1, RANGE, 3]));
+    expect(calibrationStepAccepted(closed, RANGE, CALIBRATION_CODE.COMMITTED)).toBe(true);
+  });
+
+  it('rejects a reply about the OTHER calibration', () => {
+    // A reply about centre says nothing about a range step.
+    const centre = parseCalibrationStatusReport(calibrationStatusReport([0x83, 1, CENTRE, 1]));
+    expect(calibrationStepAccepted(centre, RANGE, CALIBRATION_CODE.OPEN)).toBe(false);
+  });
+
+  it('rejects a missing or short reply', () => {
+    expect(calibrationStepAccepted(null, CENTRE, CALIBRATION_CODE.OPEN)).toBe(false);
+    const short = parseCalibrationStatusReport(calibrationStatusReport([0x83, 1, CENTRE]));
+    expect(short.received).toBe(false);
+    expect(calibrationStepAccepted(short, CENTRE, CALIBRATION_CODE.OPEN)).toBe(false);
   });
 });

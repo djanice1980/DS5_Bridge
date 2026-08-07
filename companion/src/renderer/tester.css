@@ -469,6 +469,39 @@ html {
   color: var(--text, #e6edf6);
 }
 
+.tester-calibration {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.tester-calibration-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tester-calibration-row .tester-field-label {
+  min-width: 64px;
+}
+
+.tester-calibration-row button {
+  background: transparent;
+  border: 1px solid var(--border, #263243);
+  color: var(--text, #e6edf6);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.tester-calibration-row button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 .tester-error {
   margin-top: 12px;
   color: #f87171;

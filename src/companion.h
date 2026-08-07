@@ -20,6 +20,9 @@
 // data already crosses Bluetooth to reach the host -- reading the cached copy over USB adds
 // no load to the BT link.
 #define COMPANION_REPORT_CONTROLLER_INPUT 0x0B
+// Stick calibration status: the controller's 0x83 reply, which is the only evidence a
+// calibration step was accepted.
+#define COMPANION_REPORT_CALIBRATION_STATUS 0x0C
 // Stable physical identity (RP2350 unique board ID) so the app can name and
 // re-recognize individual bridges regardless of USB port. Same report id
 // upstream uses for its device-identity concept.

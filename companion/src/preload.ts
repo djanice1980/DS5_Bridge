@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { TriggerEffect } from './shared/trigger-effects';
 import type { ControllerInputSnapshot } from './shared/dualsense-input';
+import type { CalibrationStatus } from './shared/protocol';
 import type {
   AdaptiveTriggerPreviewEffect,
   AudioReactiveHapticsConfig,
@@ -203,6 +204,12 @@ const api = {
     leftEffect: TriggerEffect
   ): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setRawTriggerEffect', target, rightEffect, leftEffect)
+  ),
+  sendStickCalibration: (op: number, target: number): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:sendStickCalibration', op, target)
+  ),
+  readCalibrationStatus: (): Promise<CalibrationStatus | null> => (
+    ipcRenderer.invoke('bridge:readCalibrationStatus')
   ),
   readControllerInput: (): Promise<ControllerInputSnapshot | null> => (
     ipcRenderer.invoke('bridge:readControllerInput')

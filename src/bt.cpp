@@ -4172,6 +4172,41 @@ void bt_get_output_debug_stats(bt_output_debug_stats *stats) {
     critical_section_exit(&queue_lock);
 }
 
+// Calibration report ids, from dualshock-tools/ds4-tools (ds5-calibration-tool.py).
+#define DS_FEATURE_CALIBRATION_COMMAND 0x82
+#define DS_FEATURE_CALIBRATION_STATUS 0x83
+// The command is three bytes -- op, device, target -- but set_feature_data OVERWRITES the last
+// four bytes of whatever it is handed with a CRC32. Pass three and the checksum eats the
+// command, and the controller receives garbage. Four bytes of headroom are mandatory.
+#define DS_CALIBRATION_PAYLOAD_LEN 7
+#define DS_CALIBRATION_DEVICE_ID 1
+
+bool bt_send_stick_calibration(uint8_t op, uint8_t target) {
+    if (hid_control_cid == 0) {
+        return false;
+    }
+    uint8_t payload[DS_CALIBRATION_PAYLOAD_LEN] = {op, DS_CALIBRATION_DEVICE_ID, target, 0, 0, 0, 0};
+    set_feature_data(DS_FEATURE_CALIBRATION_COMMAND, payload, sizeof(payload));
+    DS5_LOG("[CAL] op=%u target=%u\n", op, target);
+    return true;
+}
+
+void bt_request_stick_calibration_status() {
+    (void)get_feature_data(DS_FEATURE_CALIBRATION_STATUS, 4);
+}
+
+uint8_t bt_stick_calibration_status(uint8_t *out, uint8_t capacity) {
+    if (out == nullptr || capacity == 0 || !feature_data.contains(DS_FEATURE_CALIBRATION_STATUS)) {
+        return 0;
+    }
+    auto const &cached = feature_data[DS_FEATURE_CALIBRATION_STATUS];
+    const uint8_t length = static_cast<uint8_t>(
+        cached.size() < capacity ? cached.size() : capacity
+    );
+    memcpy(out, cached.data(), length);
+    return length;
+}
+
 vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     (void)len;
     // These reports must request fresh controller state; other reports can reuse cached data.
@@ -4183,7 +4218,10 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     const bool requires_fresh_state = reportId == 0x81
         || reportId == 0x63
         || reportId == 0x65
-        || reportId == 0x64;
+        || reportId == 0x64
+        // Calibration status is the ONLY evidence a step was accepted; a cached reply would
+        // report the previous step's result and read as success.
+        || reportId == DS_FEATURE_CALIBRATION_STATUS;
     const bool should_request = !cached || requires_fresh_state;
     if (!should_request || hid_control_cid == 0) {
         return ret;

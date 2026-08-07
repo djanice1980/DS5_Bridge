@@ -23,7 +23,8 @@ export const REPORT_ID = {
   // Raw DualSense input, decoded app-side (see parseControllerInputReport). Pull-model: the
   // firmware serves its cached copy on demand, so nothing is streamed and a closed tester
   // window costs nothing.
-  CONTROLLER_INPUT: 0x0b
+  CONTROLLER_INPUT: 0x0b,
+  CALIBRATION_STATUS: 0x0c
 } as const;
 
 export const SHORTCUT_EVENT = {
@@ -115,7 +116,9 @@ export const COMMAND_ID = {
   // expires by itself, so a crashed app cannot leave the controller silent.
   HOLD_INPUT_FORWARDING: 0x37,
   // Stick deadzone: low byte left percent, high byte right percent.
-  SET_STICK_DEADZONE: 0x38
+  SET_STICK_DEADZONE: 0x38,
+  // Stick calibration: low byte op, high byte target. TEMPORARY -- nothing unlocks NVS.
+  STICK_CALIBRATION: 0x39
 } as const;
 
 export const ACK_RESULT = {
@@ -1232,6 +1235,95 @@ function withMuteHeld(
   muteHeld: boolean
 ): ReturnType<typeof decodeDualSenseInputReport> {
   return state === null ? null : { ...state, mute: muteHeld };
+}
+
+/**
+ * Stick calibration, per dualshock-tools/ds4-tools.
+ *
+ * The sequence is BEGIN, then SAMPLE at each pose (centre) or a sweep (range), then STORE.
+ * Every step is temporary: the controller reverts on reset unless its NVS was unlocked first,
+ * and this app never unlocks it.
+ */
+export const CALIBRATION_OP = {
+  BEGIN: 1,
+  STORE: 2,
+  SAMPLE: 3
+} as const;
+
+export const CALIBRATION_TARGET = {
+  CENTRE: 1,
+  RANGE: 2
+} as const;
+
+export interface CalibrationStatus {
+  /** False until the controller has actually replied; must not be read as success. */
+  received: boolean;
+  bytes: number[];
+  /** Which calibration the reply refers to: 1 centre, 2 range. */
+  target: number;
+  /**
+   * Session state. 1 = open, 2 = committed, 3 = already closed.
+   *
+   * The expected code DIFFERS BY STEP -- begin and sample answer 1, store answers 2 -- so there
+   * is no single "ready" value. Treating 1 as success everywhere reports every successful store
+   * as a rejection.
+   */
+  code: number;
+}
+
+/**
+ * Parse the controller's 0x83 reply: [0x83, deviceId, target, code].
+ *
+ * Cross-checked against two independent implementations (dualshock-tools/ds4-tools and
+ * martino-vigiani/sense-calibrator), which agree on this layout.
+ */
+export function parseCalibrationStatusReport(report: ArrayLike<number>): CalibrationStatus {
+  assertReport(report, REPORT_ID.CALIBRATION_STATUS);
+  assertCurrentOrOlderVersion(report);
+
+  const length = Math.min(report[7] & 0xff, Math.max(0, report.length - 8));
+  const bytes: number[] = [];
+  for (let index = 0; index < length; index += 1) {
+    bytes.push(report[8 + index] & 0xff);
+  }
+
+  return {
+    received: length >= 4,
+    bytes,
+    target: length >= 3 ? bytes[2] : 0,
+    code: length >= 4 ? bytes[3] : 0
+  };
+}
+
+/** Session codes the controller reports in the 0x83 reply. */
+export const CALIBRATION_CODE = {
+  OPEN: 1,
+  COMMITTED: 2,
+  ALREADY_CLOSED: 3
+} as const;
+
+/**
+ * Did the controller accept this step?
+ *
+ * Requires the reply to name the SAME target that was asked for -- a reply about the other
+ * calibration is not evidence about this one -- and to carry the code that step should produce.
+ *
+ * A range store answering ALREADY_CLOSED counts: the session was closed by something earlier,
+ * which is not a failure to close it.
+ */
+export function calibrationStepAccepted(
+  status: CalibrationStatus | null,
+  target: number,
+  expectedCode: number
+): boolean {
+  if (!status?.received || status.target !== target) {
+    return false;
+  }
+  if (status.code === expectedCode) {
+    return true;
+  }
+  return expectedCode === CALIBRATION_CODE.COMMITTED
+    && status.code === CALIBRATION_CODE.ALREADY_CLOSED;
 }
 
 export const TRIGGER_RAW_TARGET = {

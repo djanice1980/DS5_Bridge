@@ -14,6 +14,8 @@ import {
   WATCHDOG_PHASE_NAMES,
   buildRawTriggerEffectReport,
   parseControllerInputReport,
+  parseCalibrationStatusReport,
+  type CalibrationStatus,
   isFaultPhase,
   CHORD_FUNCTION_EVENT_BASE,
   MAX_CHORD_ASSIGNMENTS,
@@ -127,7 +129,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.64';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.65';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -3053,6 +3055,33 @@ export class BridgeService extends EventEmitter {
    * firmware predates the report -- an older bridge answers the unknown report id with zeros or
    * an error, and neither means "controller centred".
    */
+  /**
+   * Drive one stick-calibration step.
+   *
+   * TEMPORARY by construction: nothing here unlocks the controller's NVS, so whatever the
+   * controller does revert on reset. That is what makes the sequence safe to run and verify
+   * before anything is made permanent.
+   */
+  async sendStickCalibration(op: number, target: number): Promise<BridgeSnapshot> {
+    await this.sendCommand(COMMAND_ID.STICK_CALIBRATION, (op & 0xff) | ((target & 0xff) << 8), {
+      throwOnCommandError: false
+    });
+    return this.getSnapshot();
+  }
+
+  /** The controller's own reply. Null when the bridge or the report is unavailable. */
+  async readCalibrationStatus(): Promise<CalibrationStatus | null> {
+    if (!this.device) {
+      return null;
+    }
+    try {
+      const report = await this.device.getFeatureReport(REPORT_ID.CALIBRATION_STATUS, REPORT_LENGTH);
+      return parseCalibrationStatusReport(report);
+    } catch {
+      return null;
+    }
+  }
+
   async readControllerInput(): Promise<ControllerInputSnapshot | null> {
     if (!this.device) {
       return null;
