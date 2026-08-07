@@ -87,9 +87,9 @@ bool controller_output_policy_render_classic_rumble_payload(
     }
 
     payload[kValidFlag0Offset] = static_cast<uint8_t>(
-        (payload[kValidFlag0Offset] & static_cast<uint8_t>(~(
+        payload[kValidFlag0Offset] & static_cast<uint8_t>(~(
             kFlag0CompatibleVibration | kFlag0HapticsSelect
-        ))) | kFlag0HapticsSelect
+        ))
     );
     if (len > kValidFlag2Offset) {
         payload[kValidFlag2Offset] = static_cast<uint8_t>(
@@ -98,6 +98,34 @@ bool controller_output_policy_render_classic_rumble_payload(
             ))
         );
     }
+
+    payload[kMotorRightOffset] = right;
+    payload[kMotorLeftOffset] = left;
+
+    /**
+     * Stopping rumble is an OWNERSHIP HANDBACK, not a rumble command with zero in it.
+     *
+     * HAPTICS_SELECT with both motors at zero stops the motors but leaves the controller in
+     * rumble-emulation mode, and in that mode it will not play actuator audio -- so haptics
+     * stayed dead after any game rumble ended, until something else happened to change the mode.
+     * COMPATIBLE_VIBRATION without HAPTICS_SELECT is the transition that stops rumble AND hands
+     * the actuators back to the audio path.
+     *
+     * This payload is selectorless by design: the rumble state machine reads that as the end of
+     * classic rumble, which is exactly what it is -- it clears the cached state so the stopped
+     * rumble cannot be replayed, and sends it immediately rather than letting an audio carrier
+     * project the old state first.
+     */
+    if ((right | left) == 0) {
+        payload[kValidFlag0Offset] = static_cast<uint8_t>(
+            payload[kValidFlag0Offset] | kFlag0CompatibleVibration
+        );
+        return true;
+    }
+
+    payload[kValidFlag0Offset] = static_cast<uint8_t>(
+        payload[kValidFlag0Offset] | kFlag0HapticsSelect
+    );
 
     if (classic_rumble_v1_enabled) {
         payload[kValidFlag0Offset] = static_cast<uint8_t>(
@@ -111,8 +139,6 @@ bool controller_output_policy_render_classic_rumble_payload(
         );
     }
 
-    payload[kMotorRightOffset] = right;
-    payload[kMotorLeftOffset] = left;
     return true;
 }
 

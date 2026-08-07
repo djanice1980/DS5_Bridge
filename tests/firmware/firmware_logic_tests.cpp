@@ -985,6 +985,52 @@ void xusb360_rumble_decodes_to_ds5_classic_rumble_payload() {
     EXPECT_EQ(payload[kMotorRightOffset], 0x30);
 }
 
+/**
+ * Stopping rumble has to hand the actuators BACK to audio, not just set the motors to zero.
+ *
+ * HAPTICS_SELECT with zero motors stops the motors and leaves the controller in
+ * rumble-emulation mode, where it will not play actuator audio -- so haptics stayed dead after
+ * every burst of game rumble. The stop has to be selectorless for the controller to switch back.
+ */
+void classic_rumble_renderer_hands_actuators_back_to_audio_on_stop() {
+    reset_policy_state();
+
+    Payload payload{};
+    EXPECT_TRUE(controller_output_policy_render_classic_rumble_payload(
+        payload.data(),
+        payload.size(),
+        0x40,
+        0x40
+    ));
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+
+    Payload stop{};
+    EXPECT_TRUE(controller_output_policy_render_classic_rumble_payload(
+        stop.data(),
+        stop.size(),
+        0x00,
+        0x00
+    ));
+    EXPECT_EQ(stop[kMotorRightOffset], 0x00);
+    EXPECT_EQ(stop[kMotorLeftOffset], 0x00);
+    // The whole point: no selector on the stop.
+    EXPECT_FALSE((stop[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_FALSE((stop[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+    EXPECT_FALSE((stop[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_TRUE((stop[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+
+    // And the state machine must read that as the end of classic rumble, so the stopped rumble
+    // cannot be replayed over the top of the audio that just got its actuators back.
+    ControllerOutputRumbleStateMachine state{};
+    controller_output_rumble_state_apply_payload(state, payload.data(), payload.size());
+    EXPECT_TRUE(state.classic_rumble_active);
+    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(state, stop.data(), stop.size()));
+    controller_output_rumble_state_apply_payload(state, stop.data(), stop.size());
+    EXPECT_FALSE(state.classic_rumble_active);
+
+    reset_policy_state();
+}
+
 void classic_rumble_renderer_can_emit_v1_classic_rumble() {
     reset_policy_state();
     controller_output_policy_set_classic_rumble_v1_enabled(true);
@@ -1202,6 +1248,7 @@ std::vector<TestCase> tests{
     {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},
     {"xusb360 rumble decodes to ds5 classic rumble payload", xusb360_rumble_decodes_to_ds5_classic_rumble_payload},
     {"classic rumble renderer can emit v1 classic rumble", classic_rumble_renderer_can_emit_v1_classic_rumble},
+    {"classic rumble renderer hands actuators back to audio on stop", classic_rumble_renderer_hands_actuators_back_to_audio_on_stop},
     {"ds4 persona maps standard gamepad fields", ds4_persona_maps_standard_gamepad_fields},
     {"ds4 output decodes to ds5 rumble and lightbar payload", ds4_output_decodes_to_ds5_rumble_and_lightbar_payload},
     {"dualsense persona feature reports cover identity probe surface", dualsense_persona_feature_reports_cover_identity_probe_surface},
