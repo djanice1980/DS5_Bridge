@@ -7,6 +7,8 @@ import { StickSweep, createSweep, recordSweep, sweepCoverage } from './StickSwee
 import {
   StickDeadzoneScope,
   createDrift,
+  driftEstimate,
+  driftIsComplete,
   recordDrift,
   resetDrift,
   scopeDomain,
@@ -411,8 +413,21 @@ export function TesterApp() {
     if (!state || !dzSession) {
       return;
     }
-    recordDrift(driftLeft.current, state.leftStickX, state.leftStickY, scopeDomain(dzPreview.left));
-    recordDrift(driftRight.current, state.rightStickX, state.rightStickY, scopeDomain(dzPreview.right));
+    // The controller's sensor clock rides along so a dropped link cannot pass for a still stick.
+    recordDrift(
+      driftLeft.current,
+      state.leftStickX,
+      state.leftStickY,
+      scopeDomain(dzPreview.left),
+      state.sensorTimestamp
+    );
+    recordDrift(
+      driftRight.current,
+      state.rightStickX,
+      state.rightStickY,
+      scopeDomain(dzPreview.right),
+      state.sensorTimestamp
+    );
     setDriftTick((tick) => tick + 1);
   }, [state, dzSession, dzPreview]);
 
@@ -555,11 +570,12 @@ export function TesterApp() {
             <>
               <p className="tester-subtle">
                 Deadzone is off while you tune, so the sticks read exactly what they really do.
-                Push a stick right out and let go: that throws away its last reading, and once it
-                has settled back it is measured for about two seconds and the result freezes.
-                Nothing you do afterwards can change it &mdash; push it out again to re-measure.
-                The ring is where it came to rest, and the shaded disc is the deadzone you are
-                about to set. Raise it until the ring sits inside the disc and turns green.
+                Push a stick right out and let go, three times over. Each release is measured on
+                its own and takes a second or two, and a release the stick was still moving through
+                is thrown away rather than counted. Take your hand off it completely &mdash; a
+                thumb left resting reads as drift, which is why it takes three goes that agree.
+                The ring is the middle reading, and the shaded disc is the deadzone you are about
+                to set. Raise it until the ring sits inside the disc and turns green.
               </p>
               <div className="tester-dzscopes" data-tick={driftTick}>
                 <StickDeadzoneScope
@@ -567,16 +583,14 @@ export function TesterApp() {
                   x={state?.leftStickX ?? 128}
                   y={state?.leftStickY ?? 128}
                   deadzonePercent={dzPreview.left}
-                  peak={driftLeft.current.peak}
-                  phase={driftLeft.current.phase}
+                  drift={driftLeft.current}
                 />
                 <StickDeadzoneScope
                   label="Right"
                   x={state?.rightStickX ?? 128}
                   y={state?.rightStickY ?? 128}
                   deadzonePercent={dzPreview.right}
-                  peak={driftRight.current.peak}
-                  phase={driftRight.current.phase}
+                  drift={driftRight.current}
                 />
               </div>
               <div className="tester-deadzone">
@@ -610,20 +624,22 @@ export function TesterApp() {
                     setDriftTick((tick) => tick + 1);
                   }}
                 >
-                  Reset peaks
+                  Start over
                 </button>
                 <button
                   type="button"
                   className="secondary"
-                  // Nothing measured yet means a suggestion of 0%, which would read as an answer
-                  // rather than as the absence of one.
-                  disabled={driftLeft.current.phase === 'idle' || driftRight.current.phase === 'idle'}
+                  // A half-finished measurement would offer a number that looks like an answer.
+                  // Until both sticks have all three readings there is nothing to offer.
+                  disabled={!driftIsComplete(driftLeft.current) || !driftIsComplete(driftRight.current)}
                   onClick={() => setDzPreview({
-                    left: suggestedDeadzonePercent(driftLeft.current.peak),
-                    right: suggestedDeadzonePercent(driftRight.current.peak)
+                    left: suggestedDeadzonePercent(driftEstimate(driftLeft.current)),
+                    right: suggestedDeadzonePercent(driftEstimate(driftRight.current))
                   })}
                 >
-                  Use measured ({suggestedDeadzonePercent(driftLeft.current.peak)}% / {suggestedDeadzonePercent(driftRight.current.peak)}%)
+                  {driftIsComplete(driftLeft.current) && driftIsComplete(driftRight.current)
+                    ? `Use measured (${suggestedDeadzonePercent(driftEstimate(driftLeft.current))}% / ${suggestedDeadzonePercent(driftEstimate(driftRight.current))}%)`
+                    : 'Use measured'}
                 </button>
                 <button
                   type="button"

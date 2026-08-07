@@ -60,38 +60,103 @@ const STILL_TREND = 2 / 127;
  */
 const ARM_TRAVEL = 0.4;
 
-/** Samples measured after a release before the reading freezes, at the 40ms poll -- about 2s. */
-const MEASURE_SAMPLES = 50;
+/** Samples measured after a release before a reading is taken, at the 40ms poll -- about 1.6s. */
+const MEASURE_SAMPLES = 40;
 
-export type DriftPhase = 'idle' | 'returning' | 'measuring' | 'done';
+/**
+ * How far the measuring window's centre of mass may shift between its halves, in counts.
+ *
+ * The same test as STILL_TREND over a far longer baseline, and that is the whole point. Slow
+ * movement beats an eight-sample window because it barely moves it: a third of a count per sample
+ * shifts the halves by about one count, which is inside any threshold that still accepts jitter.
+ * Across forty samples the same movement shifts them by seven. A reading that fails this is
+ * REJECTED rather than trimmed -- the stick was moving, so there is no measurement to salvage.
+ */
+const MEASURE_TREND = 2.5 / 127;
+
+/**
+ * Readings that must agree before a result is offered.
+ *
+ * One reading cannot be checked. A thumb still resting on a "released" stick sits perfectly still
+ * and is indistinguishable from drift in every sample it produces -- but it does not land in the
+ * same place twice. Taking the middle of three readings survives one bad one, and the spread
+ * across them is shown so a bad one is visible rather than merely outvoted.
+ */
+const REQUIRED_READINGS = 3;
+
+/** Readings further apart than this mean something other than the stick is being measured. */
+export const READING_DISAGREEMENT_LIMIT = 4 / 127;
+
+export type DriftPhase = 'idle' | 'returning' | 'measuring' | 'rejected' | 'done';
 
 export const DRIFT_PHASE_LABEL: Record<DriftPhase, string> = {
   idle: 'push it out and let go',
   returning: 'waiting for it to settle',
   measuring: 'measuring',
+  rejected: 'discarded',
   done: 'done'
 };
 
 export interface StickDrift {
-  /** Furthest from centre the stick rested during the LAST measurement, 0..1 of full travel. */
-  peak: number;
+  /** One completed reading per release, each the furthest the stick sat from centre. */
+  readings: number[];
   phase: DriftPhase;
-  /** Set by pushing the stick out; cleared when a measurement finishes. */
+  /** Why the last reading was thrown away, shown so a discard is never silent. */
+  rejectedBecause: string | null;
+  /** Set by pushing the stick out; cleared when a reading completes or is rejected. */
   armed: boolean;
-  measured: number;
+  /** Settle detector, for waiting out the bounce. */
   recent: Array<{ x: number; y: number }>;
+  /** Samples of the reading in progress, checked as a whole before the reading is accepted. */
+  window: Array<{ x: number; y: number }>;
+  lastTimestamp: number | null;
+  /** Consecutive samples the controller has not refreshed. */
+  stale: number;
 }
 
 export function createDrift(): StickDrift {
-  return { peak: 0, phase: 'idle', armed: false, measured: 0, recent: [] };
+  return {
+    readings: [],
+    phase: 'idle',
+    rejectedBecause: null,
+    armed: false,
+    recent: [],
+    window: [],
+    lastTimestamp: null,
+    stale: 0
+  };
 }
 
 export function resetDrift(drift: StickDrift): void {
-  drift.peak = 0;
-  drift.phase = 'idle';
-  drift.armed = false;
-  drift.measured = 0;
-  drift.recent = [];
+  const fresh = createDrift();
+  Object.assign(drift, fresh);
+}
+
+/**
+ * The drift to design around: the MIDDLE of the readings, not the worst.
+ *
+ * The worst would hand a whole session to one contaminated reading, which is exactly the failure
+ * repetition is here to survive. The individual readings are on screen, so a genuinely worse one
+ * is still visible and can still be dialled in by hand.
+ */
+export function driftEstimate(drift: StickDrift): number {
+  if (drift.readings.length === 0) {
+    return 0;
+  }
+  const sorted = [...drift.readings].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+/** How far apart the readings are. Large means something other than the stick was measured. */
+export function driftDisagreement(drift: StickDrift): number {
+  if (drift.readings.length < 2) {
+    return 0;
+  }
+  return Math.max(...drift.readings) - Math.min(...drift.readings);
+}
+
+export function driftIsComplete(drift: StickDrift): boolean {
+  return drift.readings.length >= REQUIRED_READINGS;
 }
 
 /**
@@ -110,18 +175,41 @@ export function resetDrift(drift: StickDrift): void {
  * stick outward afterwards cannot touch a finished reading, and creeping it out far enough to
  * matter re-arms and starts over.
  */
-export function recordDrift(drift: StickDrift, xByte: number, yByte: number, domain: number): void {
+export function recordDrift(
+  drift: StickDrift,
+  xByte: number,
+  yByte: number,
+  domain: number,
+  timestamp: number
+): void {
   const x = (xByte - 128) / 127;
   const y = (yByte - 128) / 127;
   const magnitude = Math.hypot(x, y);
 
-  // A deliberate push throws away whatever was measured before and starts a fresh attempt.
+  /**
+   * A frozen feed is perfectly still, and stillness is what this whole thing looks for -- so a
+   * dropped link would read as the steadiest stick ever measured and freeze a result on it. The
+   * controller's own sensor clock is the only thing here that can tell a still stick from a dead
+   * one.
+   */
+  if (timestamp === drift.lastTimestamp) {
+    drift.stale += 1;
+    if (drift.stale > STILL_WINDOW) {
+      reject(drift, 'the controller stopped sending');
+    }
+    return;
+  }
+  drift.lastTimestamp = timestamp;
+  drift.stale = 0;
+
+  // A deliberate push starts a fresh reading. Every push is the reset, so a reading taken wrong
+  // is never something to clear -- only something to take again.
   if (magnitude > ARM_TRAVEL) {
-    drift.peak = 0;
     drift.phase = 'returning';
+    drift.rejectedBecause = null;
     drift.armed = true;
-    drift.measured = 0;
     drift.recent = [];
+    drift.window = [];
     return;
   }
 
@@ -137,35 +225,62 @@ export function recordDrift(drift: StickDrift, xByte: number, yByte: number, dom
     return;
   }
 
-  const mean = (samples: Array<{ x: number; y: number }>) => ({
-    x: samples.reduce((total, s) => total + s.x, 0) / samples.length,
-    y: samples.reduce((total, s) => total + s.y, 0) / samples.length
-  });
-
   const centre = mean(drift.recent);
   const spread = Math.max(...drift.recent.map((s) => Math.hypot(s.x - centre.x, s.y - centre.y)));
+  const settled = spread <= STILL_SPREAD && trendOf(drift.recent) <= STILL_TREND;
 
-  const half = Math.floor(drift.recent.length / 2);
-  const first = mean(drift.recent.slice(0, half));
-  const second = mean(drift.recent.slice(half));
-  const trend = Math.hypot(second.x - first.x, second.y - first.y);
-
-  // Still waiting out the bounce as it snaps back, or a thumb is still resting on it out past
-  // the view. Either way it is not yet sitting where it will end up.
-  if (spread > STILL_SPREAD || trend > STILL_TREND || magnitude > domain) {
+  // Still bouncing back, or a thumb is holding it out past the view. Either way it is not yet
+  // sitting where it will end up, so the reading has not started.
+  if (!settled || magnitude > domain) {
     drift.phase = 'returning';
+    drift.window = [];
     return;
   }
 
   drift.phase = 'measuring';
-  if (magnitude > drift.peak) {
-    drift.peak = magnitude;
+  drift.window.push({ x, y });
+  if (drift.window.length < MEASURE_SAMPLES) {
+    return;
   }
-  drift.measured += 1;
-  if (drift.measured >= MEASURE_SAMPLES) {
-    drift.phase = 'done';
-    drift.armed = false;
+
+  // The whole window is judged at once, on a baseline long enough that movement slow enough to
+  // hide inside the settle detector cannot hide here.
+  if (trendOf(drift.window) > MEASURE_TREND) {
+    reject(drift, 'it was still moving');
+    return;
   }
+
+  drift.readings.push(Math.max(...drift.window.map((s) => Math.hypot(s.x, s.y))));
+  if (drift.readings.length > REQUIRED_READINGS) {
+    drift.readings.shift();
+  }
+  drift.phase = driftIsComplete(drift) ? 'done' : 'returning';
+  drift.armed = false;
+  drift.window = [];
+  drift.recent = [];
+}
+
+function mean(samples: Array<{ x: number; y: number }>): { x: number; y: number } {
+  return {
+    x: samples.reduce((total, s) => total + s.x, 0) / samples.length,
+    y: samples.reduce((total, s) => total + s.y, 0) / samples.length
+  };
+}
+
+/** How far the samples' centre of mass moves from their first half to their second. */
+function trendOf(samples: Array<{ x: number; y: number }>): number {
+  const half = Math.floor(samples.length / 2);
+  const first = mean(samples.slice(0, half));
+  const second = mean(samples.slice(half));
+  return Math.hypot(second.x - first.x, second.y - first.y);
+}
+
+function reject(drift: StickDrift, because: string): void {
+  drift.phase = 'rejected';
+  drift.rejectedBecause = because;
+  drift.armed = false;
+  drift.window = [];
+  drift.recent = [];
 }
 
 /** One point of headroom over the worst bounce seen, so the peak sits inside rather than on the
@@ -182,16 +297,18 @@ export function StickDeadzoneScope({
   x,
   y,
   deadzonePercent,
-  peak,
-  phase
+  drift
 }: {
   label: string;
   x: number;
   y: number;
   deadzonePercent: number;
-  peak: number;
-  phase: DriftPhase;
+  drift: StickDrift;
 }) {
+  const peak = driftEstimate(drift);
+  const phase = drift.phase;
+  const complete = driftIsComplete(drift);
+  const disagrees = driftDisagreement(drift) > READING_DISAGREEMENT_LIMIT;
   const domain = scopeDomain(deadzonePercent);
   const nx = (x - 128) / 127;
   const ny = (y - 128) / 127;
@@ -204,7 +321,9 @@ export function StickDeadzoneScope({
 
   const deadzoneRadius = Math.min(RADIUS, ((deadzonePercent / 100) / domain) * RADIUS);
   const peakRadius = Math.min(RADIUS, (peak / domain) * RADIUS);
-  const covered = deadzonePercent > 0 && peak * 100 <= deadzonePercent;
+  // Only a finished measurement can turn the disc green. A partial one going green would say the
+  // deadzone is big enough on the strength of evidence that is not all in yet.
+  const covered = complete && !disagrees && deadzonePercent > 0 && peak * 100 <= deadzonePercent;
 
   return (
     <div className="dzscope">
@@ -239,10 +358,24 @@ export function StickDeadzoneScope({
       <div className="dzscope-readout">
         <span className="dzscope-label">{label}</span>
         <span className="tester-mono">
-          {phase === 'idle' ? 'peak --' : `peak ${(peak * 100).toFixed(1)}%`}
+          {complete ? `drift ${(peak * 100).toFixed(1)}%` : `reading ${drift.readings.length} of ${REQUIRED_READINGS}`}
         </span>
-        {/* Names the step, so a reading that is not moving is never mistaken for a finished one. */}
-        <span className={`dzscope-state is-${phase}`}>{DRIFT_PHASE_LABEL[phase]}</span>
+        {/* Names the step, so an unfinished or discarded reading is never mistaken for a result.
+            Disagreeing readings never read as done, however many of them there are. */}
+        <span className={`dzscope-state is-${phase}${disagrees ? ' is-doubtful' : ''}`}>
+          {phase === 'rejected' ? `discarded — ${drift.rejectedBecause}` : DRIFT_PHASE_LABEL[phase]}
+        </span>
+        {/* The readings themselves, so a bad one is visible rather than merely outvoted. */}
+        {drift.readings.length > 0 ? (
+          <span className={`dzscope-readings${disagrees ? ' is-disagreeing' : ''}`}>
+            {drift.readings.map((reading) => `${(reading * 100).toFixed(1)}%`).join('  ')}
+          </span>
+        ) : null}
+        {disagrees ? (
+          <span className="dzscope-warning">
+            readings disagree — a thumb still on the stick does this
+          </span>
+        ) : null}
         <span className="dzscope-view">view &plusmn;{Math.round(domain * 100)}%</span>
       </div>
     </div>

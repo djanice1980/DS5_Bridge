@@ -77,6 +77,28 @@
   color: #f97316;
 }
 
+.dzscope-state.is-rejected,
+.dzscope-state.is-doubtful {
+  color: #f87171;
+}
+
+.dzscope-readings {
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-muted, #8fa3bb);
+}
+
+.dzscope-readings.is-disagreeing {
+  color: #f87171;
+}
+
+.dzscope-warning {
+  font-size: 11px;
+  color: #f87171;
+  text-align: center;
+  max-width: 190px;
+}
+
 .dzscope-state.is-measuring,
 .dzscope-state.is-done {
   color: #4ade80;
