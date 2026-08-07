@@ -1,5 +1,8 @@
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { triggerEffectFromLegacyPercents } from '../shared/trigger-effect-migration';
+import { TRIGGER_EFFECT_TYPES, type TriggerEffect } from '../shared/trigger-effects';
+import { TriggerEffectEditor } from './TriggerEffectEditor';
 import {
   type TablerIcon,
   IconAdjustmentsSpark,
@@ -212,18 +215,12 @@ type TriggerLabProfileId = TriggerLabBuiltinProfileId | TriggerLabCustomProfileI
 type TriggerLabSide = Extract<TriggerTestTarget, 'l2' | 'r2'>;
 type TriggerLabDraft = {
   profileId: TriggerLabProfileId;
-  mode: TriggerTestMode;
-  startPercent: number;
-  wallPercent: number;
-  forcePercent: number;
+  effect: TriggerEffect;
 };
 type TriggerLabCustomProfile = {
   id: TriggerLabCustomProfileId;
   name: string;
-  mode: TriggerTestMode;
-  startPercent: number;
-  wallPercent: number;
-  forcePercent: number;
+  effect: TriggerEffect;
   active: boolean;
 };
 type TriggerLabProfileDialogState = {
@@ -364,12 +361,15 @@ const TRIGGER_LAB_BUILTIN_PROFILE_OPTIONS: Array<[string, TriggerLabBuiltinProfi
   ['Default', 'default']
 ];
 const TRIGGER_LAB_PROFILE_PRESETS: Record<TriggerLabBuiltinProfileId, TriggerLabDraft> = {
+  // The effect the old default (weapon 20/60/85) produced, so Default still feels the same.
   default: {
     profileId: 'default',
-    mode: 'weapon',
-    startPercent: 20,
-    wallPercent: 60,
-    forcePercent: 85
+    effect: triggerEffectFromLegacyPercents({
+      mode: 'weapon',
+      startPercent: 20,
+      wallPercent: 60,
+      forcePercent: 85
+    })
   }
 };
 const TRIGGER_LAB_DEFAULT_DRAFT = TRIGGER_LAB_PROFILE_PRESETS.default;
@@ -982,23 +982,35 @@ function loadTriggerLabCustomProfiles(): TriggerLabCustomProfile[] {
       if (!profile || typeof profile !== 'object') {
         return [];
       }
-      const candidate = profile as Partial<TriggerLabCustomProfile>;
+      const candidate = profile as Record<string, unknown>;
       if (
         typeof candidate.id !== 'string'
         || (candidate.id !== TRIGGER_LAB_AUTO_CUSTOM_PROFILE_ID && !candidate.id.startsWith('custom-'))
         || typeof candidate.name !== 'string'
         || candidate.name.trim().length === 0
-        || !isTriggerTestModeValue(candidate.mode)
       ) {
+        return [];
+      }
+      // Records saved before native ranges carry mode + start/wall/force percentages. Migrate
+      // them to the effect the firmware ACTUALLY sent for those numbers, so an upgraded profile
+      // keeps its feel instead of being approximated.
+      const effect = isTriggerEffectValue(candidate.effect)
+        ? candidate.effect
+        : isTriggerTestModeValue(candidate.mode)
+          ? triggerEffectFromLegacyPercents({
+            mode: candidate.mode,
+            startPercent: Number(candidate.startPercent ?? 0),
+            wallPercent: Number(candidate.wallPercent ?? 0),
+            forcePercent: Number(candidate.forcePercent ?? 0)
+          })
+          : null;
+      if (effect === null) {
         return [];
       }
       return [{
         id: candidate.id as TriggerLabCustomProfileId,
         name: candidate.name.trim().slice(0, 48),
-        mode: candidate.mode,
-        startPercent: snapTriggerLabPercent(Number(candidate.startPercent ?? 0)),
-        wallPercent: snapTriggerLabPercent(Number(candidate.wallPercent ?? 0)),
-        forcePercent: snapTriggerLabPercent(Number(candidate.forcePercent ?? 0)),
+        effect,
         active: candidate.active === true
       }];
     });
@@ -1031,13 +1043,21 @@ function defaultTriggerLabWorkspaceState(): TriggerLabWorkspaceState {
 }
 
 function triggerLabProfileDraftFromProfile(profile: TriggerLabCustomProfile): TriggerLabDraft {
-  return {
-    profileId: profile.id,
-    mode: profile.mode,
-    startPercent: profile.startPercent,
-    wallPercent: profile.wallPercent,
-    forcePercent: profile.forcePercent
-  };
+  return { profileId: profile.id, effect: profile.effect };
+}
+
+/**
+ * Structural check for a stored effect. Deliberately shallow: it establishes that the record is
+ * one of the known shapes so a hand-edited or truncated entry falls through to the legacy
+ * migration or is dropped, rather than reaching the encoder as a malformed effect.
+ */
+function isTriggerEffectValue(value: unknown): value is TriggerEffect {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as { type?: unknown };
+  return typeof candidate.type === 'string'
+    && (TRIGGER_EFFECT_TYPES as string[]).includes(candidate.type);
 }
 
 function normalizeTriggerLabWorkspaceDraft(
@@ -1073,7 +1093,7 @@ function triggerLabWorkspaceDraftActive(
   }
   const profileActive = profiles.find((profile) => profile.id === draft.profileId)?.active ?? false;
   const active = typeof storedActive === 'boolean' ? storedActive : profileActive;
-  return active && draft.forcePercent > 0;
+  return active && draft.effect.type !== 'off';
 }
 
 function loadTriggerLabWorkspaceState(profiles: TriggerLabCustomProfile[]): TriggerLabWorkspaceState {
@@ -1187,45 +1207,6 @@ function sliderTickClass(value: number, max: number): string | undefined {
     return 'milestone';
   }
   return undefined;
-}
-
-type TriggerLabMeterProps = {
-  label: string;
-  value: number;
-  disabled?: boolean;
-  onChange: (value: number) => void;
-  onCommit: (value: number) => void;
-};
-
-function TriggerLabMeter({ label, value, disabled = false, onChange, onCommit }: TriggerLabMeterProps) {
-  function commitValue(element: HTMLInputElement) {
-    onCommit(snapTriggerLabPercent(Number(element.value)));
-  }
-
-  return (
-    <div className="range-control trigger-lab-meter">
-      <input
-        type="range"
-        min="0"
-        max="100"
-        step={TRIGGER_LAB_SLIDER_STEP}
-        value={value}
-        disabled={disabled}
-        aria-label={label}
-        style={{ '--range-fill': `${value}%` } as CSSProperties}
-        onChange={(event) => onChange(snapTriggerLabPercent(Number(event.currentTarget.value)))}
-        onBlur={(event) => commitValue(event.currentTarget)}
-        onKeyUp={(event) => commitValue(event.currentTarget)}
-        onPointerCancel={(event) => commitValue(event.currentTarget)}
-        onPointerUp={(event) => commitValue(event.currentTarget)}
-      />
-      <div className="range-ticks" aria-hidden="true">
-        {TRIGGER_LAB_SLIDER_TICKS.map((tick) => (
-          <span key={tick} className={sliderTickClass(tick, 100)} />
-        ))}
-      </div>
-    </div>
-  );
 }
 
 function BridgeMark() {
@@ -3726,7 +3707,7 @@ export function App() {
     }
 
     if (triggerLabLinked) {
-      const active = triggerLabActive.l2 && triggerLabActive.r2 && triggerLabDrafts.l2.forcePercent > 0;
+      const active = triggerLabActive.l2 && triggerLabActive.r2 && triggerLabDrafts.l2.effect.type !== 'off';
       persistTriggerLab('l2', triggerLabDrafts.l2, active, 'trigger-lab-restore', 'both');
       return;
     }
@@ -4904,13 +4885,7 @@ export function App() {
     if (!profile) {
       return null;
     }
-    return {
-      profileId: profile.id,
-      mode: profile.mode,
-      startPercent: profile.startPercent,
-      wallPercent: profile.wallPercent,
-      forcePercent: profile.forcePercent
-    };
+    return { profileId: profile.id, effect: profile.effect };
   }
 
   function triggerLabProfileName(profileId: TriggerLabProfileId): string {
@@ -4942,11 +4917,8 @@ export function App() {
     return {
       id,
       name: name.trim().slice(0, 48) || TRIGGER_LAB_AUTO_CUSTOM_PROFILE_NAME,
-      mode: draft.mode,
-      startPercent: draft.startPercent,
-      wallPercent: draft.wallPercent,
-      forcePercent: draft.forcePercent,
-      active: active && draft.forcePercent > 0
+      effect: draft.effect,
+      active: active && draft.effect.type !== 'off'
     };
   }
 
@@ -5014,34 +4986,24 @@ export function App() {
     label: string,
     target: TriggerTestTarget = triggerLabLinked ? 'both' : side
   ) {
+    // An inactive side sends OFF rather than a zeroed effect: with native ranges there is no
+    // single field that means "no effect", so it has to be said explicitly.
+    const effect: TriggerEffect = active ? draft.effect : { type: 'off' };
     void runAction(label, () => (
-      window.bridge.applyAdaptiveTriggerEffect({
-        mode: draft.mode,
-        target,
-        startPercent: draft.startPercent,
-        wallPercent: draft.wallPercent,
-        forcePercent: active ? draft.forcePercent : 0
-      })
+      target === 'l2'
+        ? window.bridge.setRawTriggerEffect('l2', { type: 'off' }, effect)
+        : target === 'r2'
+          ? window.bridge.setRawTriggerEffect('r2', effect, { type: 'off' })
+          : window.bridge.setRawTriggerEffect('both', effect, effect)
     ));
   }
 
   function persistTriggerLabSplitState(nextState: TriggerLabSplitState, label: string) {
-    void runAction(label, async () => {
-      await window.bridge.applyAdaptiveTriggerEffect({
-        mode: nextState.drafts.l2.mode,
-        target: 'l2',
-        startPercent: nextState.drafts.l2.startPercent,
-        wallPercent: nextState.drafts.l2.wallPercent,
-        forcePercent: nextState.active.l2 ? nextState.drafts.l2.forcePercent : 0
-      });
-      return window.bridge.applyAdaptiveTriggerEffect({
-        mode: nextState.drafts.r2.mode,
-        target: 'r2',
-        startPercent: nextState.drafts.r2.startPercent,
-        wallPercent: nextState.drafts.r2.wallPercent,
-        forcePercent: nextState.active.r2 ? nextState.drafts.r2.forcePercent : 0
-      });
-    });
+    // Both sides in ONE command. Sending them separately made the second overwrite the first,
+    // because the raw command carries both triggers in a single report.
+    const left: TriggerEffect = nextState.active.l2 ? nextState.drafts.l2.effect : { type: 'off' };
+    const right: TriggerEffect = nextState.active.r2 ? nextState.drafts.r2.effect : { type: 'off' };
+    void runAction(label, () => window.bridge.setRawTriggerEffect('both', right, left));
   }
 
   function setTriggerLabProfile(side: TriggerLabSide, profileId: TriggerLabProfileId) {
@@ -5050,7 +5012,7 @@ export function App() {
       return;
     }
     const previousActive = triggerLabActiveForSide(side);
-    const nextActive = triggerLabProfileActive(profileId) && profileDraft.forcePercent > 0;
+    const nextActive = triggerLabProfileActive(profileId) && profileDraft.effect.type !== 'off';
     const nextDraft = { ...profileDraft, profileId };
     updateTriggerLabSide(side, () => nextDraft);
     setTriggerLabActiveForTarget(side, nextActive);
@@ -5094,11 +5056,8 @@ export function App() {
       const nextProfile: TriggerLabCustomProfile = {
         id,
         name: nextName,
-        mode: draft.mode,
-        startPercent: draft.startPercent,
-        wallPercent: draft.wallPercent,
-        forcePercent: draft.forcePercent,
-        active: triggerLabActiveForSide(side) && draft.forcePercent > 0
+        effect: draft.effect,
+        active: triggerLabActiveForSide(side) && draft.effect.type !== 'off'
       };
       setTriggerLabCustomProfiles((current) => [...current, nextProfile]);
       updateTriggerLabSide(side, (current) => ({ ...current, profileId: id }));
@@ -5159,33 +5118,21 @@ export function App() {
     }
   }
 
-  function setTriggerLabMode(side: TriggerLabSide, mode: TriggerTestMode) {
-    const nextDraft = updateEditableTriggerLabSide(side, (current) => ({ ...current, mode }));
-    if (triggerLabActiveForSide(side)) {
-      persistTriggerLab(side, nextDraft, nextDraft.forcePercent > 0, `trigger-lab-update-${side}`);
-      setTriggerLabActiveForTarget(side, nextDraft.forcePercent > 0);
-    }
-  }
 
-  function setTriggerLabPercent(side: TriggerLabSide, key: 'startPercent' | 'wallPercent' | 'forcePercent', value: number) {
-    updateEditableTriggerLabSide(side, (current) => ({
-      ...current,
-      [key]: snapTriggerLabPercent(value),
-    }));
-  }
-
-  function commitTriggerLabPercent(side: TriggerLabSide, key: 'startPercent' | 'wallPercent' | 'forcePercent', value: number) {
-    const nextDraft = updateEditableTriggerLabSide(side, (current) => ({
-      ...current,
-      [key]: snapTriggerLabPercent(value),
-    }));
+  /**
+   * Replaces the three percent setters. The editor hands back a whole effect rather than one
+   * field, so there is nothing to merge -- and the same call both updates the draft and pushes
+   * it to the controller, exactly as committing a percent slider used to.
+   */
+  function setTriggerLabEffect(side: TriggerLabSide, effect: TriggerEffect) {
+    const nextDraft = updateEditableTriggerLabSide(side, (current) => ({ ...current, effect }));
     if (triggerLabActiveForSide(side)) {
-      const nextActive = nextDraft.forcePercent > 0;
+      const nextActive = nextDraft.effect.type !== 'off';
       saveTriggerLabDraftToProfile(nextDraft, nextActive);
       persistTriggerLab(side, nextDraft, nextActive, `trigger-lab-update-${side}`);
-      setTriggerLabActiveForTarget(side, nextActive);
     }
   }
+
 
   function toggleTriggerLabLinked(sourceSide: TriggerLabSide) {
     if (triggerLabLinked) {
@@ -5221,14 +5168,15 @@ export function App() {
   function previewTriggerLab(side: TriggerLabSide) {
     const draft = triggerLabDrafts[side];
     setTriggerTestLocked(true);
+    // Preview sends the same raw effect apply does. The old percent PREVIEW command quantized
+    // to zones, so what you heard on preview was not what Apply would store.
+    const target: TriggerTestTarget = triggerLabLinked ? 'both' : side;
     void runAction(`trigger-lab-${side}`, () => (
-      window.bridge.previewAdaptiveTriggerEffect({
-        mode: draft.mode,
-        target: triggerLabLinked ? 'both' : side,
-        startPercent: draft.startPercent,
-        wallPercent: draft.wallPercent,
-        forcePercent: draft.forcePercent
-      })
+      target === 'l2'
+        ? window.bridge.setRawTriggerEffect('l2', { type: 'off' }, draft.effect)
+        : target === 'r2'
+          ? window.bridge.setRawTriggerEffect('r2', draft.effect, { type: 'off' })
+          : window.bridge.setRawTriggerEffect('both', draft.effect, draft.effect)
     )).finally(() => {
       window.setTimeout(() => setTriggerTestLocked(false), TEST_TRIGGER_LOCK_MS);
     });
@@ -6251,7 +6199,7 @@ export function App() {
       || !adaptiveTriggersSupported
       || !adaptiveTriggersEnabled
       || pendingAction !== null;
-    const activeDisabled = labActionDisabled || (!active && draft.forcePercent <= 0);
+    const activeDisabled = labActionDisabled || (!active && draft.effect.type === 'off');
     const previewDisabled = labActionDisabled
       || triggerTestLocked
       || adaptiveTriggerOutputActive
@@ -6356,47 +6304,12 @@ export function App() {
               <span className="trigger-lab-chip-label">{triggerLabLinked ? 'Linked' : 'Split'}</span>
             </button>
           </div>
-          <div className="trigger-lab-mode-grid">
-            {TRIGGER_TEST_MODE_OPTIONS.map(([modeLabel, mode]) => (
-              <button
-                key={mode}
-                type="button"
-                className={`trigger-lab-mode-button ${draft.mode === mode ? 'active' : ''}`}
-                onClick={() => setTriggerLabMode(side, mode)}
-              >
-                {modeLabel}
-              </button>
-            ))}
-          </div>
-          <div className="trigger-lab-meter-row">
-            <span>Start</span>
-            <TriggerLabMeter
-              label={`${label} start`}
-              value={draft.startPercent}
-              onChange={(value) => setTriggerLabPercent(side, 'startPercent', value)}
-              onCommit={(value) => commitTriggerLabPercent(side, 'startPercent', value)}
+          <div className="trigger-lab-effect">
+            <TriggerEffectEditor
+              title={label}
+              effect={draft.effect}
+              onChange={(effect) => setTriggerLabEffect(side, effect)}
             />
-            <strong>{draft.startPercent}%</strong>
-          </div>
-          <div className="trigger-lab-meter-row">
-            <span>Wall</span>
-            <TriggerLabMeter
-              label={`${label} wall`}
-              value={draft.wallPercent}
-              onChange={(value) => setTriggerLabPercent(side, 'wallPercent', value)}
-              onCommit={(value) => commitTriggerLabPercent(side, 'wallPercent', value)}
-            />
-            <strong>{draft.wallPercent}%</strong>
-          </div>
-          <div className="trigger-lab-meter-row">
-            <span>Force</span>
-            <TriggerLabMeter
-              label={`${label} force`}
-              value={draft.forcePercent}
-              onChange={(value) => setTriggerLabPercent(side, 'forcePercent', value)}
-              onCommit={(value) => commitTriggerLabPercent(side, 'forcePercent', value)}
-            />
-            <strong>{draft.forcePercent}%</strong>
           </div>
           <div className="trigger-lab-button-row two-up">
             <button type="button" disabled={previewDisabled} onClick={() => previewTriggerLab(side)}>

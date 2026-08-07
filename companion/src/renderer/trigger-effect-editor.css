@@ -1,0 +1,98 @@
+/*
+ * Styling for the shared trigger effect editor.
+ *
+ * Lives with the component and is imported BY it, so it travels wherever the component is used.
+ * These rules previously sat in tester.css, which only the tester window loads -- so the Trigger
+ * Lab rendered the same markup with no styling at all: labels and values collided, the slider
+ * grid collapsed, and the panel overflowed its card.
+ */
+
+.tester-effect {
+  border: 1px solid var(--border, #263243);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.tester-effect-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tester-effect-head h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.tester-slider {
+  display: grid;
+  grid-template-columns: 84px 1fr 44px;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.tester-slider-value { text-align: right; font-size: 12px; }
+
+.tester-zone-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 1fr);
+  gap: 4px;
+  margin: 8px 0;
+}
+
+.tester-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+}
+
+.tester-zone input[type='range'] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 18px;
+  height: 76px;
+}
+
+.tester-bytes {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.tester-field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted, #8fa3bb);
+}
+
+.tester-mono {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tester-effect-head select {
+  background: var(--bg-elevated, #151d29);
+  color: inherit;
+  border: 1px solid var(--border, #263243);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font: inherit;
+}
+
+.tester-zones {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tester-zone-index {
+  color: var(--text-muted, #8fa3bb);
+}

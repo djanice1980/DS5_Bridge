@@ -86,21 +86,13 @@ html {
   min-width: 240px;
 }
 
-.tester-bridge-picker select,
-.tester-effect-head select {
+.tester-bridge-picker select {
   background: var(--bg-elevated, #151d29);
   color: inherit;
   border: 1px solid var(--border, #263243);
   border-radius: 8px;
   padding: 7px 10px;
   font: inherit;
-}
-
-.tester-field-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
-  color: var(--text-muted, #8fa3bb);
 }
 
 .tester-hold-toggle {
@@ -154,11 +146,6 @@ html {
   margin: 0 0 12px;
   font-size: 14px;
   letter-spacing: 0.3px;
-}
-
-.tester-mono {
-  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
-  font-variant-numeric: tabular-nums;
 }
 
 .tester-bar {
@@ -458,65 +445,6 @@ html {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
-}
-
-.tester-effect {
-  border: 1px solid var(--border, #263243);
-  border-radius: 12px;
-  padding: 14px;
-}
-
-.tester-effect-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.tester-effect-head h3 {
-  margin: 0;
-  font-size: 13px;
-}
-
-.tester-slider {
-  display: grid;
-  grid-template-columns: 84px 1fr 44px;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 9px;
-}
-
-.tester-slider-value { text-align: right; font-size: 12px; }
-
-.tester-zone-grid {
-  display: grid;
-  grid-template-columns: repeat(10, 1fr);
-  gap: 4px;
-  margin: 8px 0;
-}
-
-.tester-zone {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-}
-
-.tester-zone input[type='range'] {
-  writing-mode: vertical-lr;
-  direction: rtl;
-  width: 18px;
-  height: 76px;
-}
-
-.tester-bytes {
-  margin-top: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
 }
 
 .tester-actions {

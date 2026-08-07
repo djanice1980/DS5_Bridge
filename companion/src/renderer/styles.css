@@ -5354,8 +5354,21 @@ button.feature-icon {
 
 .trigger-lab-card {
   display: grid;
-  grid-template-rows: auto auto;
-  align-content: start;
+  /* Heading, then a flexible editor area, then the button row pinned below it. */
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  align-content: stretch;
+  min-height: 0;
+}
+
+/*
+ * The editor scrolls inside the card rather than pushing the card taller.
+ * .triggers-page caps this row at 326px, and the effect editor is taller than the three percent
+ * meters it replaced -- the zone-packed types have TEN sliders, so no fixed cap would hold them.
+ * Scrolling here keeps Preview/Reset reachable instead of overlapping the tips panel below.
+ */
+.trigger-lab-effect {
+  overflow-y: auto;
+  min-height: 0;
 }
 
 .trigger-lab-card .feature-card-title {

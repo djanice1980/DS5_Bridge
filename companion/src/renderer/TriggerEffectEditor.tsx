@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import './trigger-effect-editor.css';
 import {
   TRIGGER_EFFECT_TYPES,
   TRIGGER_FREQUENCY_MAX,
