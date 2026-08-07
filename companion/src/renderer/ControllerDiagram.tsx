@@ -135,18 +135,19 @@ export function ControllerDiagram({ state }: { state: DualSenseInputState | null
           : null
       ))}
 
-      {/* Deflection dots, so small stick movement is readable rather than merely implied. */}
+      {/* Deflection dots, so small stick movement is readable rather than merely implied. Kept
+          small: a fat dot covers the travel it is supposed to be showing off. */}
       <circle
         className="ds-stick-dot"
         cx={LEFT_STICK.cx + leftAxis.x * STICK_TRAVEL}
         cy={LEFT_STICK.cy + leftAxis.y * STICK_TRAVEL}
-        r={7}
+        r={4}
       />
       <circle
         className="ds-stick-dot"
         cx={RIGHT_STICK.cx + rightAxis.x * STICK_TRAVEL}
         cy={RIGHT_STICK.cy + rightAxis.y * STICK_TRAVEL}
-        r={7}
+        r={4}
       />
     </svg>
   );

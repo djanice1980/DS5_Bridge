@@ -4,6 +4,14 @@ import type { ControllerInputSnapshot, DualSenseInputState } from '../shared/dua
 import { ControllerDiagram, GyroDial, AccelVector, type AccelZero } from './ControllerDiagram';
 import { TriggerEffectEditor } from './TriggerEffectEditor';
 import { StickSweep, createSweep, recordSweep, sweepCoverage } from './StickSweep';
+import {
+  StickDeadzoneScope,
+  createDrift,
+  recordDrift,
+  scopeDomain,
+  suggestedDeadzonePercent,
+  type StickDrift
+} from './StickDeadzoneScope';
 import { PermanentCalibrationDialog } from './PermanentCalibrationDialog';
 import {
   CALIBRATION_CODE,
@@ -75,6 +83,24 @@ export function TesterApp() {
   // never be left armed from an earlier session.
   const [permanentPrompt, setPermanentPrompt] = useState<number | null>(null);
   const [permanentArmed, setPermanentArmed] = useState(false);
+  /**
+   * Deadzone tuning session.
+   *
+   * The bridge applies the deadzone BEFORE the report reaches this window, so while one is set the
+   * stick reads exactly centre and there is nothing to watch bounce -- and the transform cannot be
+   * undone here either, because inside the deadzone every position collapses to the same zero.
+   * Starting a session therefore un-masks the sticks (deadzone 0) and moves the slider to a local
+   * PREVIEW; nothing is written to the bridge until Apply. The saved values are held so Cancel can
+   * put them back.
+   */
+  const [dzSession, setDzSession] = useState<{ savedLeft: number; savedRight: number } | null>(null);
+  const [dzPreview, setDzPreview] = useState<{ left: number; right: number }>({ left: 0, right: 0 });
+  const driftLeft = useRef<StickDrift>(createDrift());
+  const driftRight = useRef<StickDrift>(createDrift());
+  const [driftTick, setDriftTick] = useState(0);
+  // Read by the teardown paths, which must see the CURRENT session rather than the one captured
+  // when the effect was first set up.
+  const dzSessionRef = useRef<{ savedLeft: number; savedRight: number } | null>(null);
 
   const pollBusy = useRef(false);
 
@@ -308,6 +334,55 @@ export function TesterApp() {
     setSnapshot(next);
   }, [snapshot]);
 
+  const startDeadzoneTuning = useCallback(async () => {
+    const current = snapshot?.settings;
+    if (!current) {
+      return;
+    }
+    const savedLeft = current.stickDeadzoneLeftPercent;
+    const savedRight = current.stickDeadzoneRightPercent;
+    setDzPreview({ left: savedLeft, right: savedRight });
+    driftLeft.current = createDrift();
+    driftRight.current = createDrift();
+    // Un-mask, so the drift being measured is the stick's own and not what survived the deadzone.
+    const next = await window.bridge.setStickDeadzone(0, 0);
+    setSnapshot(next);
+    setDzSession({ savedLeft, savedRight });
+  }, [snapshot]);
+
+  const endDeadzoneTuning = useCallback(async (left: number, right: number) => {
+    const next = await window.bridge.setStickDeadzone(left, right);
+    setSnapshot(next);
+    setDzSession(null);
+  }, []);
+
+  useEffect(() => {
+    dzSessionRef.current = dzSession;
+  }, [dzSession]);
+
+  /**
+   * Never leave the bridge un-masked because the window went away.
+   *
+   * Closing an Electron window does not reliably unmount the tree, so the restore is hung on
+   * unload as well. Neither path can await -- an abrupt kill can still lose the write, which is
+   * why the session is not destructive: what is lost is a deadzone setting, and the sticks are
+   * left reporting exactly what they really do.
+   */
+  useEffect(() => {
+    const restore = () => {
+      const session = dzSessionRef.current;
+      if (session) {
+        dzSessionRef.current = null;
+        void window.bridge.setStickDeadzone(session.savedLeft, session.savedRight).catch(() => {});
+      }
+    };
+    window.addEventListener('beforeunload', restore);
+    return () => {
+      window.removeEventListener('beforeunload', restore);
+      restore();
+    };
+  }, []);
+
   const sendEffects = useCallback(async (right: TriggerEffect, left: TriggerEffect) => {
     try {
       setSendError(null);
@@ -329,6 +404,16 @@ export function TesterApp() {
     recordSweep(sweepRight.current, state.rightStickX, state.rightStickY);
     setSweepTick((tick) => tick + 1);
   }, [state, calibrationAwaitingSweep]);
+
+  // Track how far each stick wanders while a tuning session is open.
+  useEffect(() => {
+    if (!state || !dzSession) {
+      return;
+    }
+    recordDrift(driftLeft.current, state.leftStickX, state.leftStickY, scopeDomain(dzPreview.left));
+    recordDrift(driftRight.current, state.rightStickX, state.rightStickY, scopeDomain(dzPreview.right));
+    setDriftTick((tick) => tick + 1);
+  }, [state, dzSession, dzPreview]);
 
   /**
    * Capture the resting pose as the needle's origin, once, after the controller has been still.
@@ -415,7 +500,7 @@ export function TesterApp() {
         />
         <span>
           Pause input to this PC while testing
-          <span className="tester-subtle"> &mdash; so PS does not open Steam. Releases automatically if the app closes.</span>
+          <span className="tester-subtle"> &mdash; so PS and other buttons do not affect other applications. Releases automatically if the app closes.</span>
         </span>
       </label>
 
@@ -433,42 +518,143 @@ export function TesterApp() {
             fade in proportion to their value, so a sticky trigger or a drifting stick shows up
             as colour that never fully clears.
           </p>
-          <div className="tester-stage">
-            <ControllerDiagram state={state} />
+          {/*
+            Power and audio sit BESIDE the drawing rather than in a card of their own: the
+            controller is portrait in a full-width card, so it left a large empty column, and
+            these are the readings you want in view while looking at the controller anyway.
+          */}
+          <div className="tester-controller-row">
+            <dl className="tester-facts tester-controller-facts">
+              <div><dt>Battery</dt><dd>{state ? (state.batteryPercent === null ? 'unknown' : `${state.batteryPercent}%`) : '--'}</dd></div>
+              <div><dt>Charging</dt><dd>{state ? (state.charging ? 'yes' : 'no') : '--'}</dd></div>
+              <div><dt>Power state</dt><dd className="tester-mono">{state ? `0x${state.rawPowerState.toString(16)}` : '--'}</dd></div>
+              <div><dt>Headset</dt><dd>{state ? (state.headsetPlugged ? 'plugged' : 'no') : '--'}</dd></div>
+              <div><dt>Mic</dt><dd>{state ? (state.microphonePlugged ? 'plugged' : 'no') : '--'}</dd></div>
+              <div><dt>Mic muted</dt><dd>{state ? (state.microphoneMuted ? 'yes' : 'no') : '--'}</dd></div>
+            </dl>
+            <div className="tester-stage">
+              <ControllerDiagram state={state} />
+            </div>
           </div>
         </section>
 
-        <section className="tester-card">
+        <section className={`tester-card${dzSession ? ' tester-card-wide' : ''}`}>
+          {/* A session needs room for two zoomed sticks, and letting it stay a third of a row
+              would stretch Gyro and Acceleration to match its height for no reason. */}
           <h2>Stick deadzone</h2>
-          <p className="tester-subtle">
-            Ignores movement near centre. Saved with the controller profile, and applied by the
-            bridge before anything reaches this PC &mdash; so the sticks above show the CORRECTED
-            values, and you can watch a wiggle disappear as you raise it.
-          </p>
-          <div className="tester-deadzone">
-            {([['Left', 'left'], ['Right', 'right']] as Array<[string, 'left' | 'right']>).map(
-              ([sideLabel, side]) => {
-                const value = side === 'left'
-                  ? (snapshot?.settings.stickDeadzoneLeftPercent ?? 0)
-                  : (snapshot?.settings.stickDeadzoneRightPercent ?? 0);
-                return (
-                  <label key={side} className="tester-slider">
-                    <span className="tester-field-label">{sideLabel}</span>
-                    <input
-                      type="range"
-                      aria-label={`${sideLabel} stick deadzone`}
-                      min={0}
-                      max={STICK_DEADZONE_MAX_PERCENT}
-                      value={value}
-                      disabled={!connected}
-                      onChange={(event) => void setDeadzone(side, Number(event.target.value))}
-                    />
-                    <span className="tester-mono tester-slider-value">{value}%</span>
-                  </label>
-                );
-              }
-            )}
-          </div>
+          {dzSession ? null : (
+            <p className="tester-subtle">
+              Ignores movement near centre. Saved with the controller profile, and applied by the
+              bridge before anything reaches this PC &mdash; so the sticks above show the CORRECTED
+              values.
+            </p>
+          )}
+
+          {dzSession ? (
+            <>
+              <p className="tester-subtle">
+                Deadzone is off while you tune, so the sticks read exactly what they really do.
+                Let go of them: the dot is live, the ring is the furthest either has wandered, and
+                the shaded disc is the deadzone you are about to set. Raise it until the ring sits
+                inside the disc and turns green. The view is zoomed &mdash; a stick pushed past it
+                pins at the rim in orange and is not counted as drift.
+              </p>
+              <div className="tester-dzscopes" data-tick={driftTick}>
+                <StickDeadzoneScope
+                  label="Left"
+                  x={state?.leftStickX ?? 128}
+                  y={state?.leftStickY ?? 128}
+                  deadzonePercent={dzPreview.left}
+                  peak={driftLeft.current.peak}
+                />
+                <StickDeadzoneScope
+                  label="Right"
+                  x={state?.rightStickX ?? 128}
+                  y={state?.rightStickY ?? 128}
+                  deadzonePercent={dzPreview.right}
+                  peak={driftRight.current.peak}
+                />
+              </div>
+              <div className="tester-deadzone">
+                {([['Left', 'left'], ['Right', 'right']] as Array<[string, 'left' | 'right']>).map(
+                  ([sideLabel, side]) => (
+                    <label key={side} className="tester-slider">
+                      <span className="tester-field-label">{sideLabel}</span>
+                      <input
+                        type="range"
+                        aria-label={`${sideLabel} stick deadzone`}
+                        min={0}
+                        max={STICK_DEADZONE_MAX_PERCENT}
+                        value={dzPreview[side]}
+                        onChange={(event) => setDzPreview((current) => ({
+                          ...current,
+                          [side]: Number(event.target.value)
+                        }))}
+                      />
+                      <span className="tester-mono tester-slider-value">{dzPreview[side]}%</span>
+                    </label>
+                  )
+                )}
+              </div>
+              <div className="tester-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setDzPreview({
+                    left: suggestedDeadzonePercent(driftLeft.current.peak),
+                    right: suggestedDeadzonePercent(driftRight.current.peak)
+                  })}
+                >
+                  Use measured ({suggestedDeadzonePercent(driftLeft.current.peak)}% / {suggestedDeadzonePercent(driftRight.current.peak)}%)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void endDeadzoneTuning(dzPreview.left, dzPreview.right)}
+                >
+                  Apply
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void endDeadzoneTuning(dzSession.savedLeft, dzSession.savedRight)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="tester-deadzone">
+                {([['Left', 'left'], ['Right', 'right']] as Array<[string, 'left' | 'right']>).map(
+                  ([sideLabel, side]) => {
+                    const value = side === 'left'
+                      ? (snapshot?.settings.stickDeadzoneLeftPercent ?? 0)
+                      : (snapshot?.settings.stickDeadzoneRightPercent ?? 0);
+                    return (
+                      <label key={side} className="tester-slider">
+                        <span className="tester-field-label">{sideLabel}</span>
+                        <input
+                          type="range"
+                          aria-label={`${sideLabel} stick deadzone`}
+                          min={0}
+                          max={STICK_DEADZONE_MAX_PERCENT}
+                          value={value}
+                          disabled={!connected}
+                          onChange={(event) => void setDeadzone(side, Number(event.target.value))}
+                        />
+                        <span className="tester-mono tester-slider-value">{value}%</span>
+                      </label>
+                    );
+                  }
+                )}
+              </div>
+              <div className="tester-actions">
+                <button type="button" disabled={!connected} onClick={() => void startDeadzoneTuning()}>
+                  Measure drift
+                </button>
+              </div>
+            </>
+          )}
+
           <p className="tester-subtle">
             A deadzone hides drift rather than fixing it, which is why it starts at zero. If a
             stick will not settle at centre, calibrate below instead of masking it.
@@ -512,20 +698,6 @@ export function TesterApp() {
                 accelRestSamples.current = [];
               }}
             />
-          ) : <p className="tester-subtle">Waiting for input.</p>}
-        </section>
-
-        <section className="tester-card">
-          <h2>Power &amp; audio</h2>
-          {state ? (
-            <dl className="tester-facts">
-              <div><dt>Battery</dt><dd>{state.batteryPercent === null ? 'unknown' : `${state.batteryPercent}%`}</dd></div>
-              <div><dt>Charging</dt><dd>{state.charging ? 'yes' : 'no'}</dd></div>
-              <div><dt>Power state</dt><dd className="tester-mono">0x{state.rawPowerState.toString(16)}</dd></div>
-              <div><dt>Headset</dt><dd>{state.headsetPlugged ? 'plugged' : 'no'}</dd></div>
-              <div><dt>Mic</dt><dd>{state.microphonePlugged ? 'plugged' : 'no'}</dd></div>
-              <div><dt>Mic muted</dt><dd>{state.microphoneMuted ? 'yes' : 'no'}</dd></div>
-            </dl>
           ) : <p className="tester-subtle">Waiting for input.</p>}
         </section>
 

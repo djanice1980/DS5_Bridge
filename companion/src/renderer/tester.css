@@ -128,10 +128,16 @@ html {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 16px;
-  align-items: start;
+  /* Stretch, not start: cards on the same row match heights instead of each ending wherever
+     its own text happens to stop, which left a ragged bottom edge across the row. */
+  align-items: stretch;
 }
 
 .tester-card {
+  /* Column layout so a card that is stretched taller than its content pushes its trailing note
+     to the bottom rather than leaving a gap in the middle. */
+  display: flex;
+  flex-direction: column;
   background: var(--bg-elevated, #131a25);
   border: 1px solid var(--border, #263243);
   border-radius: 14px;
@@ -140,6 +146,11 @@ html {
 
 .tester-card-wide {
   grid-column: 1 / -1;
+}
+
+.tester-card > .tester-subtle:last-child {
+  margin-top: auto;
+  padding-top: 10px;
 }
 
 .tester-card h2 {
@@ -198,6 +209,28 @@ html {
  *   .tester-analogue-fill transitions briefly -- it fades, because the input is continuous.
  * Giving digital controls a fade would draw states the controller never reported.
  */
+
+/*
+ * Facts left, controller right. The drawing is portrait, so on a full-width card it left a
+ * large empty column that the power and audio readings now occupy.
+ */
+.tester-controller-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) 1fr;
+  gap: 20px;
+  align-items: center;
+}
+
+.tester-controller-facts {
+  align-content: center;
+}
+
+/* Below this the two columns crowd each other, so stack instead. */
+@media (max-width: 720px) {
+  .tester-controller-row {
+    grid-template-columns: 1fr;
+  }
+}
 
 .tester-stage {
   display: flex;
@@ -479,11 +512,29 @@ html {
   color: var(--text, #e6edf6);
 }
 
+/* Only one action in a row is the filled one; the rest are alternatives to it. */
+.tester-actions button.secondary {
+  background: transparent;
+  border: 1px solid var(--border, #263243);
+  color: var(--text, #e6edf6);
+}
+
 .tester-deadzone {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin: 10px 0;
+}
+
+/* The two zoomed sticks sit side by side, so left and right drift compare directly. */
+.tester-dzscopes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border, #263243);
+  border-radius: 12px;
 }
 
 .tester-sweeps {
