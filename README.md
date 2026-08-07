@@ -90,6 +90,9 @@ automatically without a button press.*
 - Use the controller speaker, headset jack, microphone, and audio-driven haptics.
 - Tune audio, haptics, adaptive triggers, and lighting from the app.
 - Use Audio Haptics to turn system or app audio into controller feedback.
+- Test every input on a live diagram — buttons, sticks, triggers, touchpad, gyro, and accelerometer.
+- Measure stick drift and set a deadzone from the measurement instead of by guesswork.
+- Calibrate stick centre and range, temporarily or permanently.
 - Save controller setups as profiles.
 - Remap buttons and assign chord shortcuts.
 - Switch the host persona between DualSense, DualShock 4, and Xbox modes.
@@ -152,6 +155,16 @@ persona, and the settings most likely to matter during play.
 
 <p align="center">
   <img src="assets/readme/app-overview.png" width="680" alt="Overview dashboard in the DS5 Bridge companion app">
+</p>
+
+### Devices
+
+Every bridge and controller the app has seen, each identified by its own hardware id rather
+than by a name that could collide. Name a bridge, pair or forget a controller, and open the
+tester from here.
+
+<p align="center">
+  <img src="assets/readme/app-devices.png" width="680" alt="Devices page in the DS5 Bridge companion app">
 </p>
 
 ### Audio
@@ -236,6 +249,59 @@ shortcuts, idle disconnect, and PC sleep disconnect.
 
 <p align="center">
   <img src="assets/readme/app-bridge-settings.png" width="680" alt="Bridge Settings dialog in the DS5 Bridge companion app">
+</p>
+
+## Testing and tuning a controller
+
+Open the **Tester** from the Devices page. It is a separate window showing everything the
+controller reports, live, so you can tell a worn stick from a bad cable from a game that simply
+is not reading the input.
+
+Digital buttons snap on and off. Analogue inputs — the triggers and sticks — fade in proportion
+to their value, so a sticky trigger or a drifting stick shows up as colour that never fully
+clears. Gyro reads as three dials, acceleration as a needle and a lift bar, and the raw report
+sits underneath as the ground truth to check any of it against.
+
+While the tester is open, input to the PC is paused, so pressing PS to check it does not open
+Steam and sweeping a stick does not move the game behind. That hold is a short lease the window
+renews rather than a flag it sets: if the app is closed or killed, the controller comes back on
+its own.
+
+<p align="center">
+  <img src="assets/readme/app-tester.png" width="680" alt="Controller tester showing live input on a DualSense diagram">
+</p>
+
+### Measure the drift, then set the deadzone
+
+A deadzone hides drift rather than fixing it, so it starts at zero — and setting it used to be
+guesswork, because the bridge applies the deadzone before anything reaches the app. With one
+set, the stick reads exactly centre and there is nothing left to see.
+
+**Measure drift** turns the deadzone off, zooms each stick until a two-count wobble is visible,
+and draws the deadzone you are about to set as a disc at the same magnification. Push a stick
+right out and let go, three times over. Each release is measured on its own once the stick has
+settled, and a release the stick was still moving through is thrown away rather than counted.
+The middle of the three readings is used, and readings that disagree say so — a thumb left
+resting on a "released" stick sits perfectly still and reads exactly like drift, which is why it
+takes three goes that agree.
+
+<p align="center">
+  <img src="assets/readme/app-stick-deadzone.png" width="680" alt="Stick drift measurement with the deadzone drawn over the measured drift">
+</p>
+
+### Calibrate the stick itself
+
+If a stick will not settle at centre, calibrate it instead of masking it. Centre and range
+calibration are written to the controller rather than the bridge, and every step is checked
+against the controller's own reply rather than assumed to have worked.
+
+These changes are **temporary** by default — the controller reverts them on reset. Making one
+permanent writes to the controller's flash, cannot be undone, and is deliberately awkward: the
+sequence is reverse-engineered, nobody can guarantee it works on your unit, and confirming it
+requires typing the words out. Try the temporary path first; it does the same thing and reverts.
+
+<p align="center">
+  <img src="assets/readme/app-stick-calibration.png" width="680" alt="Stick centre and range calibration in the tester">
 </p>
 
 ## Moving a controller between bridges

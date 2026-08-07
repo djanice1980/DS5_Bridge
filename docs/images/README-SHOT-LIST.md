@@ -1,5 +1,17 @@
 # Screenshots the README expects
 
+> **Most of these are now captured by a script.** Run `node scripts/readme-shots.mjs` from
+> `companion/` and it writes the whole `assets/readme/app-*.png` set, including the tester and
+> the stick-tuning shots.
+>
+> **It needs a bridge plugged in and a controller connected.** The script synthesises controller
+> *input* so the pages show live values, but bridge status comes from real hardware — with
+> nothing plugged in, every page renders "Bridge not detected" and the shots are worthless as a
+> showcase. The script does not check for this; look at what it produced before committing it.
+>
+> The two shots below are the exception: both want a specific multi-device arrangement that no
+> script can conjure.
+
 The main README references two app screenshots that need to be dropped into
 this folder before publishing (the third visual, the architecture diagram, is
 already here as an SVG). Save each PNG with the exact filename below.
