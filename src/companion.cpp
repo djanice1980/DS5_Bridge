@@ -1,6 +1,7 @@
 #include "companion.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstring>
 
@@ -31,7 +32,7 @@ constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 63;
+constexpr uint8_t kFirmwarePatch = 64;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -162,6 +163,8 @@ enum CommandId : uint8_t {
     CommandSetRawTriggerEffect = 0x36,
     // Hold input forwarding to the host. See host_input_hold_forwarding.
     CommandHoldInputForwarding = 0x37,
+    // Stick deadzone: low byte left percent, high byte right percent.
+    CommandSetStickDeadzone = 0x38,
 };
 
 enum AckResult : uint8_t {
@@ -342,6 +345,11 @@ bool mute_button_last_pressed = false;
 // button. So the companion input report cannot show it, and the tester would draw the mic key as
 // never pressed. Latch the real state here and surface it out-of-band instead.
 bool mute_button_pressed_now = false;
+// Stick deadzone, as a percentage of full travel. 0 disables it entirely, which is the default:
+// a deadzone hides drift, and hiding drift by default would mask the very fault the tester exists
+// to find.
+uint8_t stick_deadzone_left_percent = 0;
+uint8_t stick_deadzone_right_percent = 0;
 bool sleep_keybind_enabled = false;
 bool speaker_volume_shortcut_enabled = false;
 bool shortcut_binding_last_pressed[kShortcutBindingCount]{};
@@ -774,6 +782,8 @@ void restore_defaults() {
     mute_keyboard_usage = kDefaultMuteKeyboardUsage;
     mute_keyboard_modifiers = 0;
     mute_button_last_pressed = false;
+    stick_deadzone_left_percent = 0;
+    stick_deadzone_right_percent = 0;
     sleep_keybind_enabled = false;
     speaker_volume_shortcut_enabled = false;
     std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
@@ -2286,6 +2296,24 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
             }
 
+        case CommandSetStickDeadzone:
+            {
+            const uint8_t left = static_cast<uint8_t>(value & 0xff);
+            const uint8_t right = static_cast<uint8_t>((value >> 8) & 0xff);
+            // Capped well below 100: past about half travel the rescale leaves so little usable
+            // range that the stick reads as broken rather than as filtered.
+            constexpr uint8_t kMaxDeadzonePercent = 50;
+            if (left > kMaxDeadzonePercent || right > kMaxDeadzonePercent) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            stick_deadzone_left_percent = left;
+            stick_deadzone_right_percent = right;
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
+
         case CommandSetClassicRumbleGain:
             if (value > kMaxFeedbackGainPercent) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -3144,10 +3172,56 @@ void companion_loop() {
     apply_persistent_trigger_effect();
 }
 
+/**
+ * Apply a deadzone to one stick, in place.
+ *
+ * RADIAL, not per-axis. A per-axis deadzone leaves a SQUARE dead region, so a stick pushed
+ * diagonally escapes it sooner than one pushed straight, and slow diagonal movement snaps onto
+ * the axes as one component crosses the threshold before the other. Measuring the magnitude
+ * treats every direction alike.
+ *
+ * Beyond the threshold the remaining travel is rescaled back to full range, so a deadzone costs
+ * precision near the centre but does not cost reach at the edge -- without it, a 20% deadzone
+ * would leave the stick unable to report its last 20% of travel.
+ */
+static void apply_stick_deadzone(uint8_t *x_byte, uint8_t *y_byte, uint8_t deadzone_percent) {
+    if (deadzone_percent == 0) {
+        return;
+    }
+
+    constexpr float kFullTravel = 127.0f;
+    const float deadzone = (static_cast<float>(deadzone_percent) / 100.0f) * kFullTravel;
+    const float x = static_cast<float>(*x_byte) - 128.0f;
+    const float y = static_cast<float>(*y_byte) - 128.0f;
+    const float magnitude = sqrtf((x * x) + (y * y));
+
+    if (magnitude <= deadzone) {
+        *x_byte = 128;
+        *y_byte = 128;
+        return;
+    }
+
+    float scaled = ((magnitude - deadzone) / (kFullTravel - deadzone)) * kFullTravel;
+    if (scaled > kFullTravel) {
+        scaled = kFullTravel;
+    }
+    const float unit_x = x / magnitude;
+    const float unit_y = y / magnitude;
+
+    const int32_t out_x = static_cast<int32_t>(lroundf(unit_x * scaled)) + 128;
+    const int32_t out_y = static_cast<int32_t>(lroundf(unit_y * scaled)) + 128;
+    *x_byte = static_cast<uint8_t>(out_x < 0 ? 0 : (out_x > 255 ? 255 : out_x));
+    *y_byte = static_cast<uint8_t>(out_y < 0 ? 0 : (out_y > 255 ? 255 : out_y));
+}
+
 void companion_process_controller_report(uint8_t *report, uint16_t len) {
     if (len <= 9) {
         return;
     }
+
+    // Before everything else, so any later consumer sees corrected sticks rather than raw ones.
+    apply_stick_deadzone(&report[0], &report[1], stick_deadzone_left_percent);
+    apply_stick_deadzone(&report[2], &report[3], stick_deadzone_right_percent);
 
     const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
     const uint8_t dpad_direction = report[7] & kDpadMask;

@@ -41,6 +41,9 @@ export interface CompanionSettings {
   classicRumbleV1Enabled: boolean;
   adaptiveTriggersEnabled: boolean;
   triggerEffectIntensityPercent: number;
+  /** Radial stick deadzone as a percentage of travel. 0 disables it. */
+  stickDeadzoneLeftPercent: number;
+  stickDeadzoneRightPercent: number;
   triggerTestMode: TriggerTestMode;
   speakerEnabled: boolean;
   speakerVolumePercent: number;

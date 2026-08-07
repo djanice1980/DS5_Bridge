@@ -208,6 +208,9 @@ const api = {
     ipcRenderer.invoke('bridge:readControllerInput')
   ),
   openTesterWindow: (): Promise<void> => ipcRenderer.invoke('bridge:openTesterWindow'),
+  setStickDeadzone: (leftPercent: number, rightPercent: number): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setStickDeadzone', leftPercent, rightPercent)
+  ),
   holdInputForwarding: (holdMs: number): Promise<void> => (
     ipcRenderer.invoke('bridge:holdInputForwarding', holdMs)
   ),

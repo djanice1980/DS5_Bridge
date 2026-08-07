@@ -1285,6 +1285,7 @@ function registerIpc(service: BridgeService): void {
   ) => service.setRawTriggerEffect(target, rightEffect, leftEffect));
   ipcMain.handle('bridge:readControllerInput', () => service.readControllerInput());
   ipcMain.handle('bridge:holdInputForwarding', (_event, holdMs: number) => service.holdInputForwarding(holdMs));
+  ipcMain.handle('bridge:setStickDeadzone', (_event, left: number, right: number) => service.setStickDeadzone(left, right));
   ipcMain.handle('bridge:openTesterWindow', () => {
     openTesterWindow();
   });

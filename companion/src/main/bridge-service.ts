@@ -127,7 +127,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.63';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.64';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -218,6 +218,10 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
     speakerVolumePercent: 100,
     adaptiveTriggersEnabled: true,
     triggerEffectIntensityPercent: 100,
+    // Off by default: a deadzone hides drift, and defaulting it on would mask the very fault
+    // the tester exists to find.
+    stickDeadzoneLeftPercent: 0,
+    stickDeadzoneRightPercent: 0,
     lightbarEnabled: true,
     lightbarColor: '#0000ff',
     lightbarBrightnessPercent: 100,
@@ -248,7 +252,9 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
   'no-triggers': {
     selectedPresetId: 'no-triggers',
     adaptiveTriggersEnabled: false,
-    triggerEffectIntensityPercent: 0
+    triggerEffectIntensityPercent: 0,
+    stickDeadzoneLeftPercent: 0,
+    stickDeadzoneRightPercent: 0
   },
   'lights-off': {
     selectedPresetId: 'lights-off',
@@ -2291,6 +2297,21 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  /**
+   * Both sticks travel in one command, because the firmware carries them in a single value --
+   * sending them separately would have the second overwrite the first.
+   */
+  async setStickDeadzone(leftPercent: number, rightPercent: number): Promise<BridgeSnapshot> {
+    const left = Math.max(0, Math.min(50, Math.round(leftPercent)));
+    const right = Math.max(0, Math.min(50, Math.round(rightPercent)));
+    await this.sendSettingCommand(
+      COMMAND_ID.SET_STICK_DEADZONE,
+      left | (right << 8),
+      customSettingUpdate({ stickDeadzoneLeftPercent: left, stickDeadzoneRightPercent: right })
+    );
+    return this.getSnapshot();
+  }
+
   async setTriggerTestMode(mode: TriggerTestMode): Promise<BridgeSnapshot> {
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({ triggerTestMode: mode }));
     this.emitSnapshot();
@@ -4012,6 +4033,11 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(
       COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
       this.effectiveTriggerEffectIntensity(settings),
+      { expectSettingsRevisionChange }
+    );
+    await this.sendCommand(
+      COMMAND_ID.SET_STICK_DEADZONE,
+      settings.stickDeadzoneLeftPercent | (settings.stickDeadzoneRightPercent << 8),
       { expectSettingsRevisionChange }
     );
     if (!settings.adaptiveTriggersEnabled) {

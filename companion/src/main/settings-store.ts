@@ -54,6 +54,10 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   classicRumbleV1Enabled: false,
   adaptiveTriggersEnabled: true,
   triggerEffectIntensityPercent: 100,
+  // Off by default: a deadzone hides drift, and defaulting it on would mask the fault the
+  // tester exists to find.
+  stickDeadzoneLeftPercent: 0,
+  stickDeadzoneRightPercent: 0,
   triggerTestMode: 'feedback',
   speakerEnabled: true,
   speakerVolumePercent: 100,
@@ -113,6 +117,8 @@ const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>
   'classicRumbleV1Enabled',
   'adaptiveTriggersEnabled',
   'triggerEffectIntensityPercent',
+  'stickDeadzoneLeftPercent',
+  'stickDeadzoneRightPercent',
   'triggerTestMode',
   'speakerEnabled',
   'speakerVolumePercent',
@@ -160,6 +166,8 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   classicRumbleV1Enabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleV1Enabled,
   adaptiveTriggersEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.adaptiveTriggersEnabled,
   triggerEffectIntensityPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerEffectIntensityPercent,
+  stickDeadzoneLeftPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.stickDeadzoneLeftPercent,
+  stickDeadzoneRightPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.stickDeadzoneRightPercent,
   triggerTestMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerTestMode,
   speakerEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerEnabled,
   speakerVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumePercent,
@@ -356,8 +364,17 @@ function cloneControllerProfileSettings(settings: ControllerProfileSettings): Co
   return { ...settings };
 }
 
+/** Matches the firmware cap; anything else on disk is coerced rather than trusted. */
+function clampDeadzonePercent(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, Math.min(50, Math.round(value)))
+    : 0;
+}
+
 export function controllerProfileSettingsFrom(settings: CompanionSettings): ControllerProfileSettings {
   return {
+    stickDeadzoneLeftPercent: settings.stickDeadzoneLeftPercent,
+    stickDeadzoneRightPercent: settings.stickDeadzoneRightPercent,
     hapticsEnabled: settings.hapticsEnabled,
     hapticsGainPercent: settings.hapticsGainPercent,
     feedbackBoostEnabled: settings.feedbackBoostEnabled,
@@ -425,6 +442,14 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
     triggerEffectIntensityPercent: Number.isFinite(candidate.triggerEffectIntensityPercent)
       ? Math.max(0, Math.min(100, Math.round(candidate.triggerEffectIntensityPercent!)))
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerEffectIntensityPercent,
+    // Capped at 50 to match the firmware, which refuses more: past about half travel the
+    // rescale leaves so little usable range that the stick reads as broken.
+    stickDeadzoneLeftPercent: Number.isFinite(candidate.stickDeadzoneLeftPercent)
+      ? Math.max(0, Math.min(50, Math.round(candidate.stickDeadzoneLeftPercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.stickDeadzoneLeftPercent,
+    stickDeadzoneRightPercent: Number.isFinite(candidate.stickDeadzoneRightPercent)
+      ? Math.max(0, Math.min(50, Math.round(candidate.stickDeadzoneRightPercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.stickDeadzoneRightPercent,
     triggerTestMode: candidate.triggerTestMode === 'weapon' || candidate.triggerTestMode === 'vibration' || candidate.triggerTestMode === 'feedback'
       ? candidate.triggerTestMode
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerTestMode,
@@ -879,6 +904,8 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
 
   return {
     selectedPresetId,
+    stickDeadzoneLeftPercent: clampDeadzonePercent(value?.stickDeadzoneLeftPercent),
+    stickDeadzoneRightPercent: clampDeadzonePercent(value?.stickDeadzoneRightPercent),
     uiScalePercent: normalizeUiScalePercent(value?.uiScalePercent),
     uiThemePreset: normalizeUiThemePreset(value?.uiThemePreset),
     launchAtStartupEnabled: typeof value?.launchAtStartupEnabled === 'boolean'

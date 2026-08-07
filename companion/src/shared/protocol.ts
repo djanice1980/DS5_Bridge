@@ -113,7 +113,9 @@ export const COMMAND_ID = {
   SET_RAW_TRIGGER_EFFECT: 0x36,
   // Hold input forwarding to the host, in milliseconds. A lease: the holder renews it and it
   // expires by itself, so a crashed app cannot leave the controller silent.
-  HOLD_INPUT_FORWARDING: 0x37
+  HOLD_INPUT_FORWARDING: 0x37,
+  // Stick deadzone: low byte left percent, high byte right percent.
+  SET_STICK_DEADZONE: 0x38
 } as const;
 
 export const ACK_RESULT = {
@@ -287,6 +289,15 @@ export interface ButtonRemapProfile {
 }
 
 export interface ControllerProfileSettings {
+  /**
+   * Radial stick deadzone as a percentage of travel, 0 to disable.
+   *
+   * Per PROFILE rather than per app, because it corrects one physical controller's drift --
+   * carrying it across to a different controller would apply a correction that controller does
+   * not need, and hide whether it needs one of its own.
+   */
+  stickDeadzoneLeftPercent: number;
+  stickDeadzoneRightPercent: number;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
   feedbackBoostEnabled: boolean;
