@@ -1,0 +1,53 @@
+/* Coverage trace for the range-calibration sweep. See StickSweep.tsx. */
+
+.sweep {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.sweep svg {
+  width: 100%;
+  max-width: 108px;
+  height: auto;
+  grid-column: 1;
+}
+
+.sweep-edge {
+  fill: none;
+  stroke: var(--border, #33415a);
+  stroke-width: 1.4;
+}
+
+.sweep-edge-inner {
+  stroke-dasharray: 3 4;
+  opacity: 0.6;
+}
+
+/*
+ * The filled region is what has been reached. Kept translucent so the guide circles stay
+ * readable underneath -- the gap between the fill and the outer circle is the whole message:
+ * that direction has not been pushed to its limit yet.
+ */
+.sweep-area {
+  fill: rgba(168, 85, 247, 0.32);
+  stroke: #a855f7;
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+
+.sweep-cursor {
+  fill: #e9d5ff;
+}
+
+.sweep-label {
+  grid-column: 2;
+  font-size: 12px;
+  color: var(--text-muted, #8fa3bb);
+}
+
+.sweep-coverage {
+  grid-column: 3;
+  font-size: 12px;
+}

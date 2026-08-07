@@ -373,8 +373,6 @@ const TRIGGER_LAB_PROFILE_PRESETS: Record<TriggerLabBuiltinProfileId, TriggerLab
   }
 };
 const TRIGGER_LAB_DEFAULT_DRAFT = TRIGGER_LAB_PROFILE_PRESETS.default;
-/** Matches the firmware's cap; beyond this the rescale leaves too little usable range. */
-const STICK_DEADZONE_MAX_PERCENT = 50;
 const TRIGGER_LAB_AUTO_CUSTOM_PROFILE_ID: TriggerLabCustomProfileId = 'custom';
 const TRIGGER_LAB_AUTO_CUSTOM_PROFILE_NAME = 'Custom';
 const MUTE_BUTTON_MODE_OPTIONS: Array<[string, MuteButtonMode]> = [
@@ -5128,20 +5126,6 @@ export function App() {
    * field, so there is nothing to merge -- and the same call both updates the draft and pushes
    * it to the controller, exactly as committing a percent slider used to.
    */
-  /**
-   * Both sticks travel in one command; the firmware carries them in a single value, so sending
-   * them separately would have the second overwrite the first.
-   */
-  function setStickDeadzone(side: 'left' | 'right', percent: number) {
-    const settings = snapshot?.settings;
-    if (!settings) {
-      return;
-    }
-    const left = side === 'left' ? percent : settings.stickDeadzoneLeftPercent;
-    const right = side === 'right' ? percent : settings.stickDeadzoneRightPercent;
-    void runAction('stick-deadzone', () => window.bridge.setStickDeadzone(left, right));
-  }
-
   function setTriggerLabEffect(side: TriggerLabSide, effect: TriggerEffect) {
     const nextDraft = updateEditableTriggerLabSide(side, (current) => ({ ...current, effect }));
     if (triggerLabActiveForSide(side)) {
@@ -9439,54 +9423,6 @@ export function App() {
                     ))}
                   </div>
                 )}
-              </section>
-              <section className="feature-card">
-                <div className="feature-card-title">
-                  <span className={`feature-icon icon-compact ${!controllerAttached ? 'unavailable' : ''}`}>
-                    <SlidersHorizontal size={20} />
-                  </span>
-                  <div className="title-copy">
-                    <h3>Stick Deadzone</h3>
-                    <p>Ignore movement near centre. Saved with the controller profile.</p>
-                  </div>
-                </div>
-                <div className="overview-slider-list">
-                  {([['Left', 'left'], ['Right', 'right']] as Array<[string, 'left' | 'right']>).map(
-                    ([sideLabel, side]) => {
-                      const value = side === 'left'
-                        ? snapshot.settings.stickDeadzoneLeftPercent
-                        : snapshot.settings.stickDeadzoneRightPercent;
-                      return (
-                        <label
-                          key={side}
-                          className={`overview-slider-row ${!controllerControlsAvailable ? 'disabled' : ''}`}
-                        >
-                          <span>{sideLabel}</span>
-                          <div className="overview-range-control">
-                            <input
-                              type="range"
-                              min="0"
-                              max={STICK_DEADZONE_MAX_PERCENT}
-                              step="1"
-                              value={value}
-                              disabled={!controllerControlsAvailable || pendingAction !== null}
-                              style={{
-                                '--range-fill': `${(value / STICK_DEADZONE_MAX_PERCENT) * 100}%`
-                              } as CSSProperties}
-                              onChange={(event) => setStickDeadzone(side, Number(event.currentTarget.value))}
-                            />
-                          </div>
-                          <strong>{value}%</strong>
-                        </label>
-                      );
-                    }
-                  )}
-                </div>
-                <p className="feature-card-note">
-                  A deadzone hides drift rather than fixing it, so it starts at zero. Check the
-                  tester first &mdash; a stick that will not settle at centre needs calibration,
-                  not masking.
-                </p>
               </section>
             </div>
           </div>

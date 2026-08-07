@@ -225,6 +225,7 @@ export function AccelVector({
   y,
   z,
   zero,
+  zeroIsAutomatic = false,
   onZero,
   onClearZero
 }: {
@@ -232,6 +233,7 @@ export function AccelVector({
   y: number;
   z: number;
   zero: AccelZero | null;
+  zeroIsAutomatic?: boolean;
   onZero: () => void;
   onClearZero: () => void;
 }) {
@@ -258,12 +260,19 @@ export function AccelVector({
         <svg viewBox="0 0 80 80" aria-label="Acceleration vector">
           <circle cx={40} cy={40} r={radius} className="tester-dial-track" />
           <circle cx={40} cy={40} r={radius / 2} className="tester-dial-track" />
-          {/* Centre mark, so "level" is a visible target rather than an inferred one. */}
-          <line x1={34} y1={40} x2={46} y2={40} className="tester-dial-neutral" />
-          <line x1={40} y1={34} x2={40} y2={46} className="tester-dial-neutral" />
+          {/*
+            Centre mark, on its own class rather than the gyro dial's neutral marker. That one is
+            DASHED, which suits a radial line but not a short crosshair: the two strokes end up
+            with different dash phase so the cross looks lopsided, and the exact centre lands in a
+            gap -- leaving the needle nothing visible to attach to.
+          */}
+          <line x1={33} y1={40} x2={47} y2={40} className="tester-accel-crosshair" />
+          <line x1={40} y1={33} x2={40} y2={47} className="tester-accel-crosshair" />
           {tilted && (
             <line x1={40} y1={40} x2={needleX} y2={needleY} className="tester-accel-needle" />
           )}
+          {/* Hub, so the needle reads as anchored at the centre rather than floating near it. */}
+          <circle cx={40} cy={40} r={2.4} className="tester-accel-hub" />
           <circle cx={needleX} cy={needleY} r={4} className="tester-dial-head" />
         </svg>
         <div className="tester-accel-z">
@@ -288,11 +297,13 @@ export function AccelVector({
       </div>
       <div className="tester-accel-actions">
         <button type="button" onClick={zero ? onClearZero : onZero}>
-          {zero ? 'Clear zero' : 'Zero here'}
+          {zero ? 'Show absolute' : 'Zero here'}
         </button>
         <span className="tester-subtle">
           {zero
-            ? 'Centred on a captured pose, not on level. Numbers above are still raw.'
+            ? zeroIsAutomatic
+              ? 'Centred on where the controller was resting. Numbers above are still raw.'
+              : 'Centred on the pose you captured. Numbers above are still raw.'
             : 'Centred on level. A DualSense rests nose-up, so flat on a desk reads slightly off.'}
         </span>
       </div>

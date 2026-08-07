@@ -3,6 +3,7 @@ import type { BridgeSnapshot } from '../shared/types';
 import type { ControllerInputSnapshot, DualSenseInputState } from '../shared/dualsense-input';
 import { ControllerDiagram, GyroDial, AccelVector, type AccelZero } from './ControllerDiagram';
 import { TriggerEffectEditor } from './TriggerEffectEditor';
+import { StickSweep, createSweep, recordSweep, sweepCoverage } from './StickSweep';
 import {
   CALIBRATION_CODE,
   CALIBRATION_OP,
@@ -22,6 +23,9 @@ import {
  * USB -- and it stops entirely when the window closes.
  */
 const INPUT_POLL_INTERVAL_MS = 40;
+
+/** Matches the firmware's cap; beyond this the rescale leaves too little usable range. */
+const STICK_DEADZONE_MAX_PERCENT = 50;
 
 /**
  * While this window is open the bridge stops forwarding input to the host, so pressing PS to
@@ -46,11 +50,18 @@ export function TesterApp() {
   // Deliberately not persisted: a zero captured in one session must not silently apply in the
   // next, where the controller is somewhere else entirely.
   const [accelZero, setAccelZero] = useState<AccelZero | null>(null);
+  const [accelZeroIsAutomatic, setAccelZeroIsAutomatic] = useState(false);
+  const accelRestSamples = useRef<Array<{ x: number; y: number; z: number }>>([]);
   const [calibrationBusy, setCalibrationBusy] = useState(false);
   const [calibrationStep, setCalibrationStep] = useState<string | null>(null);
   const [calibrationStatus, setCalibrationStatus] = useState<CalibrationStatus | null>(null);
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const [calibrationAwaitingSweep, setCalibrationAwaitingSweep] = useState(false);
+  // Refs, not state: this is written at the poll rate and only needs to be READ when rendering.
+  const sweepLeft = useRef<number[]>(createSweep());
+  const sweepRight = useRef<number[]>(createSweep());
+  // Bumped after each fold so the trace actually repaints.
+  const [sweepTick, setSweepTick] = useState(0);
 
   const pollBusy = useRef(false);
 
@@ -211,6 +222,10 @@ export function TesterApp() {
         // The range pass records what the sticks reach while the session is open, so the sweep
         // happens between begin and store rather than at a sample call.
         setCalibrationStep(`${label}: sweep both sticks fully, then press Finish`);
+        // Fresh trace per run, or the previous attempt's coverage would read as this one's.
+        sweepLeft.current = createSweep();
+        sweepRight.current = createSweep();
+        setSweepTick(0);
         setCalibrationAwaitingSweep(true);
         return;
       }
@@ -248,6 +263,21 @@ export function TesterApp() {
     }
   }, [runStep]);
 
+  /**
+   * Both sticks travel in one command; the firmware carries them in a single value, so sending
+   * them separately would have the second overwrite the first.
+   */
+  const setDeadzone = useCallback(async (side: 'left' | 'right', percent: number) => {
+    const current = snapshot?.settings;
+    if (!current) {
+      return;
+    }
+    const left = side === 'left' ? percent : current.stickDeadzoneLeftPercent;
+    const right = side === 'right' ? percent : current.stickDeadzoneRightPercent;
+    const next = await window.bridge.setStickDeadzone(left, right);
+    setSnapshot(next);
+  }, [snapshot]);
+
   const sendEffects = useCallback(async (right: TriggerEffect, left: TriggerEffect) => {
     try {
       setSendError(null);
@@ -259,6 +289,61 @@ export function TesterApp() {
 
   const state = input?.state ?? null;
   const connected = input?.controllerConnected === true;
+
+  // Fold every sample into the coverage trace while a sweep is being asked for.
+  useEffect(() => {
+    if (!state || !calibrationAwaitingSweep) {
+      return;
+    }
+    recordSweep(sweepLeft.current, state.leftStickX, state.leftStickY);
+    recordSweep(sweepRight.current, state.rightStickX, state.rightStickY);
+    setSweepTick((tick) => tick + 1);
+  }, [state, calibrationAwaitingSweep]);
+
+  /**
+   * Capture the resting pose as the needle's origin, once, after the controller has been still.
+   *
+   * A DualSense rests nose-up on its grips -- about 9 degrees, Z around 1375 -- so referencing an
+   * IDEALLY level controller left the dot permanently off centre on every unit. Referencing the
+   * pose it is actually in makes "centred" mean "as you left it", which is the question the
+   * needle is there to answer.
+   *
+   * This does not hide a bad sensor: the X/Y/Z numbers below stay absolute and unzeroed, and
+   * Clear returns the needle to absolute too. Auto-zeroing was rejected earlier for exactly that
+   * risk, before those raw numbers existed to carry it.
+   *
+   * Waits for STILLNESS rather than firing on the first sample, so a controller picked up as the
+   * window opens does not get its tilt baked in as the origin.
+   */
+  useEffect(() => {
+    if (!state || accelZero !== null) {
+      return;
+    }
+    const samples = accelRestSamples.current;
+    samples.push({ x: state.accelX, y: state.accelY, z: state.accelZ });
+    if (samples.length < 8) {
+      return;
+    }
+    samples.shift();
+
+    const spread = (pick: (s: { x: number; y: number; z: number }) => number) => {
+      const values = samples.map(pick);
+      return Math.max(...values) - Math.min(...values);
+    };
+    // Tens of units is ordinary sensor noise; hundreds means it is being moved.
+    const STILL_ENOUGH = 120;
+    if (spread((v) => v.x) > STILL_ENOUGH
+      || spread((v) => v.y) > STILL_ENOUGH
+      || spread((v) => v.z) > STILL_ENOUGH) {
+      return;
+    }
+
+    const mean = (pick: (s: { x: number; y: number; z: number }) => number) =>
+      Math.round(samples.reduce((total, sample) => total + pick(sample), 0) / samples.length);
+    setAccelZero({ x: mean((v) => v.x), y: mean((v) => v.y), z: mean((v) => v.z) });
+    setAccelZeroIsAutomatic(true);
+  }, [state, accelZero]);
+
   const bridges = snapshot?.bridgeDevices?.bridges ?? [];
 
   return (
@@ -323,6 +408,43 @@ export function TesterApp() {
         </section>
 
         <section className="tester-card">
+          <h2>Stick deadzone</h2>
+          <p className="tester-subtle">
+            Ignores movement near centre. Saved with the controller profile, and applied by the
+            bridge before anything reaches this PC &mdash; so the sticks above show the CORRECTED
+            values, and you can watch a wiggle disappear as you raise it.
+          </p>
+          <div className="tester-deadzone">
+            {([['Left', 'left'], ['Right', 'right']] as Array<[string, 'left' | 'right']>).map(
+              ([sideLabel, side]) => {
+                const value = side === 'left'
+                  ? (snapshot?.settings.stickDeadzoneLeftPercent ?? 0)
+                  : (snapshot?.settings.stickDeadzoneRightPercent ?? 0);
+                return (
+                  <label key={side} className="tester-slider">
+                    <span className="tester-field-label">{sideLabel}</span>
+                    <input
+                      type="range"
+                      aria-label={`${sideLabel} stick deadzone`}
+                      min={0}
+                      max={STICK_DEADZONE_MAX_PERCENT}
+                      value={value}
+                      disabled={!connected}
+                      onChange={(event) => void setDeadzone(side, Number(event.target.value))}
+                    />
+                    <span className="tester-mono tester-slider-value">{value}%</span>
+                  </label>
+                );
+              }
+            )}
+          </div>
+          <p className="tester-subtle">
+            A deadzone hides drift rather than fixing it, which is why it starts at zero. If a
+            stick will not settle at centre, calibrate below instead of masking it.
+          </p>
+        </section>
+
+        <section className="tester-card">
           <h2>Gyro</h2>
           <p className="tester-subtle">Angular rate per axis. At rest every dial should sit at neutral.</p>
           {state ? (
@@ -346,8 +468,17 @@ export function TesterApp() {
               y={state.accelY}
               z={state.accelZ}
               zero={accelZero}
-              onZero={() => setAccelZero({ x: state.accelX, y: state.accelY, z: state.accelZ })}
-              onClearZero={() => setAccelZero(null)}
+              zeroIsAutomatic={accelZeroIsAutomatic}
+              onZero={() => {
+                setAccelZero({ x: state.accelX, y: state.accelY, z: state.accelZ });
+                setAccelZeroIsAutomatic(false);
+              }}
+              onClearZero={() => {
+                setAccelZero(null);
+                setAccelZeroIsAutomatic(false);
+                // Do not immediately re-capture: Clear means "show me absolute".
+                accelRestSamples.current = [];
+              }}
             />
           ) : <p className="tester-subtle">Waiting for input.</p>}
         </section>
@@ -432,6 +563,29 @@ export function TesterApp() {
               <span className="tester-subtle">Sweep both sticks fully, then Finish.</span>
             </div>
           </div>
+          {calibrationAwaitingSweep && state && (
+            <div className="tester-sweeps" data-tick={sweepTick}>
+              <StickSweep
+                label="Left stick"
+                sectors={sweepLeft.current}
+                x={state.leftStickX}
+                y={state.leftStickY}
+              />
+              <StickSweep
+                label="Right stick"
+                sectors={sweepRight.current}
+                x={state.rightStickX}
+                y={state.rightStickY}
+              />
+              <p className="tester-subtle tester-sweeps-note">
+                Push each stick to its limit all the way around. The filled shape is how far it
+                has reached; a gap is a direction the controller has not seen yet.
+                {sweepCoverage(sweepLeft.current) > 0.92 && sweepCoverage(sweepRight.current) > 0.92
+                  ? ' Both look fully covered.'
+                  : ''}
+              </p>
+            </div>
+          )}
           <p className="tester-subtle">
             {calibrationStep
               ? calibrationStep

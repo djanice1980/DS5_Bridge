@@ -361,6 +361,16 @@ html {
   gap: 16px;
 }
 
+/* Solid and symmetric about the centre -- see the note in ControllerDiagram. */
+.tester-accel-crosshair {
+  stroke: #6b7a92;
+  stroke-width: 1.4;
+}
+
+.tester-accel-hub {
+  fill: #93a6c4;
+}
+
 .tester-accel-needle {
   stroke: #a855f7;
   stroke-width: 3;
@@ -467,6 +477,27 @@ html {
   background: transparent;
   border: 1px solid var(--border, #263243);
   color: var(--text, #e6edf6);
+}
+
+.tester-deadzone {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0;
+}
+
+.tester-sweeps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border, #263243);
+  border-radius: 12px;
+}
+
+.tester-sweeps-note {
+  margin: 0;
 }
 
 .tester-calibration {
