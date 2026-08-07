@@ -4,6 +4,7 @@ import type { ControllerInputSnapshot, DualSenseInputState } from '../shared/dua
 import { ControllerDiagram, GyroDial, AccelVector, type AccelZero } from './ControllerDiagram';
 import { TriggerEffectEditor } from './TriggerEffectEditor';
 import { StickSweep, createSweep, recordSweep, sweepCoverage } from './StickSweep';
+import { PermanentCalibrationDialog } from './PermanentCalibrationDialog';
 import {
   CALIBRATION_CODE,
   CALIBRATION_OP,
@@ -62,6 +63,10 @@ export function TesterApp() {
   const sweepRight = useRef<number[]>(createSweep());
   // Bumped after each fold so the trace actually repaints.
   const [sweepTick, setSweepTick] = useState(0);
+  // Permanent mode is per-run and never sticky: it must be chosen again every time, so it can
+  // never be left armed from an earlier session.
+  const [permanentPrompt, setPermanentPrompt] = useState<number | null>(null);
+  const [permanentArmed, setPermanentArmed] = useState(false);
 
   const pollBusy = useRef(false);
 
@@ -188,11 +193,17 @@ export function TesterApp() {
     return { ok, committedDuringRepair: true };
   }, [runStep]);
 
-  const runCalibration = useCallback(async (target: number, label: string) => {
+  const runCalibration = useCallback(async (target: number, label: string, permanent = false) => {
     setCalibrationBusy(true);
     setCalibrationError(null);
     setCalibrationStep(`${label}: starting`);
     try {
+      if (permanent) {
+        // Unlocked for the duration of this run only. The re-lock is in the finally below, so it
+        // happens even if a step throws -- leaving NVS unlocked would mean any later write,
+        // including one nobody asked for, lands in permanent storage.
+        await window.bridge.setNvsUnlocked(true);
+      }
       const begun = await beginCalibration(target);
       if (begun.committedDuringRepair) {
         setCalibrationError(
@@ -240,15 +251,23 @@ export function TesterApp() {
       setCalibrationError(error instanceof Error ? error.message : String(error));
       setCalibrationStep(null);
     } finally {
+      if (permanent) {
+        // Best effort, and deliberately not conditional on success: a failed run is exactly when
+        // leaving the controller writable would matter most.
+        await window.bridge.setNvsUnlocked(false).catch(() => {});
+      }
       setCalibrationBusy(false);
     }
   }, [beginCalibration, runStep]);
 
-  const finishRangeCalibration = useCallback(async () => {
+  const finishRangeCalibration = useCallback(async (permanent = false) => {
     setCalibrationBusy(true);
     setCalibrationAwaitingSweep(false);
     setCalibrationStep('Range: storing');
     try {
+      if (permanent) {
+        await window.bridge.setNvsUnlocked(true);
+      }
       const stored = await runStep(
         CALIBRATION_OP.STORE,
         CALIBRATION_TARGET.RANGE,
@@ -258,6 +277,9 @@ export function TesterApp() {
         setCalibrationError('The controller did not confirm the write.');
       }
     } finally {
+      if (permanent) {
+        await window.bridge.setNvsUnlocked(false).catch(() => {});
+      }
       setCalibrationStep(null);
       setCalibrationBusy(false);
     }
@@ -542,6 +564,14 @@ export function TesterApp() {
               >
                 Calibrate centre
               </button>
+              <button
+                type="button"
+                className="tester-danger"
+                disabled={calibrationBusy || calibrationAwaitingSweep || !connected}
+                onClick={() => setPermanentPrompt(CALIBRATION_TARGET.CENTRE)}
+              >
+                Make permanent
+              </button>
               <span className="tester-subtle">Leave both sticks untouched.</span>
             </div>
             <div className="tester-calibration-row">
@@ -556,9 +586,17 @@ export function TesterApp() {
               <button
                 type="button"
                 disabled={!calibrationAwaitingSweep}
-                onClick={() => void finishRangeCalibration()}
+                onClick={() => void finishRangeCalibration(permanentArmed)}
               >
                 Finish
+              </button>
+              <button
+                type="button"
+                className="tester-danger"
+                disabled={calibrationBusy || calibrationAwaitingSweep || !connected}
+                onClick={() => setPermanentPrompt(CALIBRATION_TARGET.RANGE)}
+              >
+                Make permanent
               </button>
               <span className="tester-subtle">Sweep both sticks fully, then Finish.</span>
             </div>
@@ -613,6 +651,25 @@ export function TesterApp() {
           </code>
         </section>
       </div>
+
+      <PermanentCalibrationDialog
+        open={permanentPrompt !== null}
+        onCancel={() => setPermanentPrompt(null)}
+        onConfirm={() => {
+          const target = permanentPrompt;
+          setPermanentPrompt(null);
+          if (target === null) {
+            return;
+          }
+          // Range stores on Finish, after the sweep, so it has to stay armed until then.
+          setPermanentArmed(target === CALIBRATION_TARGET.RANGE);
+          void runCalibration(
+            target,
+            target === CALIBRATION_TARGET.CENTRE ? 'Centre (permanent)' : 'Range (permanent)',
+            true
+          );
+        }}
+      />
     </div>
   );
 }

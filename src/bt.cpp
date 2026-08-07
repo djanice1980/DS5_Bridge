@@ -4191,6 +4191,27 @@ bool bt_send_stick_calibration(uint8_t op, uint8_t target) {
     return true;
 }
 
+// NVS lock control (feature report 0x80). The unlock payload is a fixed magic sequence, agreed
+// on by dualshock-tools/ds4-tools and martino-vigiani/sense-calibrator. Both trailing zero runs
+// are CRC headroom -- set_feature_data overwrites the last four bytes.
+#define DS_FEATURE_NVS_LOCK 0x80
+
+bool bt_set_nvs_unlocked(bool unlocked) {
+    if (hid_control_cid == 0) {
+        return false;
+    }
+    if (unlocked) {
+        uint8_t payload[10] = {3, 2, 101, 50, 64, 12, 0, 0, 0, 0};
+        set_feature_data(DS_FEATURE_NVS_LOCK, payload, sizeof(payload));
+        DS5_LOG("[CAL] NVS UNLOCKED -- writes are now permanent\n");
+    } else {
+        uint8_t payload[6] = {3, 1, 0, 0, 0, 0};
+        set_feature_data(DS_FEATURE_NVS_LOCK, payload, sizeof(payload));
+        DS5_LOG("[CAL] NVS re-locked\n");
+    }
+    return true;
+}
+
 void bt_request_stick_calibration_status() {
     (void)get_feature_data(DS_FEATURE_CALIBRATION_STATUS, 4);
 }

@@ -1,0 +1,102 @@
+/* Confirmation for the one action here that can leave a controller unusable. */
+
+.pcd-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 7, 12, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 50;
+}
+
+.pcd {
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-elevated, #131a25);
+  /* Warning-coloured rather than the usual accent: this dialog is not a routine confirmation. */
+  border: 1px solid #b4553a;
+  border-radius: 14px;
+  padding: 22px;
+}
+
+.pcd h2 {
+  margin: 0 0 10px;
+  font-size: 17px;
+  color: #f0a672;
+}
+
+.pcd-lead {
+  margin: 0 0 14px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.pcd-risks {
+  margin: 0 0 14px;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.pcd-advice {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border, #33415a);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted, #8fa3bb);
+}
+
+.pcd-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  margin-bottom: 16px;
+}
+
+.pcd-confirm input {
+  background: var(--bg, #0b1017);
+  border: 1px solid var(--border, #33415a);
+  border-radius: 8px;
+  padding: 9px 11px;
+  color: inherit;
+  font: inherit;
+  letter-spacing: 0.5px;
+}
+
+.pcd-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.pcd-actions button {
+  border-radius: 9px;
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  border: 1px solid var(--border, #33415a);
+  background: transparent;
+  color: var(--text, #e6edf6);
+}
+
+.pcd-go {
+  border-color: #b4553a;
+  background: #b4553a;
+  color: #fff;
+}
+
+/* Disabled until the phrase is typed: this must not be dismissable by reflex. */
+.pcd-go:disabled {
+  opacity: 0.4;
+  cursor: default;
+}

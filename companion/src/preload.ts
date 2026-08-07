@@ -208,6 +208,9 @@ const api = {
   sendStickCalibration: (op: number, target: number): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:sendStickCalibration', op, target)
   ),
+  setNvsUnlocked: (unlocked: boolean): Promise<void> => (
+    ipcRenderer.invoke('bridge:setNvsUnlocked', unlocked)
+  ),
   readCalibrationStatus: (): Promise<CalibrationStatus | null> => (
     ipcRenderer.invoke('bridge:readCalibrationStatus')
   ),

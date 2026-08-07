@@ -118,7 +118,10 @@ export const COMMAND_ID = {
   // Stick deadzone: low byte left percent, high byte right percent.
   SET_STICK_DEADZONE: 0x38,
   // Stick calibration: low byte op, high byte target. TEMPORARY -- nothing unlocks NVS.
-  STICK_CALIBRATION: 0x39
+  STICK_CALIBRATION: 0x39,
+  // Unlock (1) or re-lock (0) the controller's permanent storage. Callers must re-lock on every
+  // exit path, including failure -- see setNvsUnlocked.
+  SET_NVS_UNLOCKED: 0x3a
 } as const;
 
 export const ACK_RESULT = {

@@ -156,6 +156,17 @@ void bt_connection_recovery_loop();
  * and verify. The unlock is deliberately NOT implemented here.
  */
 bool bt_send_stick_calibration(uint8_t op, uint8_t target);
+/**
+ * Unlock or re-lock the controller's non-volatile storage.
+ *
+ * THIS IS THE STEP THAT MAKES CALIBRATION PERMANENT, and the one that can leave a controller
+ * unusable. The unlock sequence is reverse-engineered, not documented by the manufacturer, and
+ * was established on a small number of units.
+ *
+ * Callers MUST re-lock on every exit path, including failure. Leaving NVS unlocked means any
+ * later write -- including one the user never asked for -- lands in permanent storage.
+ */
+bool bt_set_nvs_unlocked(bool unlocked);
 /** Ask for the calibration status report (0x83). The reply lands asynchronously. */
 void bt_request_stick_calibration_status();
 /** Latest cached 0x83 payload. Returns bytes copied; 0 when nothing has arrived yet. */

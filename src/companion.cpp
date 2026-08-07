@@ -32,7 +32,7 @@ constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 65;
+constexpr uint8_t kFirmwarePatch = 66;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -166,8 +166,11 @@ enum CommandId : uint8_t {
     // Stick deadzone: low byte left percent, high byte right percent.
     CommandSetStickDeadzone = 0x38,
     // Stick calibration: low byte op (1 begin, 2 store, 3 sample), high byte target
-    // (1 centre, 2 range). TEMPORARY -- nothing here unlocks the controller's NVS.
+    // (1 centre, 2 range). TEMPORARY on its own -- see CommandSetNvsUnlocked.
     CommandStickCalibration = 0x39,
+    // Unlock (value 1) or re-lock (value 0) the controller's permanent storage. This is what
+    // makes a calibration survive a reset, and what can leave a controller unusable.
+    CommandSetNvsUnlocked = 0x3A,
 };
 
 enum AckResult : uint8_t {
@@ -2358,6 +2361,24 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
             // Ask for the status straight away; the app reads it from report 0x0C.
             bt_request_stick_calibration_status();
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
+
+        case CommandSetNvsUnlocked:
+            {
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!bt_is_controller_connected()) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            if (!bt_set_nvs_unlocked(value != 0)) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
             set_ack(command_id, sequence, AckOk);
             return;
             }

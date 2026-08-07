@@ -129,7 +129,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.65';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.66';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -3067,6 +3067,20 @@ export class BridgeService extends EventEmitter {
       throwOnCommandError: false
     });
     return this.getSnapshot();
+  }
+
+  /**
+   * Unlock or re-lock the controller's permanent storage.
+   *
+   * Separate from the calibration commands on purpose: the renderer wraps a calibration run in
+   * unlock/re-lock and MUST re-lock on every exit path. Folding the unlock into the calibration
+   * call would hide that responsibility, and a run that threw partway would leave the controller
+   * accepting permanent writes it was never asked for.
+   */
+  async setNvsUnlocked(unlocked: boolean): Promise<void> {
+    await this.sendCommand(COMMAND_ID.SET_NVS_UNLOCKED, unlocked ? 1 : 0, {
+      throwOnCommandError: false
+    });
   }
 
   /** The controller's own reply. Null when the bridge or the report is unavailable. */

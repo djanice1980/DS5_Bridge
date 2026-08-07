@@ -528,6 +528,12 @@ html {
   cursor: pointer;
 }
 
+/* Marks the write that cannot be undone. */
+.tester-calibration-row button.tester-danger {
+  border-color: #b4553a;
+  color: #f0a672;
+}
+
 .tester-calibration-row button:disabled {
   opacity: 0.45;
   cursor: default;
