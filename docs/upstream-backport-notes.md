@@ -12,15 +12,26 @@ it applies to Windows.
 - ✅ **Yes** — shared code (firmware, or companion logic the Windows build also has). Backport directly.
 - ⚠️ **Latent** — the bug exists in shared code but doesn't *manifest* on Windows today; worth a defensive fix.
 - ❌ **Linux-only** — platform plumbing; documented for completeness, not for backport.
+- 🚫 **Superseded** — we recommended it and later found it was the wrong fix. Left in place with the
+  correction, because a retracted recommendation is more useful than a deleted one.
+
+> **Read the retractions first (items 1 and 2).** They were the headline recommendations in the
+> original version of this document and they are now **withdrawn**. We shipped that scheduler, ran
+> it for weeks, and eventually deleted it — the symptom it was built for had a different cause. You
+> appear to have reached the same conclusion independently (`be45d68 revert(app): remove audio
+> interleave experiment`), so this is confirmation rather than news, but the original text would
+> otherwise send you down a road we have already walked back.
 
 ---
 
 ## Backport priority (TL;DR)
 
+Items 10+ were added 2026-08-07 and are the substance of this revision.
+
 | # | Change | Layer | Windows |
 |---|--------|-------|---------|
-| 1 | **Adaptive triggers/rumble die while audio streams** — two firmware guards suppressed controller state during audio | Firmware | ✅ **High** |
-| 2 | **Fair-interleave output scheduler** (audio vs controller-state arbitration) + runtime tuning command | Firmware | ✅ High |
+| 1 | ~~Two firmware guards suppress controller state during audio~~ — real cause was the audio state snapshot; see the retraction | Firmware | 🚫 **Superseded by 12** |
+| 2 | ~~Fair-interleave output scheduler + runtime tuning~~ — **we deleted this**; see the retraction | Firmware | 🚫 **Superseded** |
 | 3 | **Switching a controller between two dongles needs a flash-nuke** — stale BT link key | Firmware | ✅ High |
 | 4 | **Firmware version lives in two un-synced constants** — flashed build misreports its version | Firmware | ✅ Medium |
 | 5 | **`BUNDLED_FIRMWARE_VERSION` silently drifts** from the firmware version | Companion | ✅ Medium |
@@ -28,6 +39,14 @@ it applies to Windows.
 | 7 | **App version not surfaced anywhere in the UI** (`app:getVersion` IPC + About line) | Companion | ✅ Low |
 | 8 | **`DS5_DEBUG=1` opt-in debug mode** (DevTools + load logging) | Companion | ✅ Low |
 | 9 | Linux audio-haptics, libusb transport, uinput, WirePlumber, packaging, KDE icon | Linux plumbing | ❌ |
+| 10 | **Never bump `PROTOCOL_MINOR` for an additive command id** — it is compared exactly, so every older firmware reads as "bridge not detected" | Both | ✅ **High** |
+| 11 | **A disconnect that never completes wedges the connection phase** until power-cycle | Firmware | ✅ **High** |
+| 12 | **Adaptive triggers die under audio** — the real cause: the audio state snapshot replays stale trigger state over the effect just sent | Firmware | ✅ **High** |
+| 13 | **Trigger presets must use the simple effect family** — the zone-packed family is silently rejected by some controllers | Firmware | ✅ High |
+| 14 | **Three separate writers fight over the lightbar** — a hardcoded connect colour destroys the user's saved one | Firmware | ✅ High |
+| 15 | **Deleting a link key does not forget a controller** — it re-pairs itself; needs a durable blacklist | Firmware | ✅ High |
+| 16 | **Controller tester** — live input, drift measurement, stick calibration (feature) | Both | ✅ Feature |
+| 17 | **Trigger Lab on native ranges** — percentages could not express what the hardware accepts | Both | ✅ Feature |
 
 ---
 
@@ -66,9 +85,44 @@ and now hold firm.
 the identical symptom. Backport = delete both guards **and** land the scheduler in #2 (without the scheduler,
 removing the guards would let audio starve state; with it, both share the link fairly).
 
+> ### 🚫 RETRACTION (2026-08-07) — the guards were real, the prescription was not
+>
+> Removing the two guards **was** correct and still stands. The rest of the advice above was not.
+>
+> Deleting the guards did not fix the symptom, because the guards were not the whole cause.
+> Triggers still died under audio, and we spent weeks tuning the scheduler in #2 trying to buy
+> them a slot — treating it as an arbitration problem when nothing was being starved.
+>
+> **The actual cause is item 12 below:** the audio path snapshots controller state and replays it
+> into every composed packet, so a trigger effect sent while audio flows is immediately overwritten
+> by the snapshot taken *before* it. The link was never the constraint. The proof was always in
+> front of us — daidr's browser tester holds a trigger firm through the same audio on the same
+> controller, and it has no scheduler at all.
+>
+> **Do not implement the scheduler.** Fix the snapshot instead.
+
 ---
 
-### 2. Fair-interleave output scheduler + runtime tuning ✅
+### 2. Fair-interleave output scheduler + runtime tuning 🚫 SUPERSEDED — DO NOT BACKPORT
+
+> ### 🚫 RETRACTED (2026-08-07) — we shipped this, then deleted it
+>
+> This was the centrepiece of the original document and it was wrong. We removed it entirely in
+> firmware 1.6.59: the scheduler, the `0x34` runtime-tuning command, the persisted settings, and
+> the Interleave page in the app. Command id `0x34` is now reserved and refused so an old companion
+> cannot re-enable a code path that no longer exists.
+>
+> **Why it had to go, beyond being unnecessary.** It was not neutral. It was a second scheduler in
+> front of the one the stack already had, it added a runtime-tunable knob to a timing-sensitive
+> path, and it gave every "triggers feel wrong" report a plausible-looking dial to blame — which is
+> exactly why the real cause stayed hidden for as long as it did. The presets shipped to users, so
+> people tuned a setting that could not fix their problem.
+>
+> You reverted your own copy in `be45d68` on 2026-07-30. This is written up anyway, because the
+> *reason* matters more than the revert: a fix that makes a symptom slightly better is worse than
+> no fix, because it ends the investigation.
+>
+> The description below is preserved for reference only.
 
 **What.** A scheduler that balances the audio stream against coalesced controller-state on the single
 Bluetooth output path, replacing "audio always wins."
@@ -358,3 +412,362 @@ nothing until something goes wrong:
 Watchdog scratch registers survive the reset and are a convenient place to put the record.
 Full inventory of what we built, with removal steps, is in
 [`docs/diagnostic-scaffolding.md`](diagnostic-scaffolding.md).
+
+---
+
+# Addendum — 2026-08-05/07
+
+Added at companion 1.6.104 / firmware 1.6.68. Fixes first, then the features, then the two
+process traps that cost us the most time.
+
+Everything here is in `djanice1980/DS5_Bridge` on `main`. The commit named under each item is
+self-contained and carries the reasoning in its message.
+
+## Taking the code
+
+Each item below is one or a few commits that apply cleanly on their own. To cherry-pick rather
+than re-implement:
+
+```bash
+git remote add djanice https://github.com/djanice1980/DS5_Bridge.git
+git fetch djanice
+git cherry-pick <sha>
+```
+
+| Item | Commit(s) | What it touches |
+|---|---|---|
+| 10 — protocol minor | `a01d210` | `src/companion.cpp`, `companion/src/shared/protocol.ts`, guard |
+| 11 — disconnect watchdog | `a1eae55` | `src/bt.cpp`, guard |
+| 12 — trigger state snapshot (the real audio fix) | `3333583`, then `d1211d3` to delete the scheduler | `src/bt.cpp`, `src/companion.cpp` |
+| 13 — simple trigger family for presets | `1268063` | `src/companion.cpp`, guard |
+| 14 — lightbar writers | `46d5d3c`, `693b624`, `787fdd1` | `src/bt.cpp`, `src/companion.cpp` |
+| 15 — durable forget/blacklist | `c9dbdf1` + follow-ups | `src/bt.cpp` |
+| 16 — tester, calibration | `cfc95b6`, `158eb3f`, `afa7473` | firmware + companion + renderer |
+
+**Order matters for item 12.** Take `3333583` (publish into the snapshot) *before* `d1211d3`
+(delete the scheduler) — the snapshot fix is what makes the scheduler unnecessary, and deleting
+the scheduler first would make triggers worse in between.
+
+The firmware guards live in `tests/firmware/` and run via `npm run test:firmware` from
+`companion/`. They are source-text assertions, so they travel with the commits and will fail
+loudly if a backport lands only half of a change.
+
+**Licence.** Same as the upstream project — this is your code with our changes on top. Take
+anything here with no attribution needed. The only third-party addition is the DualSense artwork
+in the tester, from `daidr/dualsense-tester` (MIT), attributed in `NOTICE`.
+
+---
+
+## 10. Never bump `PROTOCOL_MINOR` for an additive command id — ✅ High
+
+**Symptom.** After adding one new command, every bridge running older firmware reported
+**"bridge not detected"** in the app, with a controller plainly connected and working.
+
+**Root cause.** The companion compares the protocol minor **exactly**, not as a floor. Bumping it
+to advertise a new capability tells every firmware that does not have the new number that it is
+speaking a different protocol. The command id was additive and needed no version change at all.
+
+**Why this is worth your attention.** The failure does not look like a version problem. It looks
+like a USB or driver problem, and that is where the investigation goes first. We had the fix in
+hand only because `git log -S` proved the minor had never moved before.
+
+**Change.** Reverted the bump; gate new capabilities on `status.firmwareFlags` instead, which is a
+bitfield and degrades correctly. A guard now reads the constant from **both** the firmware and the
+companion and fails if they disagree, so the two cannot drift.
+
+*Commit: `Do not bump the companion protocol minor for additive ids (fw 1.6.62)`*
+
+---
+
+## 11. A disconnect that never completes wedges the connection phase — ✅ High
+
+**Symptom.** Rare, and we have never caught it in the wild — this was found by reading, not by a
+bug report. If `hci_disconnect` goes out and `HCI_EVENT_DISCONNECTION_COMPLETE` never comes back,
+the connection phase sits at `Disconnecting` with a live handle and no watchdog, until the bridge
+is power-cycled.
+
+**Root cause.** Every other recovery path in the loop escalates by calling `bt_disconnect()`. That
+made `Disconnecting` the one phase with nothing left to escalate *to*.
+
+**Change.** Two rungs in `bt_connection_recovery_loop()`, both clocked off the phase timestamp:
+re-send at 2 s, give up and tear down locally at 30 s.
+
+**Why 30 s, and why this is the interesting part.** A controller switched off or carried out of
+range produces `DISCONNECTION_COMPLETE` from the chip itself only once **link supervision** lapses,
+around 20 s. Any shorter deadline fires during an entirely ordinary disconnect and tears down state
+while a real completion is still in flight — manufacturing the stale handle the rung exists to
+prevent. The guard asserts the floor, not merely that the constant exists.
+
+The teardown moved into one function shared by the event path and the give-up, so the two cannot
+drift apart. A breadcrumb (`13/1` retry, `13/2` gave up) reports it, because a hole this
+theoretical needs to announce itself if it ever turns out to be real.
+
+*Commit: `Bound a disconnect that never completes (fw 1.6.67)`*
+
+---
+
+## 12. Adaptive triggers die under audio — the actual cause — ✅ High
+
+**This supersedes items 1 and 2.** Read those retractions first.
+
+**Symptom.** With audio routed to the controller, an adaptive trigger effect decays to a click.
+A game that re-asserts the effect every frame holds firm; a one-shot command does not.
+
+**Root cause.** The audio path keeps a **snapshot** of controller state and memcpys it into every
+composed audio packet. An effect sent while audio flows is therefore overwritten, within
+milliseconds, by a snapshot taken *before* it existed. The trigger command arrives perfectly
+intact and is then undone by the next audio packet.
+
+**Why we chased the wrong thing for weeks.** The symptom looks exactly like bandwidth starvation —
+it only happens under audio, and it gets better if you send more often. Both are also true of a
+write-ordering bug. The disproof was available the whole time: daidr's browser tester holds a
+trigger firm through the same audio on the same controller with no scheduler at all. If a
+third-party web page can do it over the same link, the link is not the constraint.
+
+**Change.** Every trigger sender now **publishes into the audio state snapshot** as well as
+sending. Write *through* the mirror, never around it. A guard asserts that every sender does this,
+because one that forgets reintroduces the bug for one effect family only — which is exactly how
+you get a bug report saying "weapon works but resistance doesn't".
+
+*Commits: `Publish test trigger effects into controller state (fw 1.6.58)`,
+`Remove the audio/controller interleave scheduler (fw 1.6.59)`*
+
+---
+
+## 13. Trigger presets must use the simple effect family — ✅ High
+
+**Symptom.** Some preset trigger effects do nothing on some controllers. No error, no partial
+effect: the controller simply ignores the command.
+
+**Root cause.** The DualSense accepts two encodings — a simple family (`0x01` resistance, `0x02`
+weapon, `0x06` vibration) and a zone-packed family (`0x21`/`0x25`/`0x26`). The zone-packed family
+is **silently rejected** by some controllers. Presets were composed with the zone-packed family
+because it is more expressive.
+
+**Why it matters more than it looks.** A silently-rejected command is indistinguishable from a
+firmware bug at the user's end, and it is hardware-dependent, so it reproduces on one desk and not
+another.
+
+**Change.** Presets emit the simple family. The expressive family remains available for
+user-composed effects in Trigger Lab, where the user can see the bytes and tell whether the
+controller took them. `OFF` is `0x05`.
+
+*Commit: `Drive the trigger presets with the simple effect family (fw 1.6.56)`*
+
+---
+
+## 14. Three separate writers fight over the lightbar — ✅ High
+
+**Symptom.** A user's saved lightbar colour reverts to blue after every controller power cycle.
+
+**Root cause.** Three independent writers, and nobody owned the arbitration:
+
+1. the **bridge** applying a hardcoded blue on connect,
+2. the **host** (Windows/Steam) writing its own colour,
+3. the **app** applying the user's saved colour.
+
+The bridge's connect-time write went through the same setter as a user change, so it did not just
+tint the controller — it **overwrote `saved_lightbar_*`**, and the later restore then faithfully
+restored blue. The user's colour was destroyed, not merely hidden.
+
+**Change, in three parts, each a separate bug we found in sequence:**
+- The connect-time write no longer touches the saved values (fw 1.6.53).
+- Reclaiming from the host is bounded to **once per connection** — Windows writing blue is not a
+  "clear", so an unbounded reclaim loop fought the host forever (fw 1.6.54).
+- The override is applied on the **audio path too**, because the state snapshot (see item 12) was
+  leaking the pre-override colour back (fw 1.6.55).
+
+**Policy worth copying:** apply on connect and on change, never continuously. A continuous
+reasserter turns every disagreement with the host into a visible flicker.
+
+*Commits: `Stop the bridge overwriting the saved lightbar colour on connect (fw 1.6.53)` and the
+two that follow it.*
+
+---
+
+## 15. Deleting a link key does not forget a controller — ✅ High
+
+**Symptom.** "Forget" appears to work, and then the controller comes back on its own.
+
+**Root cause.** Deleting the link key removes the *bond*, not the *relationship*. The controller
+still pages the bridge, the bridge still accepts inbound connections, and the pair simply re-pairs.
+There is no such thing as forgetting by deletion alone.
+
+**Change.** A durable `'BLCK'` TLV blacklist, written **before** the key is deleted, so an
+interruption between the two leaves the controller forgotten rather than half-forgotten. It is
+inbound-only — a deliberate pairing window must still be able to re-adopt the controller, or
+"forget" becomes "ban". A destructive command never runs with `throwOnCommandError: false`.
+
+*Commits: `Make forgetting a controller stick: durable blacklist (fw 1.6.39)` and the three that
+follow.*
+
+---
+
+## 16. Controller tester — ✅ Feature
+
+A pop-out window showing everything the controller reports, live. Opened from the Devices page.
+
+![Controller tester](../assets/readme/app-tester.png)
+
+**Why it exists.** Every "my trigger feels wrong" or "my stick drifts" report was unfalsifiable.
+There was no way for a user to distinguish a worn stick from a bad cable from a game not reading
+the input, so every such report became a conversation.
+
+**Two deliberately different visual languages**, because conflating them hides what the hardware
+actually reports:
+- **Digital** controls snap. No transition at all — any easing would invent intermediate states
+  the controller never sent.
+- **Analogue** controls fade in proportion to value, so a sticky trigger or a drifting stick shows
+  up as colour that never fully clears.
+
+Input to the PC is **paused** while the window is open, held as a short lease the window renews
+rather than a flag it sets — if the app is killed, the controller comes back by itself. Without
+that, pressing PS to test it opens Steam over the top of the tester.
+
+Artwork is from **daidr/dualsense-tester** (MIT), attributed in `NOTICE`.
+
+*Commit: `Add the advanced tester window and app-composed trigger effects (fw 1.6.61)`*
+
+---
+
+## 16a. Stick drift measurement — the part worth stealing
+
+![Stick drift measurement](../assets/readme/app-stick-deadzone.png)
+
+**The problem with a deadzone slider.** The bridge applies the deadzone *before* the report
+reaches the app, so with one set the stick reads exactly centre and there is nothing to see. The
+transform is not invertible either — inside the deadzone every position collapses to the same
+zero. The user is setting a number blind and cannot tell whether it worked.
+
+**Three attempts, on real hardware, each producing a confident wrong answer.** This is the part
+worth reading, because the first two look correct:
+
+1. **Measure every sample.** Sweeping a stick and letting it snap back walks it through every
+   position on the way home, and each counted as drift. A healthy pad reported ~14% against a 15%
+   view — it measured its own return journey.
+2. **Gate on stillness.** Fixed that case and not the general one. **Slow movement is locally
+   identical to rest**: a stick eased outward a third of a count per sample shifts an 8-sample
+   window's halves by about one count, which is inside any threshold that still accepts jitter. No
+   windowed classifier can close this. The reading crept back up to 14%.
+3. **Take the measurement from the gesture.** Push the stick past 40% of travel (discards the
+   previous reading), release, and once settled it is measured over a fixed window. Nothing before
+   the push or after the window can affect it.
+
+**Then validate rather than trust**, because each of these produces a plausible number:
+- A reading is judged **as a whole**: across 40 samples the creep that hid in an 8-sample window
+  shifts the halves by seven. A reading that fails is **discarded**, not trimmed — the stick was
+  moving, so there is no measurement in there to rescue.
+- A **frozen feed is the stillest signal there is**, and stillness is what this looks for, so a
+  dropped link would read as the steadiest stick ever measured. The controller's own
+  `sensorTimestamp` rides along; a stopped clock rejects the reading.
+- **A thumb left resting on a "released" stick cannot be caught in one reading at all.** It sits
+  perfectly still and is identical to drift in every sample it produces. What it will not do is
+  land in the same place twice — so it takes **three** readings and uses the **middle** one. Not
+  the worst: the worst hands the whole session to one contaminated reading.
+
+**Known limit, stated plainly:** three readings wrong the same way agree with each other and are
+confidently wrong. Repetition catches inconsistent mistakes, not systematic ones.
+
+*Commits: `Measure stick drift instead of guessing at a deadzone` through
+`Validate the drift measurement instead of trusting it`*
+
+---
+
+## 16b. Stick calibration, including the permanent write — ✅ Feature
+
+![Stick calibration](../assets/readme/app-stick-calibration.png)
+
+Centre and range calibration written to the **controller**, not the bridge. Hardware-verified.
+
+**Protocol** (reverse-engineered; cross-checked against `dualshock-tools/ds4-tools` and
+`martino-vigiani/sense-calibrator`):
+- `SET 0x82 {op, deviceId=1, target}` — op 1 begin, 2 store, 3 sample; target 1 centre, 2 range.
+- `GET 0x83` → `[0x83, deviceId, target, code]` — code 1 open, 2 committed, 3 already-closed.
+- NVS unlock `0x80 {03 02 65 32 40 0C}`, re-lock `{03 01}`.
+
+**Two traps in the BT control channel**, both of which cost us a debugging session:
+- `set_feature_data` **overwrites the last four bytes with a CRC32**, so a payload must carry four
+  bytes of headroom or its tail is destroyed.
+- The reply layout is `[0x83, deviceId, target, code]`. We initially checked `bytes[3] == 0xff`
+  and would have reported every successful store as a failure. **Check the controller's own reply,
+  never assume the step worked.**
+
+There is **no cancel opcode** — a begun session can only be committed. Recovery is commit-then-warn.
+
+**Why the permanent write is gated the way it is.** Writing calibration to the controller's flash
+is irreversible, the sequence is reverse-engineered, and nobody can guarantee it on an arbitrary
+unit. It is behind a dialog that states those risks plainly and requires **typing** `MAKE
+PERMANENT`. A dialog dismissed by reflex has not obtained consent to an unrecoverable write to
+someone else's hardware, and this is the only action in the app that can leave a device unusable.
+Permanent mode is per-run and never sticky, so it cannot be left armed from an earlier session.
+The temporary path does the same thing and reverts on controller reset; users are pointed at it
+first.
+
+*Commits: `Add stick calibration in temporary mode (fw 1.6.65)`,
+`Allow calibration to be written permanently (fw 1.6.66)`*
+
+---
+
+## 17. Trigger Lab on native ranges — ✅ Feature
+
+**Symptom.** Lab effects did not match what the same effect did elsewhere, and some values were
+unreachable.
+
+**Root cause.** The Lab expressed effects as **percentages** and converted them to the
+controller's native ranges on send. The native ranges are not percentages — position is 0–9,
+frequency 0–255 in the zone-packed family but 0–15 in the simple one — so the mapping was lossy in
+both directions and some hardware states could not be expressed at all.
+
+**Change.** The Lab now edits **native ranges directly** and shows the **bytes on the wire**, so
+what you set is what the controller receives.
+
+![Trigger Lab](../assets/readme/app-trigger-lab.png)
+
+**Migration matters here.** Saved profiles hold percentages. They are converted using the
+*firmware's own* conversion functions, ported to TypeScript, rather than re-approximated — so an
+existing profile produces the same bytes it produced before. One subtlety worth flagging: a zone
+level of **0** means "active at zero force", which is different from "inactive". Treating them as
+the same made low-force migrated profiles vanish.
+
+*Commits: `Share one trigger effect editor between the tester and the Lab`,
+`Give the Trigger Lab the tester's native-range controls`*
+
+---
+
+## Process traps that cost us the most
+
+**`ENABLE_COMPANION` defaults OFF.** A build directory configured without it produces firmware
+that boots, blinks, and presents **no USB device at all**. We misdiagnosed this four times as a
+USB or driver fault before checking the build config. `nm` on the `.elf` would have ended it in
+one step. Our local build script now warns when any `build*/CMakeCache.txt` contains
+`ENABLE_COMPANION:BOOL=OFF`.
+
+**Diagnostic scaffolding needs an exit plan.** The instrumentation that found our reconnect crash
+included breadcrumbs on `usbd_edpt_xfer` — which runs for **every HID report and every audio
+packet**, each stamp paying a 64-bit division plus a CRC over six words. It was worth it while the
+question was open. We wrote down the removal steps for each piece *at the time we added it*, and
+removed the two hot ones once their questions were answered. Full inventory:
+[`docs/diagnostic-scaffolding.md`](diagnostic-scaffolding.md).
+
+**Guards must be seen to fail.** Every guard added in this revision was verified by breaking the
+fix and watching the guard trip — not merely by watching it pass. A guard that has never failed is
+not evidence of anything. Two of them were written as source-text assertions specifically so they
+catch a *reordering* that still compiles and still reads correctly.
+
+---
+
+## Fixes we took FROM you
+
+Confirmed present in our tree and fixed here, credited in each commit message. Two were worse in
+our fork than in yours:
+
+| Your fix | In our tree |
+|---|---|
+| Battery bucket midpoint | Had the bug; ours under-reported ~5% across the range |
+| Trigger Lab silencing the other trigger | Had it, **worse** — our re-apply timer re-sent the OFF every interval, so the game's trigger stayed dead |
+| Haptics after classic rumble | Had the bug; `HAPTICS_SELECT` with zero motors left the controller in rumble-emulation mode |
+| Rejected pairing key rollback | Had it, **worse** — our drop and rollback sat in the *same handler*, eight lines apart, cancelling out |
+| DualSense headphone volume | Already had it independently |
+| Stale bridge selection | Not needed — we key on the RP2350 board id, so a changed USB path is matched by identity |
+
+*Generated at companion 1.6.104 / firmware 1.6.68.*
