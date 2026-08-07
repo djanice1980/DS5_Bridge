@@ -27,24 +27,94 @@ export function scopeDomain(deadzonePercent: number): number {
   return SCOPE_STEPS.find((step) => step >= needed) ?? 1;
 }
 
+/**
+ * Samples that must agree before a stick counts as at rest, at the 40ms poll -- about a third of
+ * a second. Long enough to outlast the bounce as a released stick snaps back and overshoots.
+ */
+const STILL_WINDOW = 8;
+
+/**
+ * How far apart those samples may sit and still count as still, in counts of 127.
+ *
+ * This is a SPREAD, not a distance from centre, so a stick resting off-centre still qualifies --
+ * which matters, because a resting offset is exactly what the deadzone has to cover. Set above
+ * ordinary jitter (a few counts) and far below what a stick covers while actually being moved.
+ */
+const STILL_SPREAD = 8 / 127;
+
+/**
+ * How far the window's centre of mass may shift from its first half to its second, in counts.
+ *
+ * Spread alone cannot tell a slow sweep from jitter: a stick creeping back a count per sample
+ * stays within a small spread the whole way, so a healthy pad measured its own return journey.
+ * Jitter oscillates about a point and shifts its halves barely at all; travel moves them apart no
+ * matter how gently it is done.
+ */
+const STILL_TREND = 2 / 127;
+
 export interface StickDrift {
-  /** Furthest from centre the stick has rested, 0..1 of full travel. */
+  /** Furthest from centre the stick has RESTED, 0..1 of full travel. */
   peak: number;
+  /** Whether the stick is currently sitting still, so the UI can say why nothing is counting. */
+  settled: boolean;
+  recent: Array<{ x: number; y: number }>;
 }
 
 export function createDrift(): StickDrift {
-  return { peak: 0 };
+  return { peak: 0, settled: false, recent: [] };
+}
+
+export function resetDrift(drift: StickDrift): void {
+  drift.peak = 0;
+  drift.settled = false;
+  drift.recent = [];
 }
 
 /**
- * Fold one sample into the peak. Mutates, because this runs at the input poll rate.
+ * Fold one sample into the peak, but only while the stick is AT REST. Mutates, because this runs
+ * at the input poll rate.
  *
- * Samples beyond the view are IGNORED, and deliberately so: they are someone moving the stick, not
- * the stick failing to sit still, and folding them in would drive the suggestion toward a deadzone
- * the size of the whole travel. The UI says this, so the rule is not a silent one.
+ * Measuring every sample measured the wrong thing: moving a stick and letting it snap back walks
+ * it through the whole view, and each of those positions counted as drift, so a healthy pad
+ * reported a peak the size of the view. Drift is where a stick SITS when nobody is touching it,
+ * so the stick has to be still before anything counts.
+ *
+ * Samples beyond the view are ignored on top of that, for a thumb resting on a pushed stick: that
+ * is a held position, not a resting one, and counting it would drive the suggestion toward a
+ * deadzone the size of the whole travel. The UI states both rules, so neither is a silent one.
  */
 export function recordDrift(drift: StickDrift, xByte: number, yByte: number, domain: number): void {
-  const magnitude = Math.hypot((xByte - 128) / 127, (yByte - 128) / 127);
+  const x = (xByte - 128) / 127;
+  const y = (yByte - 128) / 127;
+
+  drift.recent.push({ x, y });
+  if (drift.recent.length > STILL_WINDOW) {
+    drift.recent.shift();
+  }
+  if (drift.recent.length < STILL_WINDOW) {
+    drift.settled = false;
+    return;
+  }
+
+  const mean = (samples: Array<{ x: number; y: number }>) => ({
+    x: samples.reduce((total, s) => total + s.x, 0) / samples.length,
+    y: samples.reduce((total, s) => total + s.y, 0) / samples.length
+  });
+
+  const centre = mean(drift.recent);
+  const spread = Math.max(...drift.recent.map((s) => Math.hypot(s.x - centre.x, s.y - centre.y)));
+
+  const half = Math.floor(drift.recent.length / 2);
+  const first = mean(drift.recent.slice(0, half));
+  const second = mean(drift.recent.slice(half));
+  const trend = Math.hypot(second.x - first.x, second.y - first.y);
+
+  drift.settled = spread <= STILL_SPREAD && trend <= STILL_TREND;
+  if (!drift.settled) {
+    return;
+  }
+
+  const magnitude = Math.hypot(x, y);
   if (magnitude > domain) {
     return;
   }
@@ -67,13 +137,15 @@ export function StickDeadzoneScope({
   x,
   y,
   deadzonePercent,
-  peak
+  peak,
+  settled
 }: {
   label: string;
   x: number;
   y: number;
   deadzonePercent: number;
   peak: number;
+  settled: boolean;
 }) {
   const domain = scopeDomain(deadzonePercent);
   const nx = (x - 128) / 127;
@@ -122,6 +194,10 @@ export function StickDeadzoneScope({
       <div className="dzscope-readout">
         <span className="dzscope-label">{label}</span>
         <span className="tester-mono">peak {(peak * 100).toFixed(1)}%</span>
+        {/* Says WHY nothing is accumulating, so a moving stick does not look like a broken one. */}
+        <span className={`dzscope-state${settled ? ' is-settled' : ''}`}>
+          {settled ? 'measuring' : 'moving — not counting'}
+        </span>
         <span className="dzscope-view">view &plusmn;{Math.round(domain * 100)}%</span>
       </div>
     </div>

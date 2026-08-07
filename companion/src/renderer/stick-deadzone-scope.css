@@ -68,6 +68,15 @@
   color: var(--text-muted, #8fa3bb);
 }
 
+.dzscope-state {
+  font-size: 11px;
+  color: #f97316;
+}
+
+.dzscope-state.is-settled {
+  color: #4ade80;
+}
+
 .dzscope-view {
   color: var(--text-muted, #8fa3bb);
   opacity: 0.75;

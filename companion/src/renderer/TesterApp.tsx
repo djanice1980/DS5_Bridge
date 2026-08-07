@@ -8,6 +8,7 @@ import {
   StickDeadzoneScope,
   createDrift,
   recordDrift,
+  resetDrift,
   scopeDomain,
   suggestedDeadzonePercent,
   type StickDrift
@@ -554,10 +555,12 @@ export function TesterApp() {
             <>
               <p className="tester-subtle">
                 Deadzone is off while you tune, so the sticks read exactly what they really do.
-                Let go of them: the dot is live, the ring is the furthest either has wandered, and
-                the shaded disc is the deadzone you are about to set. Raise it until the ring sits
-                inside the disc and turns green. The view is zoomed &mdash; a stick pushed past it
-                pins at the rim in orange and is not counted as drift.
+                Sweep them around and let them snap back &mdash; nothing counts until a stick is
+                sitting still, because drift is where a stick RESTS, not where it passes through.
+                The ring is the furthest either has settled, and the shaded disc is the deadzone
+                you are about to set. Raise it until the ring sits inside the disc and turns green.
+                The view is zoomed &mdash; a stick held past it pins at the rim in orange and is
+                not counted either.
               </p>
               <div className="tester-dzscopes" data-tick={driftTick}>
                 <StickDeadzoneScope
@@ -566,6 +569,7 @@ export function TesterApp() {
                   y={state?.leftStickY ?? 128}
                   deadzonePercent={dzPreview.left}
                   peak={driftLeft.current.peak}
+                  settled={driftLeft.current.settled}
                 />
                 <StickDeadzoneScope
                   label="Right"
@@ -573,6 +577,7 @@ export function TesterApp() {
                   y={state?.rightStickY ?? 128}
                   deadzonePercent={dzPreview.right}
                   peak={driftRight.current.peak}
+                  settled={driftRight.current.settled}
                 />
               </div>
               <div className="tester-deadzone">
@@ -597,6 +602,17 @@ export function TesterApp() {
                 )}
               </div>
               <div className="tester-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => {
+                    resetDrift(driftLeft.current);
+                    resetDrift(driftRight.current);
+                    setDriftTick((tick) => tick + 1);
+                  }}
+                >
+                  Reset peaks
+                </button>
                 <button
                   type="button"
                   className="secondary"
