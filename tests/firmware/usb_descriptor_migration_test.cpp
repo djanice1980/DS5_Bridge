@@ -863,6 +863,16 @@ void assert_raw_trigger_effect_goes_through_the_persistent_system(std::filesyste
             "and the slider appears dead"
         );
     }
+
+    // Both triggers go out in one report and an inactive side is sent explicitly OFF, so a side
+    // the Lab has not claimed has to carry the GAME's cached effect. Without this, overriding one
+    // trigger cancels the other, and the re-apply timer keeps cancelling it.
+    if (reapply.find("build_scaled_cached_game_trigger_effect(") == std::string::npos) {
+        throw std::runtime_error(
+            "The persistent re-apply must fill an unclaimed trigger from the cached game effect, "
+            "or a Lab override on one trigger silences the other for as long as it stands"
+        );
+    }
 }
 
 // The auth-to-encryption span used to be bounded by securing_started_us, a timer that meant

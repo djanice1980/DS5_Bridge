@@ -1457,12 +1457,48 @@ void apply_persistent_trigger_effect(bool force = false) {
     uint8_t left_bytes[kTriggerEffectSize]{};
     persistent_trigger_effect_bytes(persistent_trigger_effect_right, right_bytes);
     persistent_trigger_effect_bytes(persistent_trigger_effect_left, left_bytes);
-    bt_set_raw_adaptive_trigger_effects(
-        right_bytes,
-        persistent_trigger_effect_right.active,
-        left_bytes,
-        persistent_trigger_effect_left.active
-    );
+    bool right_active = persistent_trigger_effect_right.active;
+    bool left_active = persistent_trigger_effect_left.active;
+
+    /**
+     * A trigger the Lab has NOT claimed carries the game's effect, not silence.
+     *
+     * Both sides go out in one report and an inactive side is sent explicitly OFF, so overriding
+     * one trigger used to cancel whatever the game was doing on the other -- and the re-apply
+     * timer kept cancelling it, so it never came back while the override stood.
+     *
+     * Composed in one packet rather than sent-then-restored: a second packet leaves a window
+     * where the trigger really is off, and this function already exists to put both sides down a
+     * single path. The cached game bytes come back through the same scaling the game's own output
+     * gets, so an overridden trigger does not change how the other one feels.
+     */
+    if (!right_active || !left_active) {
+        uint8_t game_right[kTriggerEffectSize]{};
+        uint8_t game_left[kTriggerEffectSize]{};
+        bool game_right_valid = false;
+        bool game_left_valid = false;
+        uint8_t game_motor_power = 0;
+        bool game_motor_power_valid = false;
+        if (build_scaled_cached_game_trigger_effect(
+            game_right,
+            game_right_valid,
+            game_left,
+            game_left_valid,
+            game_motor_power,
+            game_motor_power_valid
+        )) {
+            if (!right_active && game_right_valid) {
+                memcpy(right_bytes, game_right, kTriggerEffectSize);
+                right_active = true;
+            }
+            if (!left_active && game_left_valid) {
+                memcpy(left_bytes, game_left, kTriggerEffectSize);
+                left_active = true;
+            }
+        }
+    }
+
+    bt_set_raw_adaptive_trigger_effects(right_bytes, right_active, left_bytes, left_active);
     persistent_trigger_effect_last_apply_us = now;
 }
 
