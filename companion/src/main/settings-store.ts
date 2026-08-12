@@ -1069,6 +1069,7 @@ export class SettingsStore {
   private readonly filePath: string;
   private settings: CompanionSettings;
   private customSettings: CompanionSettings;
+  private loadWarning: string | null = null;
 
   constructor(public readonly userDataPath: string) {
     this.filePath = path.join(userDataPath, 'settings.json');
@@ -1328,20 +1329,59 @@ export class SettingsStore {
   }
 
   private read(): { settings: CompanionSettings; customSettings: CompanionSettings } {
+    // Try the live file, then the backup. A truncated settings.json used to fall straight
+    // through to defaults, and the next update() wrote those defaults back over the file --
+    // every profile, binding, remap and chord gone, with nothing in the UI to say so.
+    const sources: Array<{ path: string; isBackup: boolean }> = [
+      { path: this.filePath, isBackup: false },
+      { path: `${this.filePath}.bak`, isBackup: true }
+    ];
+
+    let firstFailure: unknown = null;
+    for (const source of sources) {
+      if (!fs.existsSync(source.path)) {
+        continue;
+      }
+      try {
+        const raw = fs.readFileSync(source.path, 'utf8');
+        const parsed = migratePersistedSettings(JSON.parse(raw) as PersistedSettings);
+        const settings = normalizeSettings(parsed);
+        const fallbackCustom = settings.selectedPresetId === 'custom' ? settings : DEFAULT_SETTINGS;
+        if (source.isBackup) {
+          this.loadWarning = `${path.basename(this.filePath)} was unreadable and settings were recovered from the backup.`;
+          console.warn(`[settings-store] recovered from ${source.path}:`, firstFailure);
+        }
+        return {
+          settings,
+          customSettings: customSettingsFrom(parsed.customProfile ?? fallbackCustom)
+        };
+      } catch (error) {
+        firstFailure ??= error;
+      }
+    }
+
+    if (firstFailure !== null) {
+      // Keep the corrupt file instead of overwriting it, so it can still be recovered by hand.
+      this.preserveCorruptFile(firstFailure);
+    }
+    return {
+      settings: cloneSettings(DEFAULT_SETTINGS),
+      customSettings: customSettingsFrom(DEFAULT_SETTINGS)
+    };
+  }
+
+  private preserveCorruptFile(error: unknown): void {
     try {
-      const raw = fs.readFileSync(this.filePath, 'utf8');
-      const parsed = migratePersistedSettings(JSON.parse(raw) as PersistedSettings);
-      const settings = normalizeSettings(parsed);
-      const fallbackCustom = settings.selectedPresetId === 'custom' ? settings : DEFAULT_SETTINGS;
-      return {
-        settings,
-        customSettings: customSettingsFrom(parsed.customProfile ?? fallbackCustom)
-      };
-    } catch {
-      return {
-        settings: cloneSettings(DEFAULT_SETTINGS),
-        customSettings: customSettingsFrom(DEFAULT_SETTINGS)
-      };
+      if (!fs.existsSync(this.filePath)) {
+        return;
+      }
+      const quarantinePath = `${this.filePath}.corrupt`;
+      fs.copyFileSync(this.filePath, quarantinePath);
+      this.loadWarning = `${path.basename(this.filePath)} could not be read and defaults were loaded. `
+        + `The unreadable file was kept as ${path.basename(quarantinePath)}.`;
+      console.error(`[settings-store] ${this.filePath} unreadable, kept copy at ${quarantinePath}:`, error);
+    } catch (copyError) {
+      console.error('[settings-store] failed to preserve the unreadable settings file:', copyError);
     }
   }
 
@@ -1366,13 +1406,49 @@ export class SettingsStore {
     return `Custom Profile ${index}`;
   }
 
+  // Atomic: write a temp file, flush it to disk, then rename over the target. A rename within
+  // a directory is atomic, so a crash or power loss leaves either the old file or the new one
+  // -- never the truncated half that used to cost the user every profile they had.
   private write(): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, `${JSON.stringify({
+    const payload = `${JSON.stringify({
       settingsSchemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION,
       ...this.settings,
       customProfile: this.customSettings
-    }, null, 2)}\n`, 'utf8');
+    }, null, 2)}\n`;
+
+    const tempPath = `${this.filePath}.tmp`;
+    let handle: number | null = null;
+    try {
+      handle = fs.openSync(tempPath, 'w');
+      fs.writeFileSync(handle, payload, 'utf8');
+      // Rename only orders the directory entry; without fsync the file's contents can still be
+      // lost on power failure, leaving a correctly-named empty file.
+      fs.fsyncSync(handle);
+    } finally {
+      if (handle !== null) {
+        fs.closeSync(handle);
+      }
+    }
+
+    // Keep the last good copy so a failure that survives the rename is still recoverable.
+    try {
+      if (fs.existsSync(this.filePath)) {
+        fs.copyFileSync(this.filePath, `${this.filePath}.bak`);
+      }
+    } catch (error) {
+      console.warn('[settings-store] could not refresh the settings backup:', error);
+    }
+
+    fs.renameSync(tempPath, this.filePath);
+  }
+
+  /** Set when settings could not be loaded normally, so the UI can say so instead of silently
+   *  presenting defaults as if they were the user's saved setup. Cleared once acknowledged. */
+  takeLoadWarning(): string | null {
+    const warning = this.loadWarning;
+    this.loadWarning = null;
+    return warning;
   }
 }
 

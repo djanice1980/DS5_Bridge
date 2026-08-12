@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -542,5 +542,58 @@ describe('SettingsStore', () => {
     expect(updated.uiThemePreset).toBe('kiwi');
     expect(persistedSettings(userDataPath).uiThemePreset).toBe('kiwi');
     expect(new SettingsStore(userDataPath).get().uiThemePreset).toBe('kiwi');
+  });
+
+  describe('durability', () => {
+    it('recovers the previous settings when settings.json is truncated', () => {
+      const userDataPath = tempUserDataPath();
+      const store = new SettingsStore(userDataPath);
+      store.update({ uiThemePreset: 'kiwi' });
+      // A second write is what promotes the first payload into the backup.
+      store.update({ speakerVolumePercent: 42 });
+
+      // Simulate a crash mid-write: the file exists but is not valid JSON.
+      writeFileSync(path.join(userDataPath, 'settings.json'), '{"uiThemePreset": "ki', 'utf8');
+
+      const reopened = new SettingsStore(userDataPath);
+
+      expect(reopened.get().uiThemePreset).toBe('kiwi');
+      expect(reopened.takeLoadWarning()).toMatch(/backup/i);
+    });
+
+    it('keeps the unreadable file instead of overwriting it when there is no backup', () => {
+      const userDataPath = tempUserDataPath();
+      writeFileSync(path.join(userDataPath, 'settings.json'), 'not json at all', 'utf8');
+
+      const store = new SettingsStore(userDataPath);
+
+      expect(store.get().uiThemePreset).toBe(DEFAULT_SETTINGS.uiThemePreset);
+      expect(store.takeLoadWarning()).toMatch(/could not be read/i);
+      expect(readFileSync(path.join(userDataPath, 'settings.json.corrupt'), 'utf8')).toBe('not json at all');
+    });
+
+    it('reports a load warning only once', () => {
+      const userDataPath = tempUserDataPath();
+      writeFileSync(path.join(userDataPath, 'settings.json'), 'not json at all', 'utf8');
+
+      const store = new SettingsStore(userDataPath);
+
+      expect(store.takeLoadWarning()).not.toBeNull();
+      expect(store.takeLoadWarning()).toBeNull();
+    });
+
+    it('leaves no temp file behind after a write', () => {
+      const userDataPath = tempUserDataPath();
+      new SettingsStore(userDataPath).update({ uiThemePreset: 'kiwi' });
+
+      expect(existsSync(path.join(userDataPath, 'settings.json.tmp'))).toBe(false);
+    });
+
+    it('does not warn on a first run with no settings file', () => {
+      const store = new SettingsStore(tempUserDataPath());
+
+      expect(store.takeLoadWarning()).toBeNull();
+      expect(store.get().uiThemePreset).toBe(DEFAULT_SETTINGS.uiThemePreset);
+    });
   });
 });
