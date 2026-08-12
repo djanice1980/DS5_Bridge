@@ -28,7 +28,7 @@ static class LinuxProgram
             }
             if (options.CompanionTransport)
             {
-                return await LinuxCompanionTransportServer.RunAsync();
+                return await LinuxCompanionTransportServer.RunAsync(options.DevicePath);
             }
             if (options.PlayTestTone)
             {
@@ -48,6 +48,10 @@ static class LinuxProgram
             {
                 LinuxEndpointManager.ListDevices();
                 return 0;
+            }
+            if (options.ListBridges)
+            {
+                return LinuxBridgeCensus.Run();
             }
             if (options.DefaultRenderStatus)
             {
@@ -102,6 +106,8 @@ sealed class LinuxHelperOptions
     public bool PlayTestHaptics;
     public bool MonitorAudioSessions;
     public bool ListDevices;
+    public bool ListBridges;
+    public string? DevicePath;
     public bool DefaultRenderStatus;
     public bool SetDefaultRenderBridge;
     public bool MicKeepaliveOnly;
@@ -151,6 +157,17 @@ sealed class LinuxHelperOptions
                     break;
                 case "--list-devices":
                     options.ListDevices = true;
+                    break;
+                case "--list-bridges":
+                    options.ListBridges = true;
+                    break;
+                case "--device-path":
+                    options.DevicePath = NextValue(args, ref index);
+                    break;
+                case "--bridge-container":
+                    // Accepted and ignored: the Windows census keys bridges by container id,
+                    // where the Linux census uses the USB port path as both path and container.
+                    _ = NextValue(args, ref index);
                     break;
                 case "--default-render-status":
                     options.DefaultRenderStatus = true;

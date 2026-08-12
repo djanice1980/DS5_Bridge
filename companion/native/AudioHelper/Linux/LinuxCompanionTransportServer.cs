@@ -7,12 +7,12 @@ static class LinuxCompanionTransportServer
 {
     private const int ReportBytes = 64;
 
-    public static async Task<int> RunAsync()
+    public static async Task<int> RunAsync(string? preferredDevicePath = null)
     {
         LinuxUsbBridgeTransport transport;
         try
         {
-            transport = LinuxUsbBridgeTransport.Open();
+            transport = LinuxUsbBridgeTransport.Open(preferredDevicePath);
         }
         catch (Exception error)
         {
