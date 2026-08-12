@@ -88,6 +88,25 @@ jobs:
         working-directory: companion
         run: npm run test:companion
 
+      # The Linux backends (PipeWire, libusb, uinput) only exist in the net9.0 build, so this
+      # job is the only place their tests can run at all.
+      - name: Test Linux audio helper
+        working-directory: companion
+        run: npm run test:native
+
+      # Host-compiled firmware logic tests; no ARM toolchain needed.
+      - name: Install firmware test toolchain
+        run: |
+          sudo apt update
+          sudo apt install -y cmake ninja-build
+
+      - name: Test firmware logic
+        working-directory: companion
+        run: npm run test:firmware
+
+      - name: Check firmware version is in sync
+        run: node tools/check-firmware-version-sync.mjs
+
       - name: Build companion
         working-directory: companion
         run: npm run build:app
