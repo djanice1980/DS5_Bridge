@@ -1,11 +1,34 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <!-- Mirrors AudioHelper.csproj: the -windows TFM cannot be restored off Windows, so a
+         Linux host builds and runs the net9.0 half. Before this the whole test project was
+         Windows-only, which meant the Linux backends (PipeWire, libusb, uinput) had no unit
+         coverage on any CI job: the largest body of port-specific code in the repo. -->
+    <TargetFrameworks>net9.0-windows10.0.19041.0;net9.0</TargetFrameworks>
+    <TargetFrameworks Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net9.0</TargetFrameworks>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <IsWindowsTarget>$(TargetFramework.Contains('-windows'))</IsWindowsTarget>
   </PropertyGroup>
+
+  <!-- Tests that exercise Windows-only sources (WASAPI, WinUSB, WinRT, Shell). Those sources
+       are removed from the net9.0 build of AudioHelper, so their tests cannot compile there. -->
+  <ItemGroup Condition="'$(IsWindowsTarget)' != 'True'">
+    <Compile Remove="AudioHelperTestHapticsTests.cs" />
+    <Compile Remove="BulkPcmFrameParserTests.cs" />
+    <Compile Remove="EndpointManagerTests.cs" />
+    <Compile Remove="LegacyFramePacketizerTests.cs" />
+    <Compile Remove="PackageAppMetadataResolverTests.cs" />
+    <Compile Remove="ProcessIconDataUrlResolverTests.cs" />
+    <Compile Remove="WinUsbBridgeTransportPathTests.cs" />
+  </ItemGroup>
+
+  <!-- Linux-only tests. -->
+  <ItemGroup Condition="'$(IsWindowsTarget)' == 'True'">
+    <Compile Remove="Linux\**\*.cs" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />

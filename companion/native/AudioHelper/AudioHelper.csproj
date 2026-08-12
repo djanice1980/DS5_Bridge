@@ -64,6 +64,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="AudioHelper.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="..\..\src\renderer\assets\test-speaker-tone-silence-tail.mp3">
       <Link>test-speaker-tone-silence-tail.mp3</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

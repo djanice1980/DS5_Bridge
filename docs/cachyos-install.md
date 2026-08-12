@@ -65,6 +65,24 @@ Manual fallback (what the script does): copy `60-ds5bridge.rules` to
 trigger`, and ensure `uinput` is loaded
 (`echo uinput | sudo tee /etc/modules-load.d/ds5bridge-uinput.conf`).
 
+### What the uinput rule grants
+
+Worth knowing before you install it. Chord shortcuts work by typing on a virtual
+keyboard, which needs write access to `/dev/uinput`. The rule tags that node with
+`uaccess`, so **every locally logged-in user gets read/write access to it** — and
+`/dev/uinput` is system-wide synthetic keyboard and mouse input. Any program
+running as your user can then inject keystrokes and clicks into any application,
+not just DS5 Bridge.
+
+`/dev/uinput` is a single device node with no per-application permissions, so
+there is no narrower rule that still lets chords work without running the app as
+root. It is the same trade every userspace remapper on Linux makes.
+
+If you would rather not grant it, delete the `KERNEL=="uinput"` line from
+`60-ds5bridge.rules` and reload udev. Everything except chord shortcuts keeps
+working — the bridge, audio, haptics, triggers, lighting and profiles are all
+unaffected.
+
 ## 3. Flash firmware and pair (same as Windows)
 
 1. Hold `BOOTSEL` on the Pico 2 W, plug it in, and copy the release
@@ -155,6 +173,21 @@ Otherwise just use the CI-built packages from Releases.
 
 - **"No bridge detected"** — udev rules not applied: re-run step 2, replug the
   bridge, and check `lsusb` lists `054c:0ce6` (or the active persona's id).
+
+  **If `lsusb` shows `054c:0ce7`, the bridge is working and simply has no
+  controller connected yet.** That is the companion-only ("idle") enumeration:
+  one vendor interface, no gamepad, no audio. Rules and companion builds from
+  before this release did not cover `0ce7`, so an idle bridge was invisible to
+  the app until a controller connected — which is a problem precisely when you
+  have not paired one yet. Update the app and reinstall the udev rules (step 2),
+  then replug. You can confirm the rule took effect with:
+
+  ```bash
+  getfacl -p /dev/bus/usb/$(lsusb | sed -n 's/^Bus \([0-9]*\) Device \([0-9]*\).*054c:0ce7.*/\1\/\2/p')
+  ```
+
+  Your user should appear in the ACL. If the output is only `root`, the rules
+  have not been reloaded yet.
 - **Test Speaker errors mentioning MP3** — the tone decoder needs
   libsndfile with mpg123 support (CachyOS ships it; on minimal installs run
   `sudo pacman -S libsndfile mpg123`).

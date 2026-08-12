@@ -15,6 +15,13 @@ SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="0df2", TAG+="uaccess
 SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="09cc", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="db05", TAG+="uaccess"
 
+# Companion-only ("idle") enumeration: with no controller connected the bridge presents just
+# the vendor interface under its own product id (HOST_BRIDGE_IDLE_PRODUCT_ID, 0x0ce7). It has
+# no HID interface at all, so libusb is the ONLY way to reach it -- and reaching it with no
+# controller attached is exactly when Pair and Forget are needed. Without this rule the device
+# node stays root-only and the app reports no bridge at all.
+SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="0ce7", TAG+="uaccess"
+
 # "Touchpad as mouse" toggle: let the companion grab the DualSense touchpad's input
 # event node (EVIOCGRAB) so it can stop the touchpad from acting as a system mouse.
 # Sony personas only (they have a touchpad); the xusb360 persona has none.
@@ -30,9 +37,22 @@ ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="0df2"
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="054c", ATTR{idProduct}=="09cc", ATTR{power/wakeup}="enabled"
 
 # Chord key injection (virtual keyboard).
+#
+# NOTE: this grants every locally logged-in user read/write access to /dev/uinput, which is
+# system-wide synthetic keyboard and mouse input -- not scoped to DS5 Bridge. Any process
+# running as that user can inject input into any application. uinput is a single node with no
+# per-application granularity, so there is no narrower rule that still allows chords without
+# root. If that trade is not one you want, delete this line: everything except chord shortcuts
+# keeps working. See docs/cachyos-install.md.
 KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
 
 # Xbox 360 persona uses a pid.codes identity that the xpad driver does not
 # know; teach it on hotplug so the gamepad works in that mode.
+#
+# kmod is udev's own builtin. Spawning `modprobe` from RUN+= is explicitly discouraged --
+# udev serialises RUN programs and a module load that blocks can stall event processing --
+# and the builtin does the same job without a shell.
 ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="db05", \
-  RUN+="/bin/sh -c 'modprobe xpad 2>/dev/null; echo 1209 db05 > /sys/bus/usb/drivers/xpad/new_id 2>/dev/null || true'"
+  RUN{builtin}+="kmod load xpad"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1209", ATTR{idProduct}=="db05", \
+  RUN+="/bin/sh -c 'echo 1209 db05 > /sys/bus/usb/drivers/xpad/new_id 2>/dev/null || true'"
