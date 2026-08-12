@@ -111,7 +111,7 @@
     "linux": {
       "icon": "../assets/icons",
       "category": "Game",
-      "maintainer": "SundayMoments <sundaymoments@users.noreply.github.com>",
+      "maintainer": "djanice1980 <djanice1980@gmail.com>",
       "synopsis": "Companion app for the DS5 Bridge Pico dongle",
       "artifactName": "DS5-Bridge-Companion-${version}-linux-${arch}.${ext}",
       "executableName": "ds5-bridge",

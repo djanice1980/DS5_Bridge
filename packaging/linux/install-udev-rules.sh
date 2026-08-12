@@ -20,6 +20,19 @@ WP_CONF_DIR="${DS5_WIREPLUMBER_DIR:-/etc/wireplumber/wireplumber.conf.d}"
 MODULES_DIR="${DS5_MODULES_LOAD_DIR:-/etc/modules-load.d}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Extraction scratch space. find_bundled has to return a path that stays valid until the
+# caller has copied the file, so it cannot clean up before returning -- which previously meant
+# every run of this script left an extracted AppImage tree behind in /tmp. Clean up on exit
+# instead, however the script ends.
+EXTRACT_DIRS=()
+cleanup_extract_dirs() {
+  local dir
+  for dir in ${EXTRACT_DIRS+"${EXTRACT_DIRS[@]}"}; do
+    [ -n "$dir" ] && rm -rf "$dir"
+  done
+}
+trap cleanup_extract_dirs EXIT
+
 if [ -z "${DS5_UDEV_RULES_DIR:-}" ] && [ "$(id -u)" -ne 0 ]; then
   echo "Run this with sudo: sudo bash $(basename "${BASH_SOURCE[0]}")" >&2
   exit 1
@@ -38,6 +51,7 @@ find_bundled() {
   if [ -n "$appimage" ]; then
     local extract_dir
     extract_dir=$(mktemp -d)
+    EXTRACT_DIRS+=("$extract_dir")
     (
       cd "$extract_dir"
       chmod +x "$appimage" 2>/dev/null || true
@@ -47,7 +61,6 @@ find_bundled() {
       echo "$extract_dir/squashfs-root/resources/$appimage_subdir/$name"
       return 0
     fi
-    rm -rf "$extract_dir"
   fi
   return 1
 }
