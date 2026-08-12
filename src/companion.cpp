@@ -29,9 +29,11 @@ constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
 constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
-constexpr uint8_t kFirmwareMajor = 1;
-constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 68;
+// From CMake (DS5_BRIDGE_VERSION_* in CMakeLists.txt) -- deliberately no #ifdef fallback, so
+// a build that loses the defines fails to compile instead of reporting a stale version.
+constexpr uint8_t kFirmwareMajor = DS5_BRIDGE_VERSION_MAJOR;
+constexpr uint8_t kFirmwareMinor = DS5_BRIDGE_VERSION_MINOR;
+constexpr uint8_t kFirmwarePatch = DS5_BRIDGE_VERSION_PATCH;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
