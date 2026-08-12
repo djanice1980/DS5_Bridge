@@ -21,13 +21,16 @@ function Read-JsonFile([string] $Path) {
   return Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
 }
 
-function Read-FirmwareVersion([string] $CompanionSourcePath) {
-  $source = Get-Content -LiteralPath $CompanionSourcePath -Raw
-  $major = [regex]::Match($source, 'kFirmwareMajor\s*=\s*(\d+)')
-  $minor = [regex]::Match($source, 'kFirmwareMinor\s*=\s*(\d+)')
-  $patch = [regex]::Match($source, 'kFirmwarePatch\s*=\s*(\d+)')
+function Read-FirmwareVersion([string] $CMakeListsPath) {
+  # The version is defined once, as the DS5_BRIDGE_VERSION_* set() lines in CMakeLists.txt.
+  # companion.cpp used to carry its own hardcoded copy of these numbers -- which this script
+  # read -- and that copy going stale is how firmware 1.6.69 reported itself as 1.6.68.
+  $source = Get-Content -LiteralPath $CMakeListsPath -Raw
+  $major = [regex]::Match($source, 'set\(DS5_BRIDGE_VERSION_MAJOR\s+(\d+)\)')
+  $minor = [regex]::Match($source, 'set\(DS5_BRIDGE_VERSION_MINOR\s+(\d+)\)')
+  $patch = [regex]::Match($source, 'set\(DS5_BRIDGE_VERSION_PATCH\s+(\d+)\)')
   if (-not ($major.Success -and $minor.Success -and $patch.Success)) {
-    throw "Unable to read firmware version from $CompanionSourcePath"
+    throw "Unable to read firmware version from $CMakeListsPath"
   }
   return "$($major.Groups[1].Value).$($minor.Groups[1].Value).$($patch.Groups[1].Value)"
 }
@@ -115,7 +118,7 @@ $installerDir = Join-Path $companionRoot 'artifacts/installer'
 $portableArtifactsDir = Join-Path $companionRoot 'artifacts'
 $companionPackage = Read-JsonFile (Join-Path $companionRoot 'package.json')
 $companionVersion = [string] $companionPackage.version
-$firmwareVersion = Read-FirmwareVersion (Join-Path $repoRoot 'src/companion.cpp')
+$firmwareVersion = Read-FirmwareVersion (Join-Path $repoRoot 'CMakeLists.txt')
 $bundledFirmwareVersion = Read-BundledFirmwareVersion (Join-Path $companionRoot 'src/main/bridge-service.ts')
 $stamp = Get-Date -Format 'yyyy-MM-dd_HH-mm-ss'
 $labelSuffix = if ([string]::IsNullOrWhiteSpace($Label)) { '' } else { " $($Label.Trim())" }
@@ -137,6 +140,7 @@ if ($ValidateOnly) {
     (Join-Path $repoRoot 'LICENSE'),
     (Join-Path $repoRoot 'NOTICE'),
     (Join-Path $companionRoot 'package.json'),
+    (Join-Path $repoRoot 'CMakeLists.txt'),
     (Join-Path $repoRoot 'src/companion.cpp')
   )
   foreach ($requiredFile in $requiredFiles) {
