@@ -14,6 +14,7 @@
 #include "controller_packet_compositor.h"
 #include "dualsense_input_decoder.h"
 #include "dualsense_output.h"
+#include "feature_report_cache.h"
 #include "haptics_test_signal.h"
 #include "persona/ds4_persona.h"
 #include "persona/dualsense_persona.h"
@@ -1212,6 +1213,90 @@ void ds4_feature_reports_cover_native_probe_surface() {
     EXPECT_EQ(feature[4], 0x00);
 }
 
+// --- feature report cache ------------------------------------------------------------------
+// The cache replaced an unordered_map<uint8_t, vector<uint8_t>> that allocated inside the
+// L2CAP receive callback. These tests pin the map behaviours the firmware relied on: the
+// 32-entry cap with silent drop, overwrite-in-place, the contains/empty split, and
+// clear-on-disconnect.
+
+void feature_cache_stores_and_reads_back() {
+    feature_report_cache_clear();
+    const uint8_t payload[] = {0x05, 0xAA, 0xBB, 0xCC};
+    EXPECT_TRUE(feature_report_cache_store(0x05, payload, sizeof(payload)));
+    EXPECT_TRUE(feature_report_cache_contains(0x05));
+
+    uint8_t out[8] = {};
+    EXPECT_EQ(feature_report_cache_read(0x05, out, sizeof(out)), 4);
+    EXPECT_EQ(out[0], 0x05);
+    EXPECT_EQ(out[3], 0xCC);
+    // Small capacity copies a prefix, exactly the min() the callers apply.
+    EXPECT_EQ(feature_report_cache_read(0x05, out, 2), 2);
+}
+
+void feature_cache_overwrites_in_place() {
+    feature_report_cache_clear();
+    const uint8_t first[] = {0x20, 1, 2, 3, 4, 5};
+    const uint8_t second[] = {0x20, 9};
+    EXPECT_TRUE(feature_report_cache_store(0x20, first, sizeof(first)));
+    EXPECT_TRUE(feature_report_cache_store(0x20, second, sizeof(second)));
+
+    uint8_t out[8] = {};
+    // The shorter payload replaces the longer one; no stale tail.
+    EXPECT_EQ(feature_report_cache_read(0x20, out, sizeof(out)), 2);
+    EXPECT_EQ(out[1], 9);
+}
+
+void feature_cache_enforces_the_32_entry_cap() {
+    feature_report_cache_clear();
+    const uint8_t payload[] = {0xEE};
+    for (int id = 0; id < 32; id++) {
+        EXPECT_TRUE(feature_report_cache_store(static_cast<uint8_t>(id), payload, 1));
+    }
+    // A 33rd new id is dropped -- the map's cap, preserved.
+    EXPECT_FALSE(feature_report_cache_store(32, payload, 1));
+    EXPECT_FALSE(feature_report_cache_contains(32));
+    // But existing ids stay writable at the cap.
+    const uint8_t update[] = {0xDD, 0x01};
+    EXPECT_TRUE(feature_report_cache_store(7, update, 2));
+    uint8_t out[4] = {};
+    EXPECT_EQ(feature_report_cache_read(7, out, sizeof(out)), 2);
+    EXPECT_EQ(out[0], 0xDD);
+}
+
+void feature_cache_distinguishes_empty_from_absent() {
+    feature_report_cache_clear();
+    // A zero-length store still marks the id cached: get_feature_data() uses contains() to
+    // suppress duplicate requests, while the report read path treats 0 bytes as no data.
+    EXPECT_TRUE(feature_report_cache_store(0x63, nullptr, 0));
+    EXPECT_TRUE(feature_report_cache_contains(0x63));
+    uint8_t out[4] = {};
+    EXPECT_EQ(feature_report_cache_read(0x63, out, sizeof(out)), 0);
+    EXPECT_FALSE(feature_report_cache_contains(0x64));
+}
+
+void feature_cache_clears_on_disconnect() {
+    feature_report_cache_clear();
+    const uint8_t payload[] = {0x09, 0x12};
+    EXPECT_TRUE(feature_report_cache_store(0x09, payload, sizeof(payload)));
+    feature_report_cache_clear();
+    EXPECT_FALSE(feature_report_cache_contains(0x09));
+    uint8_t out[4] = {};
+    EXPECT_EQ(feature_report_cache_read(0x09, out, sizeof(out)), 0);
+}
+
+void feature_cache_truncates_at_slot_capacity() {
+    feature_report_cache_clear();
+    uint8_t big[kFeatureReportCacheSlotBytes + 40];
+    for (size_t index = 0; index < sizeof(big); index++) {
+        big[index] = static_cast<uint8_t>(index);
+    }
+    EXPECT_TRUE(feature_report_cache_store(0x22, big, sizeof(big)));
+    static uint8_t out[kFeatureReportCacheSlotBytes + 40];
+    EXPECT_EQ(feature_report_cache_read(0x22, out, sizeof(out)), kFeatureReportCacheSlotBytes);
+    EXPECT_EQ(out[kFeatureReportCacheSlotBytes - 1],
+        static_cast<uint8_t>(kFeatureReportCacheSlotBytes - 1));
+}
+
 struct TestCase {
     char const *name;
     void (*run)();
@@ -1252,6 +1337,12 @@ std::vector<TestCase> tests{
     {"ds4 persona maps standard gamepad fields", ds4_persona_maps_standard_gamepad_fields},
     {"ds4 output decodes to ds5 rumble and lightbar payload", ds4_output_decodes_to_ds5_rumble_and_lightbar_payload},
     {"dualsense persona feature reports cover identity probe surface", dualsense_persona_feature_reports_cover_identity_probe_surface},
+    {"feature cache stores and reads back", feature_cache_stores_and_reads_back},
+    {"feature cache overwrites in place", feature_cache_overwrites_in_place},
+    {"feature cache enforces the 32-entry cap", feature_cache_enforces_the_32_entry_cap},
+    {"feature cache distinguishes empty from absent", feature_cache_distinguishes_empty_from_absent},
+    {"feature cache clears on disconnect", feature_cache_clears_on_disconnect},
+    {"feature cache truncates at slot capacity", feature_cache_truncates_at_slot_capacity},
     {"ds4 feature reports cover native probe surface", ds4_feature_reports_cover_native_probe_surface},
 };
 

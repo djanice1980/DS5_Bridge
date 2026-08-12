@@ -1151,7 +1151,10 @@ export const WATCHDOG_PHASE_NAMES: Record<number, string> = {
   // still decodes to what it meant, rather than surfacing as a bare number.
   28: 'send/claim',
   29: 'send/xfer',
-  30: 'send/dcd-xfer'
+  30: 'send/dcd-xfer',
+  // Firmware 1.6.69+: core1's audio loop stopped heartbeating, and core0 held back the
+  // watchdog feed on purpose so the reset names the right core instead of a random phase.
+  31: 'core1-stall (audio pipeline)'
 };
 
 /**

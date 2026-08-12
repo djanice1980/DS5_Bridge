@@ -52,6 +52,7 @@ add_executable(ds5-bridge
         src/main.cpp
         src/button_functions.cpp
         src/dualsense_input_decoder.cpp
+        src/feature_report_cache.cpp
         src/persona/host_persona.cpp
         src/persona/dualsense_persona.cpp
         src/persona/ds4_persona.cpp
@@ -229,7 +230,22 @@ if(DS5_PAIRING_DIAG)
 endif()
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "1.6.68")
+
+# THE firmware version. Every other copy derives from these three numbers: the program-info
+# string below, and the kFirmware{Major,Minor,Patch} bytes companion.cpp puts in the STATUS
+# report -- the bytes the app actually displays. 1.6.69 shipped with this split three ways and
+# the STATUS copy still said 68, so a freshly flashed bridge reported the old version.
+# tools/check-firmware-version-sync.mjs parses these set() lines and fails CI on drift.
+set(DS5_BRIDGE_VERSION_MAJOR 1)
+set(DS5_BRIDGE_VERSION_MINOR 6)
+set(DS5_BRIDGE_VERSION_PATCH 70)
+set(DS5_BRIDGE_VERSION "${DS5_BRIDGE_VERSION_MAJOR}.${DS5_BRIDGE_VERSION_MINOR}.${DS5_BRIDGE_VERSION_PATCH}")
+pico_set_program_version(ds5-bridge "${DS5_BRIDGE_VERSION}")
+target_compile_definitions(ds5-bridge PRIVATE
+    DS5_BRIDGE_VERSION_MAJOR=${DS5_BRIDGE_VERSION_MAJOR}
+    DS5_BRIDGE_VERSION_MINOR=${DS5_BRIDGE_VERSION_MINOR}
+    DS5_BRIDGE_VERSION_PATCH=${DS5_BRIDGE_VERSION_PATCH}
+)
 
 if(DS5_ENABLE_FIRMWARE_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)

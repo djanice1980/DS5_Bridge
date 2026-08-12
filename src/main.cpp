@@ -4,6 +4,7 @@
 //
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include "bsp/board_api.h"
 #include "button_functions.h"
@@ -18,6 +19,7 @@
 #include "host_input.h"
 #include "controller_report.h"
 #include "dualsense_input_decoder.h"
+#include "feature_report_cache.h"
 #include "dualsense_output.h"
 #include "persona/ds4_persona.h"
 #include "persona/dualsense_persona.h"
@@ -40,6 +42,24 @@
 int reportSeqCounter = 0;
 static constexpr uint32_t HOST_LIGHTBAR_RESTORE_DELAY_MS = 3000;
 static constexpr uint32_t HOST_PERSONA_SWITCH_INPUT_FALLBACK_US = 3'000'000;
+
+// Core1 stall gate. The threshold is bounded from the code, not tuned by feel: one core1
+// iteration is at most one 10 ms Opus encode (complexity 0) plus one decode plus WDL
+// resampling -- single-digit milliseconds on this core -- and the only legitimate long pause
+// is flash_safe_execute() parking core1 during a link-key write, tens of milliseconds per
+// sector. Three seconds is ~30x above a pessimistic stack of all of those AT ONCE, and a real
+// wedge is permanent, so the extra detection latency costs nothing. The high-water log below
+// exists to validate that margin from hardware: if a diag-build soak ever shows a legitimate
+// gap in the same order of magnitude, this number is wrong and the log is the evidence.
+static constexpr uint32_t CORE1_STALL_THRESHOLD_US = 3'000'000;
+// A single over-threshold reading is NEVER trusted: the 1.6.69 boot loop was one poisoned
+// measurement, not a stalled core. The stall must persist across every re-sampled reading for
+// this long before the halt -- thousands of independent samples. A transient artifact cannot
+// survive one fresh stamp; a genuinely wedged core1 cannot produce one.
+static constexpr uint32_t CORE1_STALL_CONFIRM_US = 250'000;
+static constexpr uint32_t CORE1_GAP_REPORT_THRESHOLD_US = 100'000;
+static uint32_t core1_heartbeat_max_age_us = 0;
+static uint32_t core1_stall_streak_start_us = 0;
 
 enum HidDebugKind : uint8_t {
     HidDebugGetReport = 1,
@@ -174,7 +194,10 @@ void controller_output_submit_usb_payload(uint8_t const *payload, uint16_t paylo
     }
 }
 
-uint8_t interrupt_in_data[63] = {
+// The neutral report is the single source for both the constant and the live cache. These
+// were two byte-identical 63-byte literals; nothing tied them together, so editing one and
+// not the other would have gone unnoticed until a controller reported something odd.
+static constexpr std::array<uint8_t, 63> kNeutralDualSenseUsbInputReport = {{
     0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7,
     0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41,
     0x01, 0x00, 0x0e, 0x00, 0xef, 0xff, 0x03, 0x03,
@@ -183,24 +206,18 @@ uint8_t interrupt_in_data[63] = {
     0x00, 0x00, 0x09, 0x09, 0x00, 0x00, 0x00, 0x00,
     0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00,
     0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b
-};
+}};
+
+// Copy-initialised at compile time, so there is no window during startup where the cache
+// holds anything other than the neutral report.
+std::array<uint8_t, kNeutralDualSenseUsbInputReport.size()> interrupt_in_data =
+    kNeutralDualSenseUsbInputReport;
 
 critical_section_t report_cs;
 volatile bool report_dirty = false;
 BridgeControllerState interrupt_in_state{};
 static volatile bool host_input_waiting_for_mount = false;
 static volatile uint32_t host_input_fallback_until_us = 0;
-
-static constexpr uint8_t kNeutralDualSenseUsbInputReport[63] = {
-    0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7,
-    0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41,
-    0x01, 0x00, 0x0e, 0x00, 0xef, 0xff, 0x03, 0x03,
-    0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00,
-    0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00,
-    0x00, 0x00, 0x09, 0x09, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00,
-    0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b
-};
 
 static bool time_reached_u32(uint32_t now, uint32_t target) {
     return static_cast<int32_t>(now - target) >= 0;
@@ -246,8 +263,8 @@ static bool host_input_quiet_active(uint32_t now) {
 static BridgeControllerState neutral_controller_state() {
     BridgeControllerState state{};
     (void)dualsense_decode_usb_input_report(
-        kNeutralDualSenseUsbInputReport,
-        sizeof(kNeutralDualSenseUsbInputReport),
+        kNeutralDualSenseUsbInputReport.data(),
+        kNeutralDualSenseUsbInputReport.size(),
         state
     );
     return state;
@@ -318,7 +335,7 @@ void host_input_prepare_persona_switch() {
     const uint32_t now = time_us_32();
 
     critical_section_enter_blocking(&report_cs);
-    memcpy(interrupt_in_data, kNeutralDualSenseUsbInputReport, sizeof(interrupt_in_data));
+    interrupt_in_data = kNeutralDualSenseUsbInputReport;
     interrupt_in_state = neutral_state;
     report_dirty = false;
     host_input_waiting_for_mount = true;
@@ -337,9 +354,9 @@ size_t controller_input_report_snapshot(uint8_t *out, size_t capacity) {
     if (out == nullptr || capacity == 0) {
         return 0;
     }
-    const size_t length = capacity < sizeof(interrupt_in_data) ? capacity : sizeof(interrupt_in_data);
+    const size_t length = capacity < interrupt_in_data.size() ? capacity : interrupt_in_data.size();
     critical_section_enter_blocking(&report_cs);
-    memcpy(out, interrupt_in_data, length);
+    memcpy(out, interrupt_in_data.data(), length);
     critical_section_exit(&report_cs);
     return length;
 }
@@ -347,13 +364,13 @@ size_t controller_input_report_snapshot(uint8_t *out, size_t capacity) {
 void reset_controller_input_report_cache() {
     BridgeControllerState default_state{};
     (void)dualsense_decode_usb_input_report(
-        kNeutralDualSenseUsbInputReport,
-        sizeof(kNeutralDualSenseUsbInputReport),
+        kNeutralDualSenseUsbInputReport.data(),
+        kNeutralDualSenseUsbInputReport.size(),
         default_state
     );
 
     critical_section_enter_blocking(&report_cs);
-    memcpy(interrupt_in_data, kNeutralDualSenseUsbInputReport, sizeof(interrupt_in_data));
+    interrupt_in_data = kNeutralDualSenseUsbInputReport;
     interrupt_in_state = default_state;
     report_dirty = false;
     critical_section_exit(&report_cs);
@@ -434,11 +451,16 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     }
 
     if ((data[2] & 0x02) != 0) {
-        audio_mic_add_packet(data + 4, len > 4 ? static_cast<uint16_t>(len - 4) : 0);
+        // Only form data + 4 once there is something at that offset. audio_mic_add_packet
+        // treats a zero length as a no-op, so the old call was harmless in practice, but at
+        // len 3 or 4 it still built a pointer past the end of the buffer to pass in.
+        if (len > 4) {
+            audio_mic_add_packet(data + 4, static_cast<uint16_t>(len - 4));
+        }
         return;
     }
 
-    if (len < 3 + sizeof(interrupt_in_data)) {
+    if (len < 3 + interrupt_in_data.size()) {
         return;
     }
 
@@ -461,7 +483,7 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // We also set the report_dirty flag to true to indicate that new data is available
     //  and needs to be sent in the next interrupt report.
     critical_section_enter_blocking(&report_cs);
-    memcpy(interrupt_in_data, controller_report, sizeof(controller_report));
+    memcpy(interrupt_in_data.data(), controller_report, sizeof(controller_report));
     interrupt_in_state = controller_state;
     report_dirty = true;
     critical_section_exit(&report_cs);
@@ -508,15 +530,18 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
         return 0;
     }
 
-    std::vector<uint8_t> feature_data;
+    // Cached BT feature report, on the stack: [0] is the report id, the payload follows --
+    // the same layout the old heap vector carried.
+    uint8_t cached_feature[kFeatureReportCacheSlotBytes];
+    uint16_t cached_len = 0;
     if (dualsense_feature_report_may_use_bt_passthrough(report_id)) {
-        feature_data = get_feature_data(report_id, reqlen);
+        cached_len = get_feature_data(report_id, cached_feature, sizeof(cached_feature));
     }
-    if (!feature_data.empty() && buffer != nullptr) {
-        const uint16_t available = static_cast<uint16_t>(feature_data.size() - 1);
+    if (cached_len > 0 && buffer != nullptr) {
+        const uint16_t available = static_cast<uint16_t>(cached_len - 1);
         const uint16_t copy_len = available < reqlen ? available : reqlen;
         if (copy_len > 0) {
-            memcpy(buffer, feature_data.data() + 1, copy_len);
+            memcpy(buffer, cached_feature + 1, copy_len);
         }
 
         return copy_len;
@@ -674,6 +699,37 @@ int main() {
     watchdog_enable(1000, true);
 
     while (1) {
+        // Core1 liveness gate, BEFORE any feed this iteration. Core1 runs the whole audio
+        // pipeline and used to sit outside the watchdog entirely: a wedge there left the
+        // bridge running forever with dead audio and no diagnostic. If the heartbeat goes
+        // silent past the threshold, stamp the dedicated breadcrumb and halt this loop --
+        // withholding every feed -- so the 1s watchdog resets us with a record that names
+        // core1 rather than whichever phase stamped last.
+        const uint32_t core1_age_us = audio_core1_heartbeat_age_us();
+        if (core1_age_us <= CORE1_STALL_THRESHOLD_US) {
+            core1_stall_streak_start_us = 0;
+        } else {
+            const uint32_t stall_now_us = time_us_32();
+            if (core1_stall_streak_start_us == 0) {
+                // | 1 keeps a legitimate 0 timestamp from reading as "no streak".
+                core1_stall_streak_start_us = stall_now_us | 1;
+            } else if (static_cast<uint32_t>(stall_now_us - core1_stall_streak_start_us) > CORE1_STALL_CONFIRM_US) {
+                watchdog_telemetry_note_phase(WatchdogMainLoopPhase::Core1Stall);
+                DS5_LOG("[WD] core1 heartbeat silent for %u us (confirmed) -- halting for watchdog reset\n",
+                    static_cast<unsigned>(core1_age_us));
+                while (true) {
+                    tight_loop_contents();
+                }
+            }
+        }
+        if (core1_age_us > core1_heartbeat_max_age_us) {
+            core1_heartbeat_max_age_us = core1_age_us;
+            if (core1_heartbeat_max_age_us > CORE1_GAP_REPORT_THRESHOLD_US) {
+                DS5_LOG("[WD] core1 heartbeat gap high-water: %u us\n",
+                    static_cast<unsigned>(core1_heartbeat_max_age_us));
+            }
+        }
+
         // Each stage stamps a breadcrumb into the watchdog scratch registers, which survive
         // the reset. If the 1s watchdog fires, the next boot reports exactly which stage was
         // running -- otherwise a hang is indistinguishable from any other restart.

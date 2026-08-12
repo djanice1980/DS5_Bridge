@@ -7,7 +7,7 @@
 #define DS5_BRIDGE_BT_H
 
 #include <cstdint>
-#include <vector>
+
 
 enum CHANNEL_TYPE {
     INTERRUPT,
@@ -172,7 +172,10 @@ void bt_request_stick_calibration_status();
 /** Latest cached 0x83 payload. Returns bytes copied; 0 when nothing has arrived yet. */
 uint8_t bt_stick_calibration_status(uint8_t *out, uint8_t capacity);
 
-std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
+/** Copy the cached feature report into out (up to capacity bytes) and, when the report is
+ *  uncached or must be fresh, queue a request to the controller. Returns bytes copied; 0
+ *  when nothing is cached yet. Pass nullptr/0 to only trigger the request. */
+uint16_t get_feature_data(uint8_t reportId, uint8_t *out, uint16_t capacity);
 void init_feature();
 void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len);
 

@@ -201,6 +201,8 @@ const char *watchdog_telemetry_phase_name(uint8_t phase) {
             return "interrupt-after-companion";
         case WatchdogMainLoopPhase::FirmwareLogFlush:
             return "firmware-log-flush";
+        case WatchdogMainLoopPhase::Core1Stall:
+            return "core1-stall";
         default:
             return "unknown";
     }

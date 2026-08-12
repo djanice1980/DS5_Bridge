@@ -44,6 +44,11 @@ enum class WatchdogMainLoopPhase : uint8_t {
     // removed in 1.6.67 once they had separated "waiting on the endpoint" from "stuck in the
     // hardware layer". Left unused rather than reassigned: the companion still names them so a
     // breadcrumb retained from firmware 1.6.66 or earlier decodes to what it meant then.
+    // Core1's audio loop stopped stamping its heartbeat, so core0 deliberately stopped feeding
+    // the watchdog. Without this stamp a core1 wedge either ran forever with dead audio (the
+    // pre-1.6.69 behaviour: core0 kept feeding) or, once gated, would reset blamed on whatever
+    // main-loop phase happened to stamp last.
+    Core1Stall = 31,
 };
 
 struct WatchdogTelemetrySnapshot {

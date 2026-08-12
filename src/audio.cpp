@@ -2101,6 +2101,25 @@ static OpusDecoder *mic_decoder;
 static WDL_Resampler resampler_audio;
 static uint32_t core1_audio_stream_generation = 0;
 
+// Liveness stamp for the core0-side watchdog gate. Written only by core1, read only by core0;
+// a single aligned 32-bit store needs no lock. 0 is the "never started" sentinel.
+static volatile uint32_t core1_heartbeat_stamp_us = 0;
+
+uint32_t audio_core1_heartbeat_age_us() {
+    // Read the stamp FIRST, then the clock. The first release took `now` as a parameter --
+    // captured before the load -- so core1 could stamp a NEWER time in between and the
+    // unsigned subtraction underflowed to ~4e9 us: one poisoned reading, instant false trip,
+    // and a boot loop on controller connect (fw 1.6.69). Ordered this way the stamp can only
+    // be older than the clock read, and the signed clamp turns any residual future-stamp
+    // into 0 rather than a huge age.
+    const uint32_t stamp = core1_heartbeat_stamp_us;
+    if (stamp == 0) {
+        return 0;
+    }
+    const int32_t age = static_cast<int32_t>(time_us_32() - stamp);
+    return age > 0 ? static_cast<uint32_t>(age) : 0;
+}
+
 static void reset_core1_audio_pipeline(uint32_t generation) {
     if (encoder != nullptr) {
         opus_encoder_ctl(encoder, OPUS_RESET_STATE);
@@ -2301,7 +2320,19 @@ static bool __not_in_flash_func(core1_process_speaker)() {
         in_buf[i] = audio_element.data[i];
     }
     static WDL_ResampleSample out_buf[480 * 2];
-    resampler_audio.ResampleOut(out_buf,nframes,480,2);
+    const int out_frames = resampler_audio.ResampleOut(out_buf,nframes,480,2);
+    // Opus needs a whole 10 ms frame, so we always encode 480. ResampleOut can return short
+    // while the resampler is still filling -- at stream start and after
+    // reset_core1_audio_pipeline() -- and out_buf is static, so the frames it did not write
+    // still hold the PREVIOUS block. Encoding those replays a chunk of old audio. Silence for
+    // the shortfall is the honest answer; the haptics path at ResampleOut above already
+    // honours this count.
+    if (out_frames < 480) {
+        const int written = out_frames > 0 ? out_frames : 0;
+        for (int i = written * 2; i < 480 * 2; i++) {
+            out_buf[i] = 0;
+        }
+    }
     static uint8_t encoded[sizeof(opus_buf)];
 #if DS5_AUDIO_DEBUG_ENABLED
     const uint32_t encode_start_us = time_us_32();
@@ -2361,6 +2392,9 @@ static void __not_in_flash_func(core1_entry)() {
 
     while (true) {
         const uint32_t speaker_start_us = time_us_32();
+        // Heartbeat BEFORE the pipeline work, so the stamp ages across exactly one iteration:
+        // a wedge inside opus/resample shows up as a growing age, not a fresh stamp.
+        core1_heartbeat_stamp_us = speaker_start_us;
         const bool did_speaker = core1_process_speaker();
         const uint32_t mic_start_us = time_us_32();
         const bool did_mic = core1_process_mic();

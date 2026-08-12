@@ -63,6 +63,10 @@ struct audio_status {
 
 void audio_init();
 void audio_loop();
+/** Microseconds since core1's audio loop last proved it was alive, wrap-safe and clamped so a
+ *  concurrent stamp can never read as a huge age. Returns 0 until core1 has stamped its first
+ *  heartbeat, so the caller's stall check stays disarmed through boot. */
+uint32_t audio_core1_heartbeat_age_us();
 void audio_handle_bridge_audio_report(uint8_t const *report, uint16_t len);
 void audio_test_haptics_loop();
 bool audio_schedule_test_haptics();

@@ -10,12 +10,12 @@
 #include "bt.h"
 
 #include <queue>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "audio.h"
 #include "controller_packet_compositor.h"
+#include "feature_report_cache.h"
 #include "controller_output_policy.h"
 #include "controller_output_rumble_state.h"
 #include "controller_output_state.h"
@@ -158,7 +158,6 @@
     } \
 } while (0)
 
-using std::unordered_map;
 using std::vector;
 using std::queue;
 
@@ -345,7 +344,8 @@ static int8_t bt_rssi = 0;
 static bool bt_rssi_known = false;
 static bool bt_rssi_request_pending = false;
 static uint32_t bt_rssi_last_request_us = 0;
-unordered_map<uint8_t, vector<uint8_t> > feature_data;
+// Feature reports live in the fixed-slot cache (feature_report_cache.cpp) -- the map that
+// used to sit here was the only varying-size heap user on a callback path.
 static queue<output_packet> urgent_queue;
 static queue<output_packet> audio_queue;
 static vector<control_packet> control_queue;
@@ -1467,7 +1467,7 @@ static void finish_controller_disconnect(uint8_t reason) {
     hid_control_ready = false;
     hid_interrupt_ready = false;
     audio_handle_controller_disconnect();
-    feature_data.clear();
+    feature_report_cache_clear();
     controller_type = ControllerTypeUnknown;
     controller_type_check_pending = false;
     hid_channel_recovery_pending = false;
@@ -3030,8 +3030,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             }
             if (size >= 2 && packet[0] == 0xA3) {
                 uint8_t report_id = packet[1];
-                if (feature_data.size() < 32 || feature_data.contains(report_id)) {
-                    feature_data[report_id].assign(packet + 1, packet + size);
+                if (feature_report_cache_store(report_id, packet + 1, static_cast<uint16_t>(size - 1))) {
                     DS5_LOG("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
                 }
             }
@@ -4348,29 +4347,20 @@ bool bt_set_nvs_unlocked(bool unlocked) {
 }
 
 void bt_request_stick_calibration_status() {
-    (void)get_feature_data(DS_FEATURE_CALIBRATION_STATUS, 4);
+    (void)get_feature_data(DS_FEATURE_CALIBRATION_STATUS, nullptr, 0);
 }
 
 uint8_t bt_stick_calibration_status(uint8_t *out, uint8_t capacity) {
-    if (out == nullptr || capacity == 0 || !feature_data.contains(DS_FEATURE_CALIBRATION_STATUS)) {
+    if (out == nullptr || capacity == 0) {
         return 0;
     }
-    auto const &cached = feature_data[DS_FEATURE_CALIBRATION_STATUS];
-    const uint8_t length = static_cast<uint8_t>(
-        cached.size() < capacity ? cached.size() : capacity
-    );
-    memcpy(out, cached.data(), length);
-    return length;
+    return static_cast<uint8_t>(feature_report_cache_read(DS_FEATURE_CALIBRATION_STATUS, out, capacity));
 }
 
-vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
-    (void)len;
+uint16_t get_feature_data(uint8_t reportId, uint8_t *out, uint16_t capacity) {
     // These reports must request fresh controller state; other reports can reuse cached data.
-    auto ret = vector<uint8_t>{};
-    const bool cached = feature_data.contains(reportId);
-    if (cached) {
-        ret = feature_data[reportId];
-    }
+    const bool cached = feature_report_cache_contains(reportId);
+    const uint16_t copied = cached ? feature_report_cache_read(reportId, out, capacity) : 0;
     const bool requires_fresh_state = reportId == 0x81
         || reportId == 0x63
         || reportId == 0x65
@@ -4380,13 +4370,13 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
         || reportId == DS_FEATURE_CALIBRATION_STATUS;
     const bool should_request = !cached || requires_fresh_state;
     if (!should_request || hid_control_cid == 0) {
-        return ret;
+        return copied;
     }
 
     uint8_t get_feature[] = {0x43, reportId};
     enqueue_control_packet(get_feature, sizeof(get_feature), true);
     DS5_LOG("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
-    return ret;
+    return copied;
 }
 
 void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len) {
@@ -4395,28 +4385,31 @@ void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len) {
             DS5_LOG("[L2CAP] Set Feature Report 0x%02X rejected: len=%u\n", reportId, len);
             return;
         }
-        vector<uint8_t> set_feature(len + 2);
+        // len is capped at 62 above, so the frame (0x53 + id + payload) fits 64 bytes on the
+        // stack -- no heap in the control path.
+        uint8_t set_feature[64];
+        const uint16_t frame_len = static_cast<uint16_t>(len + 2);
         set_feature[0] = 0x53;
         set_feature[1] = reportId;
-        memcpy(set_feature.data() + 2,data,len);
-        if (!fill_feature_report_checksum(set_feature.data() + 1, len + 1)) {
+        memcpy(set_feature + 2, data, len);
+        if (!fill_feature_report_checksum(set_feature + 1, len + 1)) {
             DS5_LOG("[L2CAP] Refusing Set Feature Report 0x%02X with invalid checksum length %u\n",
                 reportId,
                 static_cast<unsigned>(len + 1));
             return;
         }
-        enqueue_control_packet(set_feature.data(), static_cast<uint16_t>(set_feature.size()), true);
+        enqueue_control_packet(set_feature, frame_len, true);
         DS5_LOG("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
-        DS5_HEXDUMP(set_feature.data(), set_feature.size());
+        DS5_HEXDUMP(set_feature, frame_len);
     }
 }
 
 void init_feature() {
     controller_type = ControllerTypeUnknown;
-    get_feature_data(0x09, 20);
-    get_feature_data(0x20, 64);
-    get_feature_data(0x22, 64);
-    get_feature_data(0x05, 41);
+    get_feature_data(0x09, nullptr, 0);
+    get_feature_data(0x20, nullptr, 0);
+    get_feature_data(0x22, nullptr, 0);
+    get_feature_data(0x05, nullptr, 0);
     controller_type_check_pending = true;
-    get_feature_data(0x70, 64);
+    get_feature_data(0x70, nullptr, 0);
 }

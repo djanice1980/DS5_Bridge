@@ -9,6 +9,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(firmware_logic_tests
     firmware_logic_tests.cpp
     ../../src/dualsense_input_decoder.cpp
+    ../../src/feature_report_cache.cpp
     ../../src/persona/host_persona.cpp
     ../../src/persona/dualsense_persona.cpp
     ../../src/persona/ds4_persona.cpp

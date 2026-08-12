@@ -214,7 +214,7 @@ void assert_dse_identity_reports_do_not_use_edge_passthrough(std::filesystem::pa
         || main_cpp.find("bt_controller_type() != ControllerTypeDualSenseEdge") == std::string::npos
         || get_report_callback.find("report_type != HID_REPORT_TYPE_FEATURE") == std::string::npos
         || get_report_callback.find("dualsense_feature_report_may_use_bt_passthrough(report_id)") == std::string::npos
-        || get_report_callback.find("get_feature_data(report_id, reqlen)") == std::string::npos
+        || get_report_callback.find("get_feature_data(report_id, cached_feature, sizeof(cached_feature))") == std::string::npos
         || get_report_callback.find("dualsense_persona_get_feature_report(report_id, buffer, reqlen)") == std::string::npos
         || dualsense_persona_h.find("dualsense_persona_get_feature_report") == std::string::npos
         || dualsense_persona_cpp.find("kDualSenseFeatureFirmwareInfo = 0x20") == std::string::npos
