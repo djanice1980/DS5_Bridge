@@ -209,6 +209,13 @@ export interface DirectControllerInfo {
   path: string;
   product: string | null;
   productId: number;
+  /** Bare lowercase hex BT address read over USB (pairing-info report), when readable. */
+  mac: string | null;
+  /** True when this controller's data link is currently on a bridge -- plugged in only to
+   *  charge, so its USB input reports are dormant and selecting it would show nothing. */
+  chargingViaBridge: boolean;
+  /** True when the tester is currently reading this controller directly. */
+  selectedForTester: boolean;
 }
 
 export interface BridgeIdentityRecord {

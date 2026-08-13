@@ -1,4 +1,9 @@
 import { spawn } from 'node:child_process';
+import {
+  DirectControllerSource,
+  readDirectControllerMac,
+  type DirectHidOpen
+} from './direct-controller-source';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,7 +50,7 @@ import {
   DEFAULT_BUTTON_REMAP_PROFILE_ID
 } from '../shared/protocol';
 import { TRIGGER_EFFECT_SIZE, type TriggerEffect } from '../shared/trigger-effects';
-import type { ControllerInputSnapshot } from '../shared/dualsense-input';
+import { decodeDualSenseInputReport, type ControllerInputSnapshot } from '../shared/dualsense-input';
 import type {
   AdaptiveTriggerPreviewEffect,
   AudioReactiveHapticsAttack,
@@ -1246,6 +1251,15 @@ export class BridgeService extends EventEmitter {
   private device: WinUsbCompanionTransport | null = null;
   // Multi-bridge: latest device census and its refresh clock.
   private bridgeCensus: BridgeCensus | null = null;
+  // Tester-only direct-USB controller selection. Session state, never persisted: unlike the
+  // bridge selection there is no reconnect story to remember -- if the controller is unplugged
+  // the selection is meaningless, and on restart the tester defaults back to the bridge.
+  private directTesterSource: DirectControllerSource | null = null;
+  // BT MAC per direct-controller path, read once over USB (pairing-info report) and cached:
+  // it feeds the charging-via-bridge guard and never changes for a given controller.
+  private readonly directControllerMacCache = new Map<string, string | null>();
+  // Injectable for tests; production uses node-hid.
+  directHidOpenForTests: DirectHidOpen | undefined;
   private lastBridgeCensusAt = 0;
   // Stable identity of the currently connected bridge (firmware 1.6.19+).
   private connectedBridgeUniqueId: string | null = null;
@@ -3063,6 +3077,18 @@ export class BridgeService extends EventEmitter {
    * before anything is made permanent.
    */
   async sendStickCalibration(op: number, target: number): Promise<BridgeSnapshot> {
+    if (this.directTesterSource) {
+      // Same 0x82 command dualshock-tools sends a USB controller; acceptance is judged from
+      // the controller's own 0x83 reply either way, so the tester flow is unchanged.
+      try {
+        this.directTesterSource.sendCalibrationCommand(op, target);
+      } catch (error) {
+        this.appendAudioDebugLines([
+          `[Tester] direct calibration command failed: ${(error as Error).message}`
+        ]);
+      }
+      return this.getSnapshot();
+    }
     await this.sendCommand(COMMAND_ID.STICK_CALIBRATION, (op & 0xff) | ((target & 0xff) << 8), {
       throwOnCommandError: false
     });
@@ -3078,6 +3104,13 @@ export class BridgeService extends EventEmitter {
    * accepting permanent writes it was never asked for.
    */
   async setNvsUnlocked(unlocked: boolean): Promise<void> {
+    if (this.directTesterSource) {
+      // A failed RE-LOCK must not be swallowed: the renderer re-locks on every exit path and
+      // treats an exception as "warn the user the controller may still accept permanent
+      // writes". An unlock failure surfaces the same way and simply stops the flow.
+      this.directTesterSource.setNvsUnlocked(unlocked);
+      return;
+    }
     await this.sendCommand(COMMAND_ID.SET_NVS_UNLOCKED, unlocked ? 1 : 0, {
       throwOnCommandError: false
     });
@@ -3085,6 +3118,20 @@ export class BridgeService extends EventEmitter {
 
   /** The controller's own reply. Null when the bridge or the report is unavailable. */
   async readCalibrationStatus(): Promise<CalibrationStatus | null> {
+    if (this.directTesterSource) {
+      // The raw 0x83 reply has the same byte shape the bridge caches from BT (report id at
+      // [0], target at [2], code at [3]), so the acceptance check reads both transports alike.
+      const bytes = this.directTesterSource.readCalibrationStatus();
+      if (bytes === null) {
+        return null;
+      }
+      return {
+        received: bytes.length >= 4,
+        bytes,
+        target: bytes.length >= 3 ? bytes[2] : 0,
+        code: bytes.length >= 4 ? bytes[3] : 0
+      };
+    }
     if (!this.device) {
       return null;
     }
@@ -3097,6 +3144,20 @@ export class BridgeService extends EventEmitter {
   }
 
   async readControllerInput(): Promise<ControllerInputSnapshot | null> {
+    if (this.directTesterSource) {
+      // Direct-USB mode: same bytes as the bridge's cached report (minus the 0x01 id byte the
+      // source already strips), same decoder. On USB the mute bit arrives in the report itself
+      // (the bridge strips it and sends a flag instead), so the plain decode is complete.
+      const latest = this.directTesterSource.latestInput();
+      if (latest === null) {
+        return { controllerConnected: false, raw: [], state: null };
+      }
+      return {
+        controllerConnected: true,
+        raw: latest.raw,
+        state: decodeDualSenseInputReport(latest.raw)
+      };
+    }
     if (!this.device) {
       return null;
     }
@@ -3116,6 +3177,11 @@ export class BridgeService extends EventEmitter {
    * reason -- there must be no way to end up held with nothing renewing it.
    */
   async holdInputForwarding(holdMs: number): Promise<void> {
+    if (this.directTesterSource) {
+      // Direct-USB mode: input reaches the OS through the kernel driver, not the bridge, so
+      // there is nothing here that could pause it. The tester disables the toggle.
+      return;
+    }
     await this.sendCommand(COMMAND_ID.HOLD_INPUT_FORWARDING, Math.max(0, Math.min(5000, Math.round(holdMs))), {
       throwOnCommandError: false
     });
@@ -4228,10 +4294,32 @@ export class BridgeService extends EventEmitter {
     await this.refreshBridgeCensus();
   }
 
+  private directControllerMacFor(path: string): string | null {
+    if (!this.directControllerMacCache.has(path)) {
+      // One open/read/close per path per session; a failure (permissions, exclusive open)
+      // caches null, which only weakens the charging guard -- the entry stays selectable.
+      this.directControllerMacCache.set(
+        path,
+        readDirectControllerMac(path, this.directHidOpenForTests)
+      );
+    }
+    return this.directControllerMacCache.get(path) ?? null;
+  }
+
   private async refreshBridgeCensus(): Promise<void> {
     this.lastBridgeCensusAt = Date.now();
     try {
       this.bridgeCensus = await listBridges();
+      // A selected direct controller that left the bus takes its selection with it.
+      if (this.directTesterSource) {
+        const stillPresent = this.bridgeCensus.hidDevices.some((device) =>
+          !device.isBridge
+          && BridgeService.bridgePathsEqual(device.path, this.directTesterSource?.path));
+        if (!stillPresent) {
+          this.directTesterSource.close();
+          this.directTesterSource = null;
+        }
+      }
     } catch {
       // Census is best-effort; keep the previous one.
     }
@@ -4778,16 +4866,59 @@ export class BridgeService extends EventEmitter {
       }),
       directControllers: this.bridgeCensus.hidDevices
         .filter((device) => !device.isBridge)
-        .map((device) => ({
-          path: device.path,
-          product: device.product,
-          productId: device.productId
-        })),
+        .map((device) => {
+          const mac = this.directControllerMacFor(device.path);
+          return {
+            path: device.path,
+            product: device.product,
+            productId: device.productId,
+            mac,
+            // Same physical controller that is live on the connected bridge: the cable is only
+            // charging it, its USB input reports are dormant, and selecting it would render a
+            // dead tester. The comparison is in display order on both sides.
+            chargingViaBridge: mac !== null && mac === this.connectedControllerMac,
+            selectedForTester: this.directTesterSource !== null
+              && BridgeService.bridgePathsEqual(this.directTesterSource.path, device.path)
+          };
+        }),
       selectedBridgePath: selectedPath ?? null
     };
   }
 
+  /**
+   * Point the tester at a direct-USB controller, or back at the bridge with null. Tester-only:
+   * bridge selection, audio routing and profiles are untouched -- this only changes where
+   * readControllerInput gets its bytes.
+   */
+  async selectTesterController(devicePath: string | null): Promise<BridgeSnapshot> {
+    if (this.directTesterSource
+        && (devicePath === null || this.directTesterSource.path !== devicePath)) {
+      this.directTesterSource.close();
+      this.directTesterSource = null;
+    }
+    if (devicePath !== null && this.directTesterSource === null) {
+      const source = new DirectControllerSource(devicePath, this.directHidOpenForTests);
+      try {
+        source.open();
+        this.directTesterSource = source;
+      } catch (error) {
+        source.close();
+        this.appendAudioDebugLines([
+          `[Tester] direct controller open failed: ${(error as Error).message}`
+        ]);
+      }
+    }
+    await this.refreshBridgeCensus();
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   async selectBridge(devicePath: string | null): Promise<BridgeSnapshot> {
+    // Choosing a bridge is an explicit "back to the bridge" for the tester too.
+    if (this.directTesterSource) {
+      this.directTesterSource.close();
+      this.directTesterSource = null;
+    }
     // Pin the board id, not just the path -- see reconcileSelectedBridge. If the id is not
     // known yet (the bridge has never been opened by this app) it is left null and filled in
     // on the next successful open, which will use the path we just stored.

@@ -398,6 +398,39 @@ export function TesterApp() {
   const state = input?.state ?? null;
   const connected = input?.controllerConnected === true;
 
+  const bridges = snapshot?.bridgeDevices?.bridges ?? [];
+  const directControllers = snapshot?.bridgeDevices?.directControllers ?? [];
+  const selectedDirect = directControllers.find((controller) => controller.selectedForTester) ?? null;
+  const directMode = selectedDirect !== null;
+
+  // One picker, two kinds of sources. Values are prefixed because bridge port paths and hidraw
+  // paths share no namespace guarantees.
+  const pickerValue = selectedDirect
+    ? `direct|${selectedDirect.path}`
+    : (bridges.find((bridge) => bridge.selected)?.path
+      ? `bridge|${bridges.find((bridge) => bridge.selected)?.path}`
+      : '');
+
+  function onPickSource(value: string): void {
+    if (value.startsWith('direct|')) {
+      void window.bridge.selectTesterController(value.slice('direct|'.length));
+      return;
+    }
+    // Selecting a bridge (or clearing) also returns the tester to the bridge path.
+    void window.bridge.selectTesterController(null);
+    if (value.startsWith('bridge|')) {
+      void window.bridge.selectBridge(value.slice('bridge|'.length) || null);
+    }
+  }
+
+  function directLabel(controller: (typeof directControllers)[number]): string {
+    const name = controller.product ?? 'DualSense';
+    const suffix = controller.chargingViaBridge
+      ? ' (charging via USB — data on bridge)'
+      : ' — USB direct';
+    return `${name}${suffix}`;
+  }
+
   // Fold every sample into the coverage trace while a sweep is being asked for.
   useEffect(() => {
     if (!state || !calibrationAwaitingSweep) {
@@ -408,9 +441,11 @@ export function TesterApp() {
     setSweepTick((tick) => tick + 1);
   }, [state, calibrationAwaitingSweep]);
 
-  // Track how far each stick wanders while a tuning session is open.
+  // Track how far each stick wanders while a tuning session is open. In direct-USB mode there
+  // is no session -- the bridge's deadzone filter is not in this path -- so measurement simply
+  // runs whenever input does.
   useEffect(() => {
-    if (!state || !dzSession) {
+    if (!state || (!dzSession && !directMode)) {
       return;
     }
     // The controller's sensor clock rides along so a dropped link cannot pass for a still stick.
@@ -476,7 +511,6 @@ export function TesterApp() {
     setAutoZeroAllowed(false);
   }, [state, accelZero, autoZeroAllowed]);
 
-  const bridges = snapshot?.bridgeDevices?.bridges ?? [];
 
   return (
     <div className="tester-root">
@@ -489,21 +523,38 @@ export function TesterApp() {
           </p>
         </div>
         <label className="tester-bridge-picker">
-          <span className="tester-field-label">Active bridge</span>
+          <span className="tester-field-label">Controller source</span>
           <select
-            aria-label="Active bridge"
-            value={bridges.find((bridge) => bridge.selected)?.path ?? ''}
-            onChange={(event) => {
-              void window.bridge.selectBridge(event.target.value || null);
-            }}
+            aria-label="Controller source"
+            value={pickerValue}
+            onChange={(event) => onPickSource(event.target.value)}
           >
-            {bridges.length === 0 && <option value="">No bridge detected</option>}
-            {bridges.map((bridge) => (
-              <option key={bridge.path} value={bridge.path}>
-                {bridge.name ?? bridge.uniqueId ?? bridge.path}
-                {bridge.connected ? '' : ' (no controller)'}
-              </option>
-            ))}
+            {bridges.length === 0 && directControllers.length === 0 && (
+              <option value="">No bridge or USB controller detected</option>
+            )}
+            {bridges.length > 0 && (
+              <optgroup label="Bridges">
+                {bridges.map((bridge) => (
+                  <option key={bridge.path} value={`bridge|${bridge.path}`}>
+                    {bridge.name ?? bridge.uniqueId ?? bridge.path}
+                    {bridge.connected ? '' : ' (no controller)'}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {directControllers.length > 0 && (
+              <optgroup label="USB controllers">
+                {directControllers.map((controller) => (
+                  <option
+                    key={controller.path}
+                    value={`direct|${controller.path}`}
+                    disabled={controller.chargingViaBridge}
+                  >
+                    {directLabel(controller)}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
         </label>
       </header>
@@ -511,20 +562,37 @@ export function TesterApp() {
       <label className="tester-hold-toggle">
         <input
           type="checkbox"
-          checked={holdInput}
+          checked={holdInput && !directMode}
+          disabled={directMode}
           onChange={(event) => setHoldInput(event.target.checked)}
         />
         <span>
           Pause input to this PC while testing
-          <span className="tester-subtle"> &mdash; so PS and other buttons do not affect other applications. Releases automatically if the app closes.</span>
+          <span className="tester-subtle">
+            {directMode
+              ? ' — bridge only: a USB controller reaches this PC through the system driver, which the app cannot pause.'
+              : ' — so PS and other buttons do not affect other applications. Releases automatically if the app closes.'}
+          </span>
         </span>
       </label>
 
       <div className={`tester-status${connected ? ' is-live' : ''}`}>
         {connected
           ? `Live — ${pollMs ?? 0} ms read, ${INPUT_POLL_INTERVAL_MS} ms interval`
-          : 'No controller connected to the selected bridge'}
+          : directMode
+            ? 'USB controller is not sending input — it may be asleep, or its data link may be on a bridge'
+            : 'No controller connected to the selected bridge'}
       </div>
+
+      {directMode && (
+        <div className="tester-status">
+          Reading this controller directly over USB. Buttons, sticks, triggers, touchpad,
+          motion, drift measurement, the raw report and stick calibration all work. Deadzone is
+          hidden because it is not a controller feature at all &mdash; the bridge applies it to
+          the data stream, which this cable bypasses &mdash; and app trigger effects are not
+          wired up for USB yet.
+        </div>
+      )}
 
       <div className="tester-grid">
         <section className="tester-card tester-card-wide">
@@ -554,6 +622,61 @@ export function TesterApp() {
           </div>
         </section>
 
+        {directMode && (
+          <section className="tester-card tester-card-wide">
+            <h2>Stick drift</h2>
+            <p className="tester-subtle">
+              Push a stick right out and let go, three times over. Each release is measured on its
+              own, and a release the stick was still moving through is thrown away. Take your hand
+              off completely &mdash; a resting thumb reads as drift.
+            </p>
+            <p className="tester-subtle">
+              <strong>Measurement only &mdash; nothing is applied over USB.</strong> Games and the
+              system see this controller&rsquo;s raw sticks exactly as they are; there is no
+              deadzone to set here because that filter runs inside the bridge, which this cable
+              bypasses. To actually correct drift, recalibrate the stick centre below (permanent
+              only if you choose to commit it), or connect through the bridge and set a deadzone
+              there.
+            </p>
+            <div className="tester-dzscopes" data-tick={driftTick}>
+              <StickDeadzoneScope
+                label="Left"
+                x={state?.leftStickX ?? 128}
+                y={state?.leftStickY ?? 128}
+                deadzonePercent={0}
+                drift={driftLeft.current}
+              />
+              <StickDeadzoneScope
+                label="Right"
+                x={state?.rightStickX ?? 128}
+                y={state?.rightStickY ?? 128}
+                deadzonePercent={0}
+                drift={driftRight.current}
+              />
+            </div>
+            <div className="tester-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  resetDrift(driftLeft.current);
+                  resetDrift(driftRight.current);
+                  setDriftTick((tick) => tick + 1);
+                }}
+              >
+                Start over
+              </button>
+              {driftIsComplete(driftLeft.current) && driftIsComplete(driftRight.current) && (
+                <span className="tester-mono">
+                  Measured drift &mdash; L {(driftEstimate(driftLeft.current) * 100).toFixed(1)}%,
+                  R {(driftEstimate(driftRight.current) * 100).toFixed(1)}%
+                </span>
+              )}
+            </div>
+          </section>
+        )}
+
+        {!directMode && (
         <section className={`tester-card${dzSession ? ' tester-card-wide' : ''}`}>
           {/* A session needs room for two zoomed sticks, and letting it stay a third of a row
               would stretch Gyro and Acceleration to match its height for no reason. */}
@@ -694,6 +817,7 @@ export function TesterApp() {
             stick will not settle at centre, calibrate below instead of masking it.
           </p>
         </section>
+        )}
 
         <section className="tester-card">
           <h2>Gyro</h2>
@@ -736,6 +860,7 @@ export function TesterApp() {
         </section>
 
 
+        {!directMode && (
         <section className="tester-card tester-card-wide">
           <h2>Trigger effects</h2>
           <p className="tester-subtle">
@@ -759,6 +884,7 @@ export function TesterApp() {
           </div>
           {sendError && <p className="tester-error">{sendError}</p>}
         </section>
+        )}
         <section className="tester-card tester-card-wide">
           <h2>Stick calibration</h2>
           <p className="tester-subtle">

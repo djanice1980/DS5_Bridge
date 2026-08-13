@@ -3224,4 +3224,144 @@ describe('BridgeService', () => {
 
     await expect(service.setHapticsGain(80)).rejects.toThrow('did not advance settings_revision');
   });
+  describe('direct-USB tester source', () => {
+    class FakeDirectDevice {
+      dataListener: ((data: Buffer) => void) | null = null;
+      closed = false;
+      constructor(private readonly mac: string | null) {}
+      on(event: string, listener: (arg: never) => void): void {
+        if (event === 'data') {
+          this.dataListener = listener as unknown as (data: Buffer) => void;
+        }
+      }
+      sentFeatureReports: number[][] = [];
+      calibrationReply: number[] = [0x83, 0x00, 0x01, 0x01];
+
+      getFeatureReport(reportId?: number): number[] {
+        if (reportId === 0x83) {
+          return this.calibrationReply;
+        }
+        if (this.mac === null) {
+          throw new Error('no pairing info');
+        }
+        // 0x09 pairing info, address in reversed byte order.
+        const bytes = (this.mac.match(/../g) ?? []).map((pair) => Number.parseInt(pair, 16));
+        return [0x09, ...bytes.reverse(), 0x08, 0x25, 0x00];
+      }
+
+      sendFeatureReport(data: number[]): number {
+        this.sentFeatureReports.push([...data]);
+        return data.length;
+      }
+      close(): void {
+        this.closed = true;
+      }
+      pushInput(firstPayloadByte: number): void {
+        const report = Buffer.alloc(64);
+        report[0] = 0x01;
+        report[1] = firstPayloadByte;
+        report[4] = 0x7f;
+        this.dataListener?.(report);
+      }
+    }
+
+    function directCensus(path: string) {
+      return {
+        bridges: [],
+        hidDevices: [{
+          path,
+          productId: 0x0ce6,
+          product: 'DualSense Wireless Controller',
+          containerId: 'usb:5-2',
+          isBridge: false
+        }]
+      };
+    }
+
+    it('reads a selected USB controller directly and reports it in the census', async () => {
+      const service = serviceFixture();
+      const fake = new FakeDirectDevice('aabbccddeeff');
+      service.directHidOpenForTests = () => fake;
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+
+      const snapshot = await service.selectTesterController('/dev/hidraw9');
+      fake.pushInput(0x80);
+
+      const entry = snapshot.bridgeDevices?.directControllers[0];
+      expect(entry?.selectedForTester).toBe(true);
+      expect(entry?.mac).toBe('aabbccddeeff');
+      expect(entry?.chargingViaBridge).toBe(false);
+
+      const input = await service.readControllerInput();
+      expect(input?.controllerConnected).toBe(true);
+      // Report id stripped: the payload starts at the stick byte we pushed.
+      expect(input?.raw[0]).toBe(0x80);
+      expect(input?.state).not.toBeNull();
+    });
+
+    it('marks a controller as charging when its MAC is live on the bridge', async () => {
+      const service = serviceFixture();
+      service.directHidOpenForTests = () => new FakeDirectDevice('aabbccddeeff');
+      (service as unknown as { connectedControllerMac: string | null }).connectedControllerMac = 'aabbccddeeff';
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw10'));
+
+      const snapshot = await service.refreshBridgeDevices();
+
+      const entry = snapshot.bridgeDevices?.directControllers[0];
+      expect(entry?.chargingViaBridge).toBe(true);
+    });
+
+    it('returns to the bridge when a bridge is selected', async () => {
+      const service = serviceFixture();
+      const fake = new FakeDirectDevice('aabbccddeeff');
+      service.directHidOpenForTests = () => fake;
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+
+      await service.selectTesterController('/dev/hidraw9');
+      const snapshot = await service.selectBridge(null);
+
+      expect(fake.closed).toBe(true);
+      expect(snapshot.bridgeDevices?.directControllers[0]?.selectedForTester).toBe(false);
+      // No direct source and no bridge transport: the bridge-path null result.
+      expect(await service.readControllerInput()).toBeNull();
+    });
+
+    it('calibrates a USB controller with the controller-native feature reports', async () => {
+      const service = serviceFixture();
+      const fake = new FakeDirectDevice('aabbccddeeff');
+      service.directHidOpenForTests = () => fake;
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+      await service.selectTesterController('/dev/hidraw9');
+
+      await service.setNvsUnlocked(true);
+      await service.sendStickCalibration(1, 1);
+      const status = await service.readCalibrationStatus();
+      await service.setNvsUnlocked(false);
+
+      expect(fake.sentFeatureReports).toEqual([
+        [0x80, 3, 2, 101, 50, 64, 12],
+        [0x82, 1, 1, 1],
+        [0x80, 3, 1]
+      ]);
+      // The controller's own reply, decoded with the shared shape: target [2], code [3].
+      expect(status?.received).toBe(true);
+      expect(status?.target).toBe(1);
+      expect(status?.code).toBe(1);
+    });
+
+    it('drops the selection when the controller leaves the bus', async () => {
+      const service = serviceFixture();
+      const fake = new FakeDirectDevice('aabbccddeeff');
+      service.directHidOpenForTests = () => fake;
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+      await service.selectTesterController('/dev/hidraw9');
+
+      audioHelperMock.listBridges.mockResolvedValue({ bridges: [], hidDevices: [] });
+      const snapshot = await service.refreshBridgeDevices();
+
+      expect(fake.closed).toBe(true);
+      expect(snapshot.bridgeDevices?.directControllers).toHaveLength(0);
+      expect(await service.readControllerInput()).toBeNull();
+    });
+  });
 });

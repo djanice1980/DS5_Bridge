@@ -83,6 +83,9 @@ const api = {
   setSpeakerGainLevel: (value: number): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setSpeakerGainLevel', value)
   ),
+  selectTesterController: (devicePath: string | null): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:selectTesterController', devicePath)
+  ),
   selectBridge: (devicePath: string | null): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:selectBridge', devicePath)
   ),
