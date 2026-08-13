@@ -6537,7 +6537,10 @@ export function App() {
                 )}
                 {directControllers.map((controller) => (
                   <div key={controller.path} className="bridge-direct-controller" title={controller.path}>
-                    {(controller.product ?? 'DualSense').replace(' Wireless Controller', '')} — USB direct
+                    {(controller.product ?? 'DualSense').replace(' Wireless Controller', '')}
+                    {controller.chargingViaBridge
+                      ? ' — charging via USB (data on bridge)'
+                      : ' — USB direct'}
                   </div>
                 ))}
               </div>

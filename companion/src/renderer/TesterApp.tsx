@@ -3,7 +3,7 @@ import type { BridgeSnapshot } from '../shared/types';
 import type { ControllerInputSnapshot, DualSenseInputState } from '../shared/dualsense-input';
 import { ControllerDiagram, GyroDial, AccelVector, type AccelZero } from './ControllerDiagram';
 import { TriggerEffectEditor } from './TriggerEffectEditor';
-import { StickSweep, createSweep, recordSweep, sweepCoverage } from './StickSweep';
+import { StickSweep, type DirectionalSweep, createSweep, recordSweep, directionCoverage, sweepIsComplete } from './StickSweep';
 import {
   StickDeadzoneScope,
   createDrift,
@@ -78,8 +78,8 @@ export function TesterApp() {
   const [calibrationError, setCalibrationError] = useState<string | null>(null);
   const [calibrationAwaitingSweep, setCalibrationAwaitingSweep] = useState(false);
   // Refs, not state: this is written at the poll rate and only needs to be READ when rendering.
-  const sweepLeft = useRef<number[]>(createSweep());
-  const sweepRight = useRef<number[]>(createSweep());
+  const sweepLeft = useRef<DirectionalSweep>(createSweep());
+  const sweepRight = useRef<DirectionalSweep>(createSweep());
   // Bumped after each fold so the trace actually repaints.
   const [sweepTick, setSweepTick] = useState(0);
   // Permanent mode is per-run and never sticky: it must be chosen again every time, so it can
@@ -269,7 +269,9 @@ export function TesterApp() {
       } else {
         // The range pass records what the sticks reach while the session is open, so the sweep
         // happens between begin and store rather than at a sample call.
-        setCalibrationStep(`${label}: sweep both sticks fully, then press Finish`);
+        setCalibrationStep(
+          `${label}: sweep both sticks slowly around the rim -- one full circle clockwise, one counterclockwise -- then press Finish`
+        );
         // Fresh trace per run, or the previous attempt's coverage would read as this one's.
         sweepLeft.current = createSweep();
         sweepRight.current = createSweep();
@@ -398,6 +400,16 @@ export function TesterApp() {
   const state = input?.state ?? null;
   const connected = input?.controllerConnected === true;
 
+  // Range-sweep gate. sweepTick forces re-render as samples land, so these stay current.
+  void sweepTick;
+  const sweepDone = sweepIsComplete(sweepLeft.current) && sweepIsComplete(sweepRight.current);
+  const sweepWorstDirection = Math.min(
+    directionCoverage(sweepLeft.current.cw),
+    directionCoverage(sweepLeft.current.ccw),
+    directionCoverage(sweepRight.current.cw),
+    directionCoverage(sweepRight.current.ccw)
+  );
+
   const bridges = snapshot?.bridgeDevices?.bridges ?? [];
   const directControllers = snapshot?.bridgeDevices?.directControllers ?? [];
   const selectedDirect = directControllers.find((controller) => controller.selectedForTester) ?? null;
@@ -436,8 +448,9 @@ export function TesterApp() {
     if (!state || !calibrationAwaitingSweep) {
       return;
     }
-    recordSweep(sweepLeft.current, state.leftStickX, state.leftStickY);
-    recordSweep(sweepRight.current, state.rightStickX, state.rightStickY);
+    const nowMs = performance.now();
+    recordSweep(sweepLeft.current, state.leftStickX, state.leftStickY, nowMs);
+    recordSweep(sweepRight.current, state.rightStickX, state.rightStickY, nowMs);
     setSweepTick((tick) => tick + 1);
   }, [state, calibrationAwaitingSweep]);
 
@@ -927,11 +940,20 @@ export function TesterApp() {
               </button>
               <button
                 type="button"
-                disabled={!calibrationAwaitingSweep}
+                disabled={!calibrationAwaitingSweep || !sweepDone}
                 onClick={() => void finishRangeCalibration(permanentArmed)}
               >
                 Finish
               </button>
+              {calibrationAwaitingSweep && !sweepDone && sweepWorstDirection >= 0.6 && (
+                <button
+                  type="button"
+                  className="tester-danger"
+                  onClick={() => void finishRangeCalibration(permanentArmed)}
+                >
+                  Store anyway (sweep incomplete)
+                </button>
+              )}
               <button
                 type="button"
                 className="tester-danger"
@@ -940,29 +962,31 @@ export function TesterApp() {
               >
                 Make permanent
               </button>
-              <span className="tester-subtle">Sweep both sticks fully, then Finish.</span>
+              <span className="tester-subtle">
+                One slow circle each way per stick &mdash; about two seconds per circle &mdash;
+                unlocks Finish. Sweeping faster than the controller can be read earns nothing.
+              </span>
             </div>
           </div>
           {calibrationAwaitingSweep && state && (
             <div className="tester-sweeps" data-tick={sweepTick}>
               <StickSweep
                 label="Left stick"
-                sectors={sweepLeft.current}
+                sweep={sweepLeft.current}
                 x={state.leftStickX}
                 y={state.leftStickY}
               />
               <StickSweep
                 label="Right stick"
-                sectors={sweepRight.current}
+                sweep={sweepRight.current}
                 x={state.rightStickX}
                 y={state.rightStickY}
               />
               <p className="tester-subtle tester-sweeps-note">
-                Push each stick to its limit all the way around. The filled shape is how far it
-                has reached; a gap is a direction the controller has not seen yet.
-                {sweepCoverage(sweepLeft.current) > 0.92 && sweepCoverage(sweepRight.current) > 0.92
-                  ? ' Both look fully covered.'
-                  : ''}
+                Push each stick to its limit and sweep slowly around the rim: one full circle
+                clockwise, then one counterclockwise. The filled shape is how far it has reached;
+                a gap is a direction the controller has not seen yet.
+                {sweepDone ? ' Both sticks fully swept in both directions.' : ''}
               </p>
             </div>
           )}
