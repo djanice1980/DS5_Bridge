@@ -28,6 +28,10 @@ try {
   await page.evaluate(() => {
     localStorage.setItem('ds5bridge.startupTutorialCompleted.v1', '1');
   });
+  // Reload so the app boots with the flag: setting it after mount races the tour's first
+  // render, and its backdrop swallows every click when it wins.
+  await page.reload();
+  await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(4000); // let the census settle
 
   const chip = page.locator('.bridge-direct-controller-target');
@@ -68,6 +72,31 @@ try {
       await hapticsButton.click();
       await page.waitForTimeout(2500);
       console.log('haptics test clicked without error');
+    }
+
+    const micButton = page.locator('.overview-action-grid button', { hasText: 'Listen Mic' });
+    const micTimeState = await page.evaluate(async () => {
+      const snapshot = await window.bridge.getStatus();
+      return {
+        audioTargetPath: snapshot?.bridgeDevices?.audioTargetPath ?? null,
+        directCount: snapshot?.bridgeDevices?.directControllers?.length ?? 0
+      };
+    });
+    console.log('state at mic check:', JSON.stringify(micTimeState));
+    console.log('at mic check -- speaker/haptics/mic disabled:',
+      await speakerButton.isDisabled(), await hapticsButton.isDisabled(), await micButton.isDisabled());
+    await page.waitForTimeout(8000);
+    console.log('after 8s settle -- speaker/haptics/mic disabled:',
+      await speakerButton.isDisabled(), await hapticsButton.isDisabled(), await micButton.isDisabled());
+    if (!await micButton.isDisabled()) {
+      const { execSync } = await import('node:child_process');
+      await micButton.click();
+      await page.waitForTimeout(2000);
+      // getUserMedia shows up as a capture stream in PipeWire while the listen runs.
+      const dump = execSync('pw-dump', { encoding: 'utf8' });
+      const captureLive = /"Stream\/Input\/Audio"/.test(dump);
+      console.log('capture stream visible in PipeWire:', captureLive);
+      await page.waitForTimeout(4000);
     }
     await page.screenshot({ path: 'artifacts/ui/usb-audio-validated.png' });
     console.log('screenshot saved');

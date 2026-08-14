@@ -3887,13 +3887,18 @@ export function App() {
   const testSpeakerUnavailable = audioTargetUsb
     ? pendingAction !== null || speakerTestLocked
     : testSpeakerUnavailableViaBridge;
-  const testMicUnavailable = !controllerControlsAvailable
+  const testMicUnavailableViaBridge = !controllerControlsAvailable
     || !duplexMicEnabled
     || pendingAction !== null
     || micVolumeCommitPending
     || lightbarCommitPending
     || micTestLocked
     || gameStreamActive;
+  // A wired controller's mic is a plain USB capture source -- no firmware in the path, and no
+  // dependency on the bridge's duplex-mic setting.
+  const testMicUnavailable = audioTargetUsb
+    ? pendingAction !== null || micTestLocked
+    : testMicUnavailableViaBridge;
   const speakerStatusReady = connected
     && speakerVolumeSupported
     && speakerEnabled
@@ -4864,7 +4869,9 @@ export function App() {
     setMicTestError(null);
     void (async () => {
       try {
-        if (snapshot && micVolumeValue !== snapshot.settings.micVolumePercent) {
+        // The mic-volume slider is a bridge firmware setting; syncing it is meaningless when
+        // listening to a USB controller's own capture source.
+        if (!audioTargetUsb && snapshot && micVolumeValue !== snapshot.settings.micVolumePercent) {
           micVolumeEditingRef.current = true;
           const next = await window.bridge.setMicVolume(micVolumeValue);
           setSnapshot(next);

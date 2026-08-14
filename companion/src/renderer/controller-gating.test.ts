@@ -20,7 +20,7 @@ const CONTROLLER_PREDICATES = [
   'testHapticsUnavailableViaBridge',
   'testRumbleUnavailable',
   'testSpeakerUnavailableViaBridge',
-  'testMicUnavailable',
+  'testMicUnavailableViaBridge',
   'testTriggersUnavailable',
   'audioReactiveHapticsControlDisabled',
   'audioReactiveHapticsBlocked'
@@ -37,7 +37,8 @@ describe('controller-facing controls', () => {
 
   it.each([
     ['testHapticsUnavailable', 'testHapticsUnavailableViaBridge'],
-    ['testSpeakerUnavailable', 'testSpeakerUnavailableViaBridge']
+    ['testSpeakerUnavailable', 'testSpeakerUnavailableViaBridge'],
+    ['testMicUnavailable', 'testMicUnavailableViaBridge']
   ])('%s only relaxes for a USB audio target, never for a bare bridge', (name, base) => {
     // The USB arm must still be a real gate (pending action / test lock), and the non-USB arm
     // must be the bridge predicate this file already vets. Whitespace-normalised so formatting
