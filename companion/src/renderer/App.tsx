@@ -3602,6 +3602,17 @@ export function App() {
   // Devices tab: the newest history entry is the current controller when one is attached,
   // otherwise it is simply the last one we saw.
   const controllerHistory = snapshot?.settings.controllerHistory ?? [];
+  // A USB-connected controller (working HID) and its remembered identity. Derived here, ahead
+  // of every gate and card that needs it.
+  const usbLiveController = (snapshot?.bridgeDevices?.directControllers ?? [])
+    .find((controller) => !controller.hidUnavailable) ?? null;
+  const usbLiveHistoryEntry = usbLiveController?.mac
+    ? (snapshot?.settings.controllerHistory ?? []).find((entry) => entry.mac === usbLiveController.mac) ?? null
+    : null;
+  // Audio & haptics are aimed at a USB controller: the helper talks straight to its sink, so
+  // the bridge-centric gates below do not apply to the audio test buttons.
+  const audioTargetUsb = Boolean(snapshot?.bridgeDevices?.audioTargetPath);
+
   // Requires the BRIDGE too: status is retained after the bridge goes away, so
   // controllerConnected alone would keep claiming a controller is attached while the
   // subtitle underneath said "Bridge offline".
@@ -3612,20 +3623,31 @@ export function App() {
   // The card is only the CONNECTED controller. With nothing attached it holds nothing, and
   // every remembered controller belongs in the list -- previously slot 0 was reserved
   // regardless, so the newest one was absent from Previously Seen and had no Forget button.
-  const devicesCurrentEntry = controllerAttached ? controllerHistory[0] ?? null : null;
+  // A USB-wired controller counts as connected too -- its input just reaches this PC through
+  // the system driver instead of the bridge.
+  const devicesUsbEntry = !controllerAttached && usbLiveController?.mac
+    ? controllerHistory.find((entry) => entry.mac === usbLiveController.mac) ?? null
+    : null;
+  const devicesCurrentEntry = controllerAttached
+    ? controllerHistory[0] ?? null
+    : devicesUsbEntry;
   // While the controller is connected the live reading is authoritative; the stored value is
   // only a snapshot. Falling back to it keeps a meaningful "last seen" figure once it is gone.
   const devicesCurrentBatteryPercent = controllerAttached
     ? snapshot?.status?.batteryPercent ?? devicesCurrentEntry?.lastBatteryPercent ?? null
-    : null;
-  const devicesPreviousEntries = controllerAttached ? controllerHistory.slice(1) : controllerHistory;
-  const devicesCurrentSubtitle = !connected
+    : devicesCurrentEntry?.lastBatteryPercent ?? null;
+  const devicesPreviousEntries = devicesCurrentEntry
+    ? controllerHistory.filter((entry) => entry !== devicesCurrentEntry)
+    : controllerHistory;
+  const devicesCurrentSubtitle = !connected && !devicesUsbEntry
     ? 'Bridge offline'
     : controllerAttached
       ? 'Connected now'
-      : controllerHistory.length > 0
-        ? `Last seen ${formatLastSeen(controllerHistory[0]!.lastSeenAt)}`
-        : 'No controller paired';
+      : devicesUsbEntry
+        ? 'Connected now — via USB'
+        : controllerHistory.length > 0
+          ? `Last seen ${formatLastSeen(controllerHistory[0]!.lastSeenAt)}`
+          : 'No controller paired';
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const audioReactiveHapticsEnabled = Boolean(snapshot?.settings.audioReactiveHapticsEnabled);
   // The Audio Haptics header switch is the feature on/off (not just a view toggle), so the
@@ -3794,7 +3816,7 @@ export function App() {
       ? 'Mic Standby'
       : 'Off';
   const speakerOutputMissing = false;
-  const testHapticsUnavailable = !controllerControlsAvailable
+  const testHapticsUnavailableViaBridge = !controllerControlsAvailable
     || !hapticsEnabled
     || pendingAction !== null
     || speakerVolumeCommitPending
@@ -3802,6 +3824,9 @@ export function App() {
     || testLocked
     || Boolean(snapshot?.status?.testHapticsBusy)
     || Boolean(snapshot?.status?.testHapticsCooldown);
+  const testHapticsUnavailable = audioTargetUsb
+    ? pendingAction !== null || testLocked
+    : testHapticsUnavailableViaBridge;
   const testRumbleUnavailable = !controllerControlsAvailable
     || !classicRumbleEnabled
     || pendingAction !== null
@@ -3841,7 +3866,7 @@ export function App() {
   const activeFeedbackTestUnavailable = showClassicRumbleControl ? testRumbleUnavailable : testHapticsUnavailable;
   const activeFeedbackStatusLabel = showClassicRumbleControl ? rumbleStatusLabel : hapticsStatusLabel;
   const activeFeedbackStatusTone = showClassicRumbleControl ? rumbleStatusTone : hapticsStatusTone;
-  const testSpeakerUnavailable = !controllerControlsAvailable
+  const testSpeakerUnavailableViaBridge = !controllerControlsAvailable
     || !speakerVolumeSupported
     || !speakerEnabled
     || pendingAction !== null
@@ -3850,6 +3875,9 @@ export function App() {
     || speakerTestLocked
     || gameStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy);
+  const testSpeakerUnavailable = audioTargetUsb
+    ? pendingAction !== null || speakerTestLocked
+    : testSpeakerUnavailableViaBridge;
   const testMicUnavailable = !controllerControlsAvailable
     || !duplexMicEnabled
     || pendingAction !== null
@@ -3906,17 +3934,21 @@ export function App() {
     ? 'Switching Mode'
     : connected && controllerConnected
     ? controllerName(snapshot.status?.controllerType)
-    : 'Controller';
+    : usbLiveController
+      ? (usbLiveController.product ?? 'DualSense').replace(' Wireless Controller', '')
+      : 'Controller';
   const sidebarDeviceStatus = personaTransitionActive
     ? 'Please wait'
     : connected && controllerConnected
     ? 'Connected'
-    : connected
-      ? 'Controller not connected'
-      : 'Bridge not detected';
+    : usbLiveController
+      ? 'Connected — USB'
+      : connected
+        ? 'Controller not connected'
+        : 'Bridge not detected';
   const sidebarDeviceTone = personaTransitionActive
     ? 'warn'
-    : connected && controllerConnected
+    : (connected && controllerConnected) || usbLiveController
       ? 'good'
       : connected
         ? 'warn'
@@ -3927,7 +3959,9 @@ export function App() {
     ? 'Reconnecting'
     : connected && controllerConnected
     ? `Battery ${batteryPercentLabel}`
-    : 'Battery unavailable';
+    : usbLiveHistoryEntry?.lastBatteryPercent != null
+      ? `Battery ${usbLiveHistoryEntry.lastBatteryPercent}%`
+      : 'Battery unavailable';
   // Multi-bridge census (selector shown only when there is a choice to make
   // or a directly-attached controller worth flagging).
   const bridgeDevices = snapshot?.bridgeDevices ?? null;
@@ -6684,12 +6718,16 @@ export function App() {
                 </div>
               </button>
 
-              {/* Devices, not System: this card is about the Bluetooth link to the
-                  controller, and Devices is where signal, pairing and controllers live. */}
+              {/* Named for both transports now: the controller reaches this PC over the
+                  bridge's Bluetooth link OR straight over USB, and this card reports whichever
+                  is live. Clicking it lands on Devices either way. */}
               <button className="overview-card" type="button" onClick={() => selectControlTab('devices')}>
                 <div className="overview-card-title">
-                  <span className="feature-icon overview-icon"><IconBluetooth size={19} /></span>
-                  <h3>Wireless</h3>
+                  <span className="feature-icon overview-icon">
+                    <IconBluetooth size={19} />
+                    {usbLiveController && <IconUsb size={19} />}
+                  </span>
+                  <h3>Devices</h3>
                 </div>
                 <div className="overview-fields">
                   <div>
@@ -6697,6 +6735,10 @@ export function App() {
                     <strong className={`signal-value ${overviewSignalTone}`} title={overviewSignalTitle}>
                       {overviewSignalLabel}
                     </strong>
+                  </div>
+                  <div>
+                    <span>USB</span>
+                    <strong>{usbLiveController ? 'Connected' : '--'}</strong>
                   </div>
                   <div>
                     <span>Firmware</span>
@@ -9334,7 +9376,13 @@ export function App() {
                     <IconBluetooth size={20} />
                   </span>
                   <div className="title-copy">
-                    <h3>{controllerAttached ? 'Connected Controller' : 'No Controller Connected'}</h3>
+                    <h3>
+                      {controllerAttached
+                        ? 'Connected Controller'
+                        : devicesUsbEntry
+                          ? 'Connected Controller — USB'
+                          : 'No Controller Connected'}
+                    </h3>
                     <p>{devicesCurrentSubtitle}</p>
                   </div>
                 </div>

@@ -13,9 +13,13 @@ import { describe, expect, it } from 'vitest';
 const SOURCE = readFileSync(join(__dirname, 'App.tsx'), 'utf8');
 
 const CONTROLLER_PREDICATES = [
-  'testHapticsUnavailable',
+  // The two audio test predicates gate through *ViaBridge variants: with audio & haptics aimed
+  // at a USB-connected controller the helper talks straight to that controller's sink, so a
+  // bridge-attached controller is not required -- but a controller still is, and the ternary
+  // shape asserted below keeps the bridge path exactly as strict as before.
+  'testHapticsUnavailableViaBridge',
   'testRumbleUnavailable',
-  'testSpeakerUnavailable',
+  'testSpeakerUnavailableViaBridge',
   'testMicUnavailable',
   'testTriggersUnavailable',
   'audioReactiveHapticsControlDisabled',
@@ -29,6 +33,20 @@ describe('controller-facing controls', () => {
     // `connected` alone means the BRIDGE is present, which is true with no controller.
     expect(match![1]).not.toMatch(/^!connected\b/);
     expect(match![1]).toMatch(/^!controllerControlsAvailable\b/);
+  });
+
+  it.each([
+    ['testHapticsUnavailable', 'testHapticsUnavailableViaBridge'],
+    ['testSpeakerUnavailable', 'testSpeakerUnavailableViaBridge']
+  ])('%s only relaxes for a USB audio target, never for a bare bridge', (name, base) => {
+    // The USB arm must still be a real gate (pending action / test lock), and the non-USB arm
+    // must be the bridge predicate this file already vets. Whitespace-normalised so formatting
+    // cannot break the guard.
+    const flat = SOURCE.replace(/\s+/g, ' ');
+    const pattern = new RegExp(
+      `const ${name} = audioTargetUsb \\? pendingAction !== null \\|\\| \\w+ : ${base};`
+    );
+    expect(flat).toMatch(pattern);
   });
 
   it('keeps one definition of "a controller is attached"', () => {
