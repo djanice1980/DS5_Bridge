@@ -436,7 +436,10 @@ export function TesterApp() {
   }
 
   function directLabel(controller: (typeof directControllers)[number]): string {
-    const name = controller.product ?? 'DualSense';
+    const name = (controller.product ?? 'DualSense')
+      .replace(/^Sony Interactive Entertainment\s+/i, '')
+      .replace(/\s*Wireless Controller$/i, '')
+      .trim() || 'DualSense';
     const suffix = controller.chargingViaBridge
       ? ' (charging via USB — data on bridge)'
       : ' — USB direct';

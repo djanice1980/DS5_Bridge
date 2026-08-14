@@ -5105,6 +5105,11 @@ export class BridgeService extends EventEmitter {
         : null,
       settings: this.snapshot.settings,
       personaTransition: this.snapshot.personaTransition,
+      // Without this, census-only changes -- a USB controller appearing, the audio target
+      // toggling, a bridge rename -- updated main-process state and then went unannounced:
+      // the signature matched, the push was suppressed, and the window kept rendering the old
+      // world until some unrelated status change shook it loose.
+      bridgeDevices: this.snapshot.bridgeDevices,
       diagnostics: {
         hidPath: this.snapshot.diagnostics.hidPath,
         protocolVersion: this.snapshot.diagnostics.protocolVersion,

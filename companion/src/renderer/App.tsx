@@ -737,6 +737,15 @@ function controllerTypeLabel(type: 'unknown' | 'dualsense' | 'dualsense-edge'): 
   return 'Controller';
 }
 
+/** "Sony Interactive Entertainment DualSense Wireless Controller" -> "DualSense". The full
+ *  string wraps to three lines in the sidebar card and pushes the battery line out entirely. */
+function directControllerLabel(product: string | null): string {
+  return (product ?? 'DualSense')
+    .replace(/^Sony Interactive Entertainment\s+/i, '')
+    .replace(/\s*Wireless Controller$/i, '')
+    .trim() || 'DualSense';
+}
+
 function formatLastSeen(timestamp: number): string {
   if (!Number.isFinite(timestamp) || timestamp <= 0) return 'never';
   const elapsedMs = Date.now() - timestamp;
@@ -3935,7 +3944,7 @@ export function App() {
     : connected && controllerConnected
     ? controllerName(snapshot.status?.controllerType)
     : usbLiveController
-      ? (usbLiveController.product ?? 'DualSense').replace(' Wireless Controller', '')
+      ? directControllerLabel(usbLiveController.product)
       : 'Controller';
   const sidebarDeviceStatus = personaTransitionActive
     ? 'Please wait'
@@ -6573,7 +6582,7 @@ export function App() {
                   const isAudioTarget = bridgeDevices?.audioTargetPath === controller.path;
                   return (
                     <div key={controller.path} className="bridge-direct-controller" title={controller.path}>
-                      {(controller.product ?? 'DualSense').replace(' Wireless Controller', '')}
+                      {directControllerLabel(controller.product)}
                       {controller.chargingViaBridge
                         ? ' — charging via USB (data on bridge)'
                         : ' — USB direct'}
@@ -6735,10 +6744,6 @@ export function App() {
                     <strong className={`signal-value ${overviewSignalTone}`} title={overviewSignalTitle}>
                       {overviewSignalLabel}
                     </strong>
-                  </div>
-                  <div>
-                    <span>USB</span>
-                    <strong>{usbLiveController ? 'Connected' : '--'}</strong>
                   </div>
                   <div>
                     <span>Firmware</span>
