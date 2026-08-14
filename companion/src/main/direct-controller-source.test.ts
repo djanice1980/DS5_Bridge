@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DirectControllerSource,
+  probeDirectController,
   readDirectControllerMac,
   type DirectHidDevice,
   type DirectHidOpen
@@ -34,6 +35,12 @@ class FakeHidDevice implements DirectHidDevice {
   sendFeatureReport(data: number[]): number {
     this.sentFeatureReports.push([...data]);
     return data.length;
+  }
+
+  timedRead: number[] = [];
+
+  readTimeout(_timeoutMs: number): number[] {
+    return this.timedRead;
   }
 
   close(): void {
@@ -165,6 +172,35 @@ describe('calibration over USB', () => {
     expect(() => source.setNvsUnlocked(false)).toThrow('unplugged');
     expect(() => source.sendCalibrationCommand(1, 1)).toThrow('unplugged');
     expect(source.readCalibrationStatus()).toBeNull();
+  });
+});
+
+describe('probeDirectController', () => {
+  it('reads the battery from one input report alongside the MAC', () => {
+    const device = new FakeHidDevice();
+    device.featureReport = [0x09, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x08, 0x25, 0x00];
+    // 63-byte payload with battery bits at payload[52] (report index 53): nibble 8, so the
+    // shared decoder reports bucket * 10 = 80%.
+    const input = new Array<number>(64).fill(0);
+    input[0] = 0x01;
+    input[53] = 0x08;
+    device.timedRead = input;
+
+    const probe = probeDirectController('/dev/hidraw9', fakeOpen(device));
+
+    expect(probe.mac).toBe('aabbccddeeff');
+    expect(probe.batteryPercent).toBe(80);
+  });
+
+  it('degrades to a MAC-only probe when no input arrives', () => {
+    const device = new FakeHidDevice();
+    device.featureReport = [0x09, 0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa];
+    device.timedRead = [];
+
+    const probe = probeDirectController('/dev/hidraw9', fakeOpen(device));
+
+    expect(probe.mac).toBe('aabbccddeeff');
+    expect(probe.batteryPercent).toBeNull();
   });
 });
 

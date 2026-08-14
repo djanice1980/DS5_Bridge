@@ -1,4 +1,5 @@
 import HID from 'node-hid';
+import { decodeDualSenseInputReport } from '../shared/dualsense-input';
 
 /**
  * Input source for a DualSense plugged straight into the PC over USB.
@@ -33,6 +34,9 @@ export interface DirectHidDevice {
   on(event: 'error', listener: (error: Error) => void): void;
   getFeatureReport(reportId: number, length: number): number[];
   sendFeatureReport(data: number[]): number;
+  /** Synchronous read with a timeout; empty array when nothing arrived. Optional because the
+   *  battery peek degrades gracefully where a backend lacks it. */
+  readTimeout?(timeoutMs: number): number[];
   close(): void;
 }
 
@@ -48,21 +52,43 @@ const defaultOpen: DirectHidOpen = (path) => new HID.HID(path) as unknown as Dir
  * The 0x09 pairing-info report carries the address in reversed (little-endian) byte order;
  * the kernel's hid-playstation driver reverses it the same way (dualsense_get_mac_address).
  */
-export function readDirectControllerMac(path: string, openHid: DirectHidOpen = defaultOpen): string | null {
+export interface DirectControllerProbe {
+  mac: string | null;
+  /** From one input report grabbed during the same open; null when none arrived in time
+   *  (asleep, or the data link is elsewhere). */
+  batteryPercent: number | null;
+}
+
+export function probeDirectController(path: string, openHid: DirectHidOpen = defaultOpen): DirectControllerProbe {
   let device: DirectHidDevice | null = null;
   try {
     device = openHid(path);
     const report = device.getFeatureReport(PAIRING_INFO_FEATURE_REPORT, 20);
     if (!report || report.length < 7 || report[0] !== PAIRING_INFO_FEATURE_REPORT) {
-      return null;
+      return { mac: null, batteryPercent: null };
     }
     let mac = '';
     for (let index = 6; index >= 1; index -= 1) {
       mac += (report[index] & 0xff).toString(16).padStart(2, '0');
     }
-    return /^0+$/.test(mac) ? null : mac;
+    if (/^0+$/.test(mac)) {
+      return { mac: null, batteryPercent: null };
+    }
+
+    // One input report for the battery, while the device is open anyway. A wired DualSense
+    // streams at ~250 Hz, so 100 ms is generous; silence just means no battery reading.
+    let batteryPercent: number | null = null;
+    try {
+      const input = device.readTimeout?.(100) ?? [];
+      if (input.length > 10 && input[0] === DUALSENSE_USB_INPUT_REPORT_ID) {
+        batteryPercent = decodeDualSenseInputReport(input.slice(1))?.batteryPercent ?? null;
+      }
+    } catch {
+      // Battery is a bonus; the MAC is the point.
+    }
+    return { mac, batteryPercent };
   } catch {
-    return null;
+    return { mac: null, batteryPercent: null };
   } finally {
     try {
       device?.close();
@@ -70,6 +96,11 @@ export function readDirectControllerMac(path: string, openHid: DirectHidOpen = d
       // Ignore close failures on a device that may already be gone.
     }
   }
+}
+
+/** Back-compat wrapper: just the MAC. */
+export function readDirectControllerMac(path: string, openHid: DirectHidOpen = defaultOpen): string | null {
+  return probeDirectController(path, openHid).mac;
 }
 
 export class DirectControllerSource {

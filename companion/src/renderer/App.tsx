@@ -9410,7 +9410,18 @@ export function App() {
                       <div className="settings-menu-row" key={entry.mac}>
                         <div className="settings-menu-copy">
                           <strong>{controllerTypeLabel(entry.controllerType)}</strong>
-                          <span>{formatControllerMac(entry.mac)} - {formatLastSeen(entry.lastSeenAt)}</span>
+                          <span>
+                            {formatControllerMac(entry.mac)}
+                            {' - '}
+                            {directControllers.some(
+                              (controller) => controller.mac === entry.mac && !controller.hidUnavailable
+                            )
+                              // A kernel-rejected charging twin has no readable MAC, so it can
+                              // never match here -- and it does not need to: in that state the
+                              // controller is live on the bridge and shown as connected above.
+                              ? 'connected now — via USB'
+                              : formatLastSeen(entry.lastSeenAt)}
+                          </span>
                         </div>
                         <span className="inline-state-badge">
                           {entry.lastBatteryPercent === null ? '--' : `${entry.lastBatteryPercent}%`}

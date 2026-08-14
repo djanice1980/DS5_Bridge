@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import {
   DirectControllerSource,
+  probeDirectController,
   readDirectControllerMac,
   type DirectHidOpen
 } from './direct-controller-source';
@@ -4314,6 +4315,23 @@ export class BridgeService extends EventEmitter {
     this.lastBridgeCensusAt = Date.now();
     try {
       this.bridgeCensus = await listBridges();
+      // A controller freshly seen over USB updates its history entry -- otherwise the
+      // Devices page claims "1h ago" about a controller that is plugged in right now. Probing
+      // happens once per path per session (the MAC cache), so this writes settings once per
+      // plug, not once per census tick.
+      for (const device of this.bridgeCensus.hidDevices) {
+        if (device.isBridge || device.hidUnavailable === true) {
+          continue;
+        }
+        if (this.directControllerMacCache.has(device.path)) {
+          continue;
+        }
+        const probe = probeDirectController(device.path, this.directHidOpenForTests);
+        this.directControllerMacCache.set(device.path, probe.mac);
+        if (probe.mac !== null) {
+          this.recordDirectControllerSeen(probe.mac, device.productId, probe.batteryPercent);
+        }
+      }
       // An audio target that left the bus resets to the bridge.
       if (this.audioTargetPath !== null) {
         const stillPresent = this.bridgeCensus.hidDevices.some((device) =>
@@ -4726,6 +4744,28 @@ export class BridgeService extends EventEmitter {
       .filter((item) => item.mac !== mac);
     this.snapshot.settings = this.settingsStore.update({
       controllerHistory: [entry, ...existing].slice(0, 8)
+    });
+  }
+
+  // A controller seen over the cable rather than through a bridge. Preserves which bridge it
+  // last lived on -- USB presence says nothing about that -- and only takes the battery when
+  // the probe actually got one.
+  private recordDirectControllerSeen(mac: string, productId: number, batteryPercent: number | null): void {
+    const existing = this.settingsStore.get().controllerHistory;
+    const previous = existing.find((item) => item.mac === mac);
+    const entry: ControllerHistoryEntry = {
+      mac,
+      controllerType: productId === 0x0df2
+        ? 'dualsense-edge'
+        : productId === 0x0ce6
+          ? 'dualsense'
+          : previous?.controllerType ?? 'unknown',
+      lastSeenAt: Date.now(),
+      lastBatteryPercent: batteryPercent ?? previous?.lastBatteryPercent ?? null,
+      lastBridgeUniqueId: previous?.lastBridgeUniqueId ?? null
+    };
+    this.snapshot.settings = this.settingsStore.update({
+      controllerHistory: [entry, ...existing.filter((item) => item.mac !== mac)].slice(0, 8)
     });
   }
 
