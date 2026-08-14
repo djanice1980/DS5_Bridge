@@ -34,6 +34,7 @@ export interface DirectHidDevice {
   on(event: 'error', listener: (error: Error) => void): void;
   getFeatureReport(reportId: number, length: number): number[];
   sendFeatureReport(data: number[]): number;
+  write(data: number[]): number;
   /** Synchronous read with a timeout; empty array when nothing arrived. Optional because the
    *  battery peek degrades gracefully where a backend lacks it. */
   readTimeout?(timeoutMs: number): number[];
@@ -101,6 +102,61 @@ export function probeDirectController(path: string, openHid: DirectHidOpen = def
 /** Back-compat wrapper: just the MAC. */
 export function readDirectControllerMac(path: string, openHid: DirectHidOpen = defaultOpen): string | null {
   return probeDirectController(path, openHid).mac;
+}
+
+/**
+ * Output channel to a USB-connected controller: rumble, lightbar, player LEDs, trigger
+ * effects, written as report 0x02 over hidraw (no CRC -- that is a Bluetooth requirement).
+ *
+ * Opens lazily on first write and closes itself after a short idle, so the device is not held
+ * open for the whole session just because outputs were used once. Writes coexist with the
+ * kernel driver and games; whoever writes last wins, which is the same contract the bridge
+ * lives with for host output.
+ */
+export class DirectControllerOutput {
+  private device: DirectHidDevice | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
+
+  constructor(
+    public readonly path: string,
+    private readonly openHid: DirectHidOpen = defaultOpen,
+    private readonly idleCloseMs = 5000
+  ) {}
+
+  write(report: number[]): void {
+    if (this.device === null) {
+      const device = this.openHid(this.path);
+      device.on('error', () => this.close());
+      this.device = device;
+    }
+    try {
+      this.device.write(report);
+    } catch (error) {
+      this.close();
+      throw error;
+    }
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+    }
+    this.idleTimer = setTimeout(() => this.close(), this.idleCloseMs);
+    this.idleTimer.unref?.();
+  }
+
+  close(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    const device = this.device;
+    this.device = null;
+    if (device) {
+      try {
+        device.close();
+      } catch {
+        // Already gone.
+      }
+    }
+  }
 }
 
 export class DirectControllerSource {

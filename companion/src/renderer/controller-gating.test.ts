@@ -18,10 +18,10 @@ const CONTROLLER_PREDICATES = [
   // bridge-attached controller is not required -- but a controller still is, and the ternary
   // shape asserted below keeps the bridge path exactly as strict as before.
   'testHapticsUnavailableViaBridge',
-  'testRumbleUnavailable',
+  'testRumbleUnavailableViaBridge',
   'testSpeakerUnavailableViaBridge',
   'testMicUnavailableViaBridge',
-  'testTriggersUnavailable',
+  'testTriggersUnavailableViaBridge',
   'audioReactiveHapticsControlDisabled',
   'audioReactiveHapticsBlocked'
 ];
@@ -38,7 +38,9 @@ describe('controller-facing controls', () => {
   it.each([
     ['testHapticsUnavailable', 'testHapticsUnavailableViaBridge'],
     ['testSpeakerUnavailable', 'testSpeakerUnavailableViaBridge'],
-    ['testMicUnavailable', 'testMicUnavailableViaBridge']
+    ['testMicUnavailable', 'testMicUnavailableViaBridge'],
+    ['testRumbleUnavailable', 'testRumbleUnavailableViaBridge'],
+    ['testTriggersUnavailable', 'testTriggersUnavailableViaBridge']
   ])('%s only relaxes for a USB audio target, never for a bare bridge', (name, base) => {
     // The USB arm must still be a real gate (pending action / test lock), and the non-USB arm
     // must be the bridge predicate this file already vets. Whitespace-normalised so formatting

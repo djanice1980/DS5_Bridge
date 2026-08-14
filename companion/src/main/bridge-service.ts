@@ -1,10 +1,18 @@
 import { spawn } from 'node:child_process';
 import {
+  DirectControllerOutput,
   DirectControllerSource,
   probeDirectController,
   readDirectControllerMac,
   type DirectHidOpen
 } from './direct-controller-source';
+import {
+  PLAYER_LED_CENTRE_INSTANT,
+  PLAYER_LED_NONE_INSTANT,
+  buildDualSenseUsbOutputReport,
+  type DualSenseOutputUpdate
+} from '../shared/dualsense-output-report';
+import { defaultTriggerEffect, encodeTriggerEffect } from '../shared/trigger-effects';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -1252,6 +1260,8 @@ export class BridgeService extends EventEmitter {
   private device: WinUsbCompanionTransport | null = null;
   // Multi-bridge: latest device census and its refresh clock.
   private bridgeCensus: BridgeCensus | null = null;
+  // Output channel to the USB target (rumble, lightbar, LEDs, triggers over hidraw).
+  private usbOutput: DirectControllerOutput | null = null;
   // Audio & haptics target: null = the active bridge (default); a direct controller's path
   // aims Test Speaker, Test Haptics, the Audio Haptics mirror and use-as-system-output at
   // that controller's own sink instead. Session state, same reasoning as the tester source.
@@ -1462,6 +1472,8 @@ export class BridgeService extends EventEmitter {
     await this.touchpadInhibitEngine.stop();
     await stopVirtualKeyboardEngine();
     this.hidDiscovery.stop();
+    this.usbOutput?.close();
+    this.usbOutput = null;
     this.closeDevice();
   }
 
@@ -2489,6 +2501,7 @@ export class BridgeService extends EventEmitter {
   }
 
   async setLightbarColor(color: string, brightnessPercent: number): Promise<BridgeSnapshot> {
+    // Mirrored to a USB-target controller at the end of this method.
     const parsed = parseHexColor(color);
     const brightness = Math.max(0, Math.min(100, Math.round(brightnessPercent)));
     const nextSettings = {
@@ -2516,6 +2529,7 @@ export class BridgeService extends EventEmitter {
       }
       this.emitSnapshot();
     }
+    this.mirrorLightingToUsb();
     return this.getSnapshot();
   }
 
@@ -2538,6 +2552,7 @@ export class BridgeService extends EventEmitter {
     if (this.snapshot.state === 'connected') {
       await this.applyLightbarSettings(this.snapshot.settings, true);
     }
+    this.mirrorLightingToUsb();
     this.emitSnapshot();
     return this.getSnapshot();
   }
@@ -2586,6 +2601,7 @@ export class BridgeService extends EventEmitter {
     await this.sendSettingCommand(COMMAND_ID.SET_PLAYER_LED_ENABLED, enabled ? 1 : 0, {
       playerLedEnabled: enabled
     });
+    this.mirrorLightingToUsb();
     return this.getSnapshot();
   }
 
@@ -2983,6 +2999,13 @@ export class BridgeService extends EventEmitter {
   }
 
   async testClassicRumble(): Promise<BridgeSnapshot> {
+    if (this.audioTargetPath !== null) {
+      this.writeUsbOutput({ rumble: { right: 230, left: 230 } });
+      setTimeout(() => {
+        this.writeUsbOutput({ rumble: { right: 0, left: 0 } });
+      }, 700).unref?.();
+      return this.getSnapshot();
+    }
     await this.sendCommand(COMMAND_ID.TEST_CLASSIC_RUMBLE, 0, { throwOnCommandError: false });
     return this.getSnapshot();
   }
@@ -2991,6 +3014,22 @@ export class BridgeService extends EventEmitter {
     mode = this.settingsStore.get().triggerTestMode,
     target: TriggerTestTarget = 'both'
   ): Promise<BridgeSnapshot> {
+    if (this.audioTargetPath !== null) {
+      // USB target: compose an equivalent of the firmware's test effect and write it
+      // directly, then release the triggers after the test window. Test modes map onto the
+      // effect vocabulary: feedback -> resistance, vibration -> auto; weapon is itself.
+      const effectType = mode === 'feedback' ? 'resistance' : mode === 'vibration' ? 'auto' : 'weapon';
+      const effect = encodeTriggerEffect(defaultTriggerEffect(effectType));
+      const release = encodeTriggerEffect({ type: 'off' });
+      this.writeUsbOutput({
+        rightTrigger: target !== 'l2' ? effect : undefined,
+        leftTrigger: target !== 'r2' ? effect : undefined
+      });
+      setTimeout(() => {
+        this.writeUsbOutput({ rightTrigger: release, leftTrigger: release });
+      }, 2500).unref?.();
+      return this.getSnapshot();
+    }
     const value = triggerTestModeValue(mode) | (triggerTestTargetValue(target) << 8);
     await this.sendCommand(COMMAND_ID.TEST_ADAPTIVE_TRIGGERS, value, {
       throwOnCommandError: false
@@ -4330,6 +4369,7 @@ export class BridgeService extends EventEmitter {
         this.directControllerMacCache.set(device.path, probe.mac);
         if (probe.mac !== null) {
           this.recordDirectControllerSeen(probe.mac, device.productId, probe.batteryPercent);
+          this.applyBoundProfileToUsbController(probe.mac, device.path);
         }
       }
       // An audio target that left the bus resets to the bridge.
@@ -4769,6 +4809,38 @@ export class BridgeService extends EventEmitter {
     });
   }
 
+  /**
+   * Profiles follow the controller across transports. When a controller with a profile BINDING
+   * arrives over USB, its bound profile's visible identity -- lightbar and player LED -- is
+   * written straight to it, the same promise the bridge keeps when the controller connects
+   * over Bluetooth. Only bound controllers: an explicit binding is the user's instruction to
+   * restyle this controller wherever it appears; anything else is left exactly as it was.
+   */
+  private applyBoundProfileToUsbController(mac: string, devicePath: string): void {
+    const settings = this.settingsStore.get();
+    const profileId = settings.controllerBindings[mac];
+    if (!profileId) {
+      return;
+    }
+    const profile = settings.controllerProfiles.find((candidate) => candidate.id === profileId);
+    if (!profile) {
+      return;
+    }
+    const applied = this.writeUsbOutput(
+      BridgeService.lightingUpdateFrom({
+        ...profile.settings,
+        // The player LED is an app-wide setting, not part of a controller profile.
+        playerLedEnabled: settings.playerLedEnabled
+      }),
+      devicePath
+    );
+    if (applied) {
+      this.appendAudioDebugLines([
+        `[USB out] profile '${profile.name}' applied to USB controller ${mac}`
+      ]);
+    }
+  }
+
   // Devices tab: ask the bridge to open a pairing window. Unlike the BOOTSEL button this
   // also works while a controller is attached -- the firmware disconnects it first.
   async requestControllerPairing(): Promise<BridgeSnapshot> {
@@ -4984,6 +5056,64 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  /**
+   * Write an output update (rumble / lightbar / LEDs / triggers) to a USB controller over
+   * hidraw. Defaults to the audio-target controller; a profile application passes an explicit
+   * path. Same last-writer-wins contract with the kernel driver and games that the bridge has
+   * with host output.
+   */
+  private writeUsbOutput(update: DualSenseOutputUpdate, explicitPath?: string): boolean {
+    const path = explicitPath ?? this.audioTargetPath;
+    if (path === null) {
+      return false;
+    }
+    if (this.usbOutput && this.usbOutput.path !== path) {
+      this.usbOutput.close();
+      this.usbOutput = null;
+    }
+    if (!this.usbOutput) {
+      this.usbOutput = new DirectControllerOutput(path, this.directHidOpenForTests);
+    }
+    try {
+      this.usbOutput.write(buildDualSenseUsbOutputReport(update));
+      return true;
+    } catch (error) {
+      this.appendAudioDebugLines([`[USB out] write failed: ${(error as Error).message}`]);
+      this.usbOutput.close();
+      this.usbOutput = null;
+      return false;
+    }
+  }
+
+  /** The lighting look implied by settings, as controller output bytes. */
+  private static lightingUpdateFrom(settings: {
+    lightbarEnabled: boolean;
+    lightbarColor: string;
+    lightbarBrightnessPercent: number;
+    playerLedEnabled: boolean;
+  }): DualSenseOutputUpdate {
+    const parsed = parseHexColor(settings.lightbarColor);
+    const scale = settings.lightbarEnabled
+      ? Math.max(0, Math.min(100, Math.round(settings.lightbarBrightnessPercent)))
+      : 0;
+    // Brightness folds into the channels exactly the way the firmware scales before writing:
+    // integer truncation of (value * percent + 50) / 100 -- floor, not round, or a zero
+    // channel picks up a stray +1 from the rounding bias.
+    const channel = (value: number) => Math.floor((value * scale + 50) / 100);
+    return {
+      lightbar: { red: channel(parsed.red), green: channel(parsed.green), blue: channel(parsed.blue) },
+      playerLeds: settings.playerLedEnabled ? PLAYER_LED_CENTRE_INSTANT : PLAYER_LED_NONE_INSTANT
+    };
+  }
+
+  /** Push the current lighting settings at the USB target, when one is set. */
+  private mirrorLightingToUsb(): void {
+    if (this.audioTargetPath === null) {
+      return;
+    }
+    this.writeUsbOutput(BridgeService.lightingUpdateFrom(this.settingsStore.get()));
+  }
+
   /** Aim audio & haptics at a direct-USB controller, or back at the bridge with null. */
   async setAudioTarget(devicePath: string | null): Promise<BridgeSnapshot> {
     this.audioTargetPath = devicePath;
@@ -4998,6 +5128,13 @@ export class BridgeService extends EventEmitter {
       }
     }
     this.syncAudioHelperBridgeTarget();
+    if (this.audioTargetPath !== null) {
+      // The controller shows the app's configured look as soon as it becomes the target.
+      this.mirrorLightingToUsb();
+    } else if (this.usbOutput) {
+      this.usbOutput.close();
+      this.usbOutput = null;
+    }
     this.emitSnapshot();
     return this.getSnapshot();
   }

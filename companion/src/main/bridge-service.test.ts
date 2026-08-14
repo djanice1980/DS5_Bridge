@@ -3235,7 +3235,13 @@ describe('BridgeService', () => {
         }
       }
       sentFeatureReports: number[][] = [];
+      writtenReports: number[][] = [];
       calibrationReply: number[] = [0x83, 0x00, 0x01, 0x01];
+
+      write(data: number[]): number {
+        this.writtenReports.push([...data]);
+        return data.length;
+      }
 
       getFeatureReport(reportId?: number): number[] {
         if (reportId === 0x83) {
@@ -3434,6 +3440,118 @@ describe('BridgeService', () => {
       const snapshot = await service.setAudioTarget('usb:5-1.1.2');
 
       expect(snapshot.bridgeDevices?.audioTargetPath).toBeNull();
+    });
+
+    it('applies the configured lighting when a controller becomes the USB target', async () => {
+      const service = serviceFixture({
+        lightbarEnabled: true,
+        lightbarColor: '#ff0000',
+        lightbarBrightnessPercent: 100,
+        playerLedEnabled: true
+      });
+      const fake = new FakeDirectDevice('aabbccddeeff');
+      service.directHidOpenForTests = () => fake;
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+
+      await service.setAudioTarget('/dev/hidraw9');
+
+      const report = fake.writtenReports.at(-1);
+      expect(report?.[0]).toBe(0x02); // USB output report id
+      // Payload byte 1 (report[2]): lightbar + player-indicator flags.
+      expect(report?.[2]).toBe(0x04 | 0x10);
+      // RGB at payload 44-46 (report 45-47), full-brightness red.
+      expect(report?.slice(45, 48)).toEqual([255, 0, 0]);
+      // Player LED byte: centre LED, instant.
+      expect(report?.[44]).toBe(0x24);
+    });
+
+    it('writes a trigger test straight to the USB controller', async () => {
+      const service = serviceFixture();
+      const fake = new FakeDirectDevice('aabbccddeeff');
+      service.directHidOpenForTests = () => fake;
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+      await service.setAudioTarget('/dev/hidraw9');
+      fake.writtenReports.length = 0;
+
+      await service.testAdaptiveTriggers('weapon', 'both');
+
+      const report = fake.writtenReports.at(-1);
+      // Payload byte 0 (report[1]): both trigger-effect flags.
+      expect(report?.[1]).toBe(0x04 | 0x08);
+      // The shared library's simple-weapon effect id (TRIGGER_EFFECT_ID.SIMPLE_WEAPON) leads
+      // both effect blocks: payload 10 and 21. Same encoding Trigger Lab already sends real
+      // controllers through the bridge.
+      expect(report?.[11]).toBe(0x02);
+      expect(report?.[22]).toBe(0x02);
+    });
+
+    it('rumbles the USB controller for a classic rumble test', async () => {
+      const service = serviceFixture();
+      const fake = new FakeDirectDevice('aabbccddeeff');
+      service.directHidOpenForTests = () => fake;
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+      await service.setAudioTarget('/dev/hidraw9');
+      fake.writtenReports.length = 0;
+
+      await service.testClassicRumble();
+
+      const report = fake.writtenReports.at(-1);
+      expect(report?.[1]).toBe(0x01 | 0x02); // compatible-vibration flags
+      expect(report?.[3]).toBe(230); // motor right (payload 2)
+      expect(report?.[4]).toBe(230); // motor left (payload 3)
+    });
+
+    it('applies a bound profile to a controller arriving over USB', async () => {
+      const service = serviceFixture({
+        playerLedEnabled: false,
+        controllerProfiles: [
+          {
+            id: 'p1',
+            name: 'Couch',
+            settings: {
+              stickDeadzoneLeftPercent: 0,
+              stickDeadzoneRightPercent: 0,
+              hapticsEnabled: true,
+              hapticsGainPercent: 100,
+              feedbackBoostEnabled: false,
+              classicRumbleEnabled: true,
+              classicRumbleGainPercent: 100,
+              classicRumbleV1Enabled: false,
+              adaptiveTriggersEnabled: true,
+              triggerEffectIntensityPercent: 100,
+              triggerTestMode: 'feedback',
+              speakerEnabled: true,
+              speakerVolumePercent: 100,
+              micVolumePercent: 100,
+              micMuted: false,
+              audioReactiveHapticsEnabled: false,
+              audioReactiveHapticsSource: 'system-audio',
+              audioReactiveHapticsMode: 'blend',
+              audioReactiveHapticsGainPercent: 100,
+              audioReactiveHapticsBassFocus: 'balanced',
+              audioReactiveHapticsResponse: 'balanced',
+              audioReactiveHapticsAttack: 'balanced',
+              audioReactiveHapticsRelease: 'balanced',
+              lightbarEnabled: true,
+              lightbarColor: '#00ff00',
+              lightbarBrightnessPercent: 100,
+              lightbarOverrideEnabled: true,
+              pollingRateMode: 'standard'
+            }
+          }
+        ],
+        controllerBindings: { aabbccddeeff: 'p1' }
+      } as never);
+      const fake = new FakeDirectDevice('aabbccddeeff');
+      service.directHidOpenForTests = () => fake;
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+
+      await service.refreshBridgeDevices();
+
+      const report = fake.writtenReports.at(-1);
+      expect(report?.[0]).toBe(0x02);
+      // Profile 'Couch': full green.
+      expect(report?.slice(45, 48)).toEqual([0, 255, 0]);
     });
 
     it('drops the selection when the controller leaves the bus', async () => {

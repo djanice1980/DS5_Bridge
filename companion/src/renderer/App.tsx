@@ -3836,13 +3836,16 @@ export function App() {
   const testHapticsUnavailable = audioTargetUsb
     ? pendingAction !== null || testLocked
     : testHapticsUnavailableViaBridge;
-  const testRumbleUnavailable = !controllerControlsAvailable
+  const testRumbleUnavailableViaBridge = !controllerControlsAvailable
     || !classicRumbleEnabled
     || pendingAction !== null
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || testLocked
     || Boolean(snapshot?.status?.testHapticsBusy);
+  const testRumbleUnavailable = audioTargetUsb
+    ? pendingAction !== null || testLocked
+    : testRumbleUnavailableViaBridge;
   const hapticsStatusReady = connected
     && hapticsEnabled
     && !testLocked
@@ -4074,13 +4077,16 @@ export function App() {
       ? 'Active'
       : 'Enabled'
     : 'Off';
-  const testTriggersUnavailable = !controllerControlsAvailable
+  const testTriggersUnavailableViaBridge = !controllerControlsAvailable
     || !adaptiveTriggersSupported
     || !adaptiveTriggersEnabled
     || pendingAction !== null
     || triggerTestLocked
     || adaptiveTriggerOutputActive
     || Boolean(snapshot?.status?.testAdaptiveTriggersBusy);
+  const testTriggersUnavailable = audioTargetUsb
+    ? pendingAction !== null || triggerTestLocked
+    : testTriggersUnavailableViaBridge;
   const triggerStatusReady = connected
     && adaptiveTriggersSupported
     && adaptiveTriggersEnabled

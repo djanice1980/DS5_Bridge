@@ -98,6 +98,19 @@ try {
       console.log('capture stream visible in PipeWire:', captureLive);
       await page.waitForTimeout(4000);
     }
+    // Phase 3: outputs over the cable, driven through the real IPC surface.
+    const outputs = await page.evaluate(async () => {
+      const results = {};
+      try { await window.bridge.testAdaptiveTriggers('weapon', 'both'); results.triggers = 'ok'; }
+      catch (error) { results.triggers = String(error); }
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      try { await window.bridge.testClassicRumble(); results.rumble = 'ok'; }
+      catch (error) { results.rumble = String(error); }
+      return results;
+    });
+    console.log('USB outputs:', JSON.stringify(outputs));
+    await page.waitForTimeout(1200);
+
     await page.screenshot({ path: 'artifacts/ui/usb-audio-validated.png' });
     console.log('screenshot saved');
   }
