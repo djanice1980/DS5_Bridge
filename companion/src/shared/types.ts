@@ -216,6 +216,9 @@ export interface DirectControllerInfo {
   chargingViaBridge: boolean;
   /** True when the tester is currently reading this controller directly. */
   selectedForTester: boolean;
+  /** Present on the bus but with no usable HID node (kernel rejected it as a duplicate of the
+   *  bridge's controller). Charging only; never selectable. */
+  hidUnavailable: boolean;
 }
 
 export interface BridgeIdentityRecord {

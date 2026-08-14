@@ -4867,7 +4867,11 @@ export class BridgeService extends EventEmitter {
       directControllers: this.bridgeCensus.hidDevices
         .filter((device) => !device.isBridge)
         .map((device) => {
-          const mac = this.directControllerMacFor(device.path);
+          const hidUnavailable = device.hidUnavailable === true;
+          // No HID node means no path to read the MAC from -- and no need: the only known way
+          // a Sony controller sits on the bus without HID is the kernel rejecting it as a
+          // duplicate of the controller already live on a bridge.
+          const mac = hidUnavailable ? null : this.directControllerMacFor(device.path);
           return {
             path: device.path,
             product: device.product,
@@ -4876,9 +4880,11 @@ export class BridgeService extends EventEmitter {
             // Same physical controller that is live on the connected bridge: the cable is only
             // charging it, its USB input reports are dormant, and selecting it would render a
             // dead tester. The comparison is in display order on both sides.
-            chargingViaBridge: mac !== null && mac === this.connectedControllerMac,
+            chargingViaBridge: hidUnavailable
+              || (mac !== null && mac === this.connectedControllerMac),
             selectedForTester: this.directTesterSource !== null
-              && BridgeService.bridgePathsEqual(this.directTesterSource.path, device.path)
+              && BridgeService.bridgePathsEqual(this.directTesterSource.path, device.path),
+            hidUnavailable
           };
         }),
       selectedBridgePath: selectedPath ?? null

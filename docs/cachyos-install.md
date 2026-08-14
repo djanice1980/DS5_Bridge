@@ -194,6 +194,18 @@ Otherwise just use the CI-built packages from Releases.
 - **Audio Haptics shows "capture unavailable"** — confirm `pw-record` exists
   (`pacman -Qo $(which pw-record)` should say pipewire) and that a default
   output device is set.
+- **A USB-plugged controller doesn't appear anywhere** — first check it actually
+  reached the PC: `lsusb | grep 054c` should show **two** lines (the bridge plus
+  the controller). One line means the cable or port is charge-only — very common
+  with charger cables — and no software can see what never electrically arrived.
+  Note the bridge itself reads "DualSense Wireless Controller" in `lsusb`; that
+  line is the dongle's impersonation, not your controller.
+- **A USB-plugged controller shows "charging via USB (data on bridge)"** — that
+  is normal, not a fault. While the controller is connected to a bridge over
+  Bluetooth, its USB side only charges; the kernel even rejects its USB identity
+  as a duplicate of the bridge's ("Duplicate device found for MAC address" in
+  `dmesg`). To use it as a USB controller in the tester, power it off first,
+  then plug it in — it wakes in wired mode.
 - **Chords don't type** — `/dev/uinput` permissions; re-run step 2 and log out
   and back in (the `uaccess` tag applies to your seat at login).
 - **Xbox persona has no gamepad** — replug the bridge after switching personas

@@ -128,6 +128,10 @@ export interface BridgeCensusHidDevice {
   product: string | null;
   containerId: string | null;
   isBridge: boolean;
+  /** On the USB bus but with no HID node. The known cause: the same controller is live on a
+   *  bridge, so the kernel's playstation driver rejected the USB twin as a duplicate MAC and
+   *  tore its HID down. The device exists, but only as a charging body. */
+  hidUnavailable?: boolean;
 }
 
 export interface BridgeCensus {

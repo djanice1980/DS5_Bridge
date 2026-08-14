@@ -3349,6 +3349,35 @@ describe('BridgeService', () => {
       expect(status?.code).toBe(1);
     });
 
+    it('marks a kernel-rejected USB twin as charging without opening anything', async () => {
+      const service = serviceFixture();
+      let opened = 0;
+      service.directHidOpenForTests = () => {
+        opened += 1;
+        throw new Error('must not be opened');
+      };
+      audioHelperMock.listBridges.mockResolvedValue({
+        bridges: [{ path: 'usb:5-1.3', containerId: 'usb:5-1.3' }],
+        hidDevices: [{
+          path: 'usb:5-1.1.2',
+          productId: 0x0ce6,
+          product: null,
+          containerId: 'usb:5-1.1.2',
+          isBridge: false,
+          hidUnavailable: true
+        }]
+      });
+
+      const snapshot = await service.refreshBridgeDevices();
+
+      const entry = snapshot.bridgeDevices?.directControllers[0];
+      expect(entry?.hidUnavailable).toBe(true);
+      expect(entry?.chargingViaBridge).toBe(true);
+      expect(entry?.mac).toBeNull();
+      // There is no HID node behind this path; nothing should try to open it.
+      expect(opened).toBe(0);
+    });
+
     it('drops the selection when the controller leaves the bus', async () => {
       const service = serviceFixture();
       const fake = new FakeDirectDevice('aabbccddeeff');

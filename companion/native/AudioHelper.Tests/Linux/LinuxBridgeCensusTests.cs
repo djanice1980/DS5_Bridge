@@ -121,6 +121,46 @@ public class LinuxBridgeCensusTests
     }
 
     [Fact]
+    public void ReportsAControllerWhoseHidTheKernelRejected()
+    {
+        // The charging case seen on real hardware: the controller is live on the bridge over
+        // BT and plugged in over USB. The kernel rejects the USB twin as a duplicate MAC and
+        // tears down its hidraw, so the device exists on the bus with no HID at all.
+        var census = LinuxBridgeCensus.Build(
+            new[]
+            {
+                Bridge("usb:5-1.3", 0x0CE6),                             // the bridge, full mode
+                Bridge("usb:5-1.1.2", 0x0CE6, hasVendorInterface: false) // the real controller
+            },
+            new[]
+            {
+                // Only the bridge's gamepad interface survives as hidraw.
+                new LinuxBridgeCensus.HidDeviceInfo("/dev/hidraw15", Sony, 0x0CE6, "DualSense Wireless Controller", "usb:5-1.3")
+            });
+
+        var charging = Assert.Single(census.HidDevices, device => device.HidUnavailable);
+        Assert.Equal("usb:5-1.1.2", charging.Path);
+        Assert.False(charging.IsBridge);
+    }
+
+    [Fact]
+    public void DoesNotDuplicateAControllerThatHasAWorkingHidNode()
+    {
+        // Controller off, then plugged in: no bridge conflict, hidraw exists -- the USB-level
+        // sighting must not produce a second entry for the same dongle.
+        var census = LinuxBridgeCensus.Build(
+            new[] { Bridge("usb:5-2", 0x0CE6, hasVendorInterface: false) },
+            new[]
+            {
+                new LinuxBridgeCensus.HidDeviceInfo("/dev/hidraw9", Sony, 0x0CE6, "DualSense Wireless Controller", "usb:5-2")
+            });
+
+        var only = Assert.Single(census.HidDevices);
+        Assert.Equal("/dev/hidraw9", only.Path);
+        Assert.False(only.HidUnavailable);
+    }
+
+    [Fact]
     public void ProducesValidJsonWhenNothingIsPluggedIn()
     {
         var json = LinuxBridgeCensus.ToJson(LinuxBridgeCensus.Build(

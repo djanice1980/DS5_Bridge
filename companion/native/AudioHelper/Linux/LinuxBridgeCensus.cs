@@ -27,7 +27,8 @@ static class LinuxBridgeCensus
         int ProductId,
         string? Product,
         string? ContainerId,
-        bool IsBridge);
+        bool IsBridge,
+        bool HidUnavailable = false);
 
     internal sealed record Census(IReadOnlyList<BridgeEntry> Bridges, IReadOnlyList<HidEntry> HidDevices);
 
@@ -64,6 +65,31 @@ static class LinuxBridgeCensus
                 device.ContainerId is not null && bridgePorts.Contains(device.ContainerId)))
             .ToList();
 
+        // A Sony controller that is on the USB bus but has NO hidraw node. This is not a
+        // transient: when a controller is plugged in while the same controller is live on a
+        // bridge, the kernel's playstation driver sees the bridge already claiming that MAC,
+        // rejects the newcomer as a duplicate (EEXIST) and tears down its HID node -- observed
+        // on real hardware ("Duplicate device found for MAC address ..."). Without this entry
+        // the charging controller is invisible and the app cannot explain why.
+        var hidPorts = hid
+            .Where(device => device.ContainerId is not null)
+            .Select(device => device.ContainerId!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var device in usbDevices)
+        {
+            if (device.HasVendorInterface || hidPorts.Contains(device.Path))
+            {
+                continue;
+            }
+            hid.Add(new HidEntry(
+                device.Path,
+                device.ProductId,
+                null,
+                device.Path,
+                IsBridge: false,
+                HidUnavailable: true));
+        }
+
         return new Census(bridges, hid);
     }
 
@@ -80,7 +106,8 @@ static class LinuxBridgeCensus
             productId = device.ProductId,
             product = device.Product,
             containerId = device.ContainerId,
-            isBridge = device.IsBridge
+            isBridge = device.IsBridge,
+            hidUnavailable = device.HidUnavailable
         })
     });
 
