@@ -106,6 +106,11 @@ export function setAudioHelperBridgeTarget(target: AudioHelperBridgeTarget): voi
   activeBridgeTarget = { ...target };
 }
 
+/** Test-only visibility into the module-level target state. */
+export function getAudioHelperBridgeTargetForTests(): AudioHelperBridgeTarget {
+  return { ...activeBridgeTarget };
+}
+
 function bridgeTargetArgs(): string[] {
   const args: string[] = [];
   if (activeBridgeTarget.containerId) {
@@ -424,6 +429,7 @@ export class LinuxUsbHapticsEngine extends EventEmitter {
     this.frameBuffer = Buffer.alloc(0);
     const args = [
       ...bridgePersonaArgs(hostPersonaMode),
+      ...bridgeTargetArgs(),
       '--source',
       'render-loopback',
       '--haptics-only',

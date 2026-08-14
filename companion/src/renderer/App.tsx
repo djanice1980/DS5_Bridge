@@ -6535,14 +6535,29 @@ export function App() {
                     }}
                   />
                 )}
-                {directControllers.map((controller) => (
-                  <div key={controller.path} className="bridge-direct-controller" title={controller.path}>
-                    {(controller.product ?? 'DualSense').replace(' Wireless Controller', '')}
-                    {controller.chargingViaBridge
-                      ? ' — charging via USB (data on bridge)'
-                      : ' — USB direct'}
-                  </div>
-                ))}
+                {directControllers.map((controller) => {
+                  const isAudioTarget = bridgeDevices?.audioTargetPath === controller.path;
+                  return (
+                    <div key={controller.path} className="bridge-direct-controller" title={controller.path}>
+                      {(controller.product ?? 'DualSense').replace(' Wireless Controller', '')}
+                      {controller.chargingViaBridge
+                        ? ' — charging via USB (data on bridge)'
+                        : ' — USB direct'}
+                      {!controller.chargingViaBridge && !controller.hidUnavailable && (
+                        <button
+                          type="button"
+                          className="bridge-direct-controller-target"
+                          title={isAudioTarget
+                            ? 'Audio & haptics tests target this USB controller. Click to target the bridge again.'
+                            : 'Aim Test Speaker, Test Haptics and Audio Haptics at this USB controller instead of the bridge.'}
+                          onClick={() => void window.bridge.setAudioTarget(isAudioTarget ? null : controller.path)}
+                        >
+                          {isAudioTarget ? '✓ audio target' : 'use for audio'}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </>
           )}

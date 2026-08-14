@@ -14,7 +14,8 @@ sealed record PipeWireNode(
     string State,
     int ProcessId,
     string ApplicationName,
-    string ProcessBinary);
+    string ProcessBinary,
+    string? PortPath = null);
 
 sealed record PipeWireSnapshot(
     List<PipeWireNode> Nodes,
@@ -42,14 +43,48 @@ static class PipeWireAudio
         var nodes = new List<PipeWireNode>();
         var defaultSink = "";
         var defaultSource = "";
+        // Device id -> USB port path ("usb:5-1.1.2"), resolved from device.sysfs.path -- the
+        // same identity currency the census uses. This is what tells two identically-named
+        // "DualSense Wireless Controller" sinks apart: the bridge IMPERSONATES a DualSense, so
+        // when a real controller is also plugged in, name matching alone picks whichever
+        // enumerated first and can buzz the wrong device.
+        var devicePorts = new Dictionary<int, string>();
 
         using var document = JsonDocument.Parse(dumpJson);
+        // Devices first: nodes reference them by device.id, and pw-dump does not promise an
+        // ordering between the two.
+        foreach (var element in document.RootElement.EnumerateArray())
+        {
+            var type = element.TryGetProperty("type", out var typeElement) ? typeElement.GetString() ?? "" : "";
+            if (type != "PipeWire:Interface:Device")
+            {
+                continue;
+            }
+            if (!element.TryGetProperty("id", out var idElement)
+                || !element.TryGetProperty("info", out var deviceInfo)
+                || deviceInfo.ValueKind != JsonValueKind.Object
+                || !deviceInfo.TryGetProperty("props", out var deviceProps))
+            {
+                continue;
+            }
+            var sysfsPath = GetString(deviceProps, "device.sysfs.path");
+            if (sysfsPath.Length == 0)
+            {
+                continue;
+            }
+            var portPath = LinuxBridgeCensus.PortPathFromSysfsPath(sysfsPath);
+            if (portPath is not null)
+            {
+                devicePorts[idElement.GetInt32()] = portPath;
+            }
+        }
+
         foreach (var element in document.RootElement.EnumerateArray())
         {
             var type = element.TryGetProperty("type", out var typeElement) ? typeElement.GetString() ?? "" : "";
             if (type == "PipeWire:Interface:Node")
             {
-                var node = ParseNode(element);
+                var node = ParseNode(element, devicePorts);
                 if (node is not null)
                 {
                     nodes.Add(node);
@@ -96,7 +131,7 @@ static class PipeWireAudio
         return new PipeWireSnapshot(nodes, defaultSink, defaultSource);
     }
 
-    private static PipeWireNode? ParseNode(JsonElement element)
+    private static PipeWireNode? ParseNode(JsonElement element, IReadOnlyDictionary<int, string> devicePorts)
     {
         if (!element.TryGetProperty("id", out var idElement))
         {
@@ -114,6 +149,7 @@ static class PipeWireAudio
             return null;
         }
 
+        var deviceId = (int)GetLong(props, "device.id");
         return new PipeWireNode(
             Id: idElement.GetInt32(),
             Serial: GetLong(props, "object.serial"),
@@ -126,7 +162,8 @@ static class PipeWireAudio
             State: GetString(info, "state"),
             ProcessId: (int)GetLong(props, "application.process.id"),
             ApplicationName: GetString(props, "application.name"),
-            ProcessBinary: GetString(props, "application.process.binary"));
+            ProcessBinary: GetString(props, "application.process.binary"),
+            PortPath: devicePorts.TryGetValue(deviceId, out var portPath) ? portPath : null);
     }
 
     private static string GetString(JsonElement element, string property)
@@ -324,46 +361,84 @@ static class LinuxEndpointManager
         return false;
     }
 
-    public static PipeWireNode? SelectBridgeSink(PipeWireSnapshot snapshot)
+    // Target-aware pick. targetContainer is the USB port path the app manages ("usb:5-1.3"),
+    // the same identity the census reports; null keeps the legacy first-alias behaviour.
+    //
+    // STRICT on purpose: when a target is named and the alias candidates expose port paths but
+    // none matches, this returns null rather than falling back to "some DualSense-named sink".
+    // The bridge impersonates a DualSense, so with a real controller also plugged in the
+    // fallback would be indistinguishable from the bug this exists to fix -- audio or a haptics
+    // buzz landing on the wrong physical device. Only when NO candidate resolves a port (an
+    // environment where ports cannot be read at all) does it degrade to the alias pick.
+    private static PipeWireNode? PickTargeted(
+        IEnumerable<PipeWireNode> candidates,
+        string? targetContainer)
     {
-        return snapshot.Nodes.FirstOrDefault(node =>
-            node.MediaClass == "Audio/Sink" && IsBridgeNode(node));
+        var list = candidates.ToList();
+        if (string.IsNullOrEmpty(targetContainer))
+        {
+            return list.FirstOrDefault();
+        }
+        var exact = list.FirstOrDefault(node =>
+            node.PortPath is not null
+            && string.Equals(node.PortPath, targetContainer, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null)
+        {
+            return exact;
+        }
+        return list.Any(node => node.PortPath is not null) ? null : list.FirstOrDefault();
+    }
+
+    public static PipeWireNode? SelectBridgeSink(PipeWireSnapshot snapshot, string? targetContainer = null)
+    {
+        return PickTargeted(
+            snapshot.Nodes.Where(node => node.MediaClass == "Audio/Sink" && IsBridgeNode(node)),
+            targetContainer);
     }
 
     // The app-facing "Speaker" sink the ALSA UCM split exposes is stereo and
     // hides the two haptic channels. The raw hw device (Audio/Sink/Internal,
     // node.name alsa_output.hw_*) carries all four USB channels, so haptics
     // must target it to reach channels 2/3. Falls back to the plain sink.
-    public static PipeWireNode? SelectBridgeRawSink(PipeWireSnapshot snapshot)
+    public static PipeWireNode? SelectBridgeRawSink(PipeWireSnapshot snapshot, string? targetContainer = null)
     {
-        return snapshot.Nodes.FirstOrDefault(node =>
-                node.MediaClass == "Audio/Sink/Internal"
-                && (IsBridgeNode(node) || node.Name.StartsWith("alsa_output.hw_", StringComparison.Ordinal)))
-            ?? SelectBridgeSink(snapshot);
+        return PickTargeted(
+                snapshot.Nodes.Where(node =>
+                    node.MediaClass == "Audio/Sink/Internal"
+                    && (IsBridgeNode(node) || node.Name.StartsWith("alsa_output.hw_", StringComparison.Ordinal))),
+                targetContainer)
+            ?? SelectBridgeSink(snapshot, targetContainer);
     }
 
-    public static PipeWireNode? SelectBridgeSource(PipeWireSnapshot snapshot)
+    public static PipeWireNode? SelectBridgeSource(PipeWireSnapshot snapshot, string? targetContainer = null)
     {
-        return snapshot.Nodes.FirstOrDefault(node =>
-            node.MediaClass == "Audio/Source" && IsBridgeNode(node));
+        return PickTargeted(
+            snapshot.Nodes.Where(node => node.MediaClass == "Audio/Source" && IsBridgeNode(node)),
+            targetContainer);
     }
 
-    public static void PrintDefaultRenderStatus()
+    public static void PrintDefaultRenderStatus(string? targetContainer = null)
     {
         var snapshot = PipeWireAudio.Query();
         var defaultSink = snapshot.DefaultSink;
+        // With a target named, "is the managed endpoint" also requires the port to agree (or be
+        // unresolvable); an identically-named sink on another port is a different device.
+        var isManaged = defaultSink is not null && IsBridgeNode(defaultSink)
+            && (string.IsNullOrEmpty(targetContainer)
+                || defaultSink.PortPath is null
+                || string.Equals(defaultSink.PortPath, targetContainer, StringComparison.OrdinalIgnoreCase));
         var payload = new
         {
             deviceName = defaultSink?.Description ?? snapshot.DefaultSinkName,
-            isBridgeEndpoint = defaultSink is not null && IsBridgeNode(defaultSink)
+            isBridgeEndpoint = isManaged
         };
         Console.Out.WriteLine(JsonSerializer.Serialize(payload));
     }
 
-    public static void SetDefaultRenderBridge()
+    public static void SetDefaultRenderBridge(string? targetContainer = null)
     {
         var snapshot = PipeWireAudio.Query();
-        var bridgeSink = SelectBridgeSink(snapshot)
+        var bridgeSink = SelectBridgeSink(snapshot, targetContainer)
             ?? throw new IOException("DS5 Bridge audio endpoint was not found.");
         _ = PipeWireAudio.RunTool("wpctl", new[] { "set-default", bridgeSink.Id.ToString() }, timeoutMs: 5000);
         Console.Error.WriteLine($"status: default-render-set device='{StatusText.Escape(bridgeSink.Description)}'");
@@ -374,11 +449,11 @@ static class LinuxEndpointManager
     // raw hardware volume defaults low (~40%), so just raise a still-quiet sink
     // to a clean 100%. Anything the user has already set to a usable level
     // (>= 50%) is left alone; nothing is ever boosted past 100%.
-    public static void ApplySpeakerCompensation(double factor)
+    public static void ApplySpeakerCompensation(double factor, string? targetContainer = null)
     {
         _ = factor;
         var snapshot = PipeWireAudio.Query();
-        var sink = SelectBridgeSink(snapshot);
+        var sink = SelectBridgeSink(snapshot, targetContainer);
         if (sink is null)
         {
             Console.Error.WriteLine("status: speaker-level-skipped reason=no-sink");

@@ -1251,6 +1251,10 @@ export class BridgeService extends EventEmitter {
   private device: WinUsbCompanionTransport | null = null;
   // Multi-bridge: latest device census and its refresh clock.
   private bridgeCensus: BridgeCensus | null = null;
+  // Audio & haptics target: null = the active bridge (default); a direct controller's path
+  // aims Test Speaker, Test Haptics, the Audio Haptics mirror and use-as-system-output at
+  // that controller's own sink instead. Session state, same reasoning as the tester source.
+  private audioTargetPath: string | null = null;
   // Tester-only direct-USB controller selection. Session state, never persisted: unlike the
   // bridge selection there is no reconnect story to remember -- if the controller is unplugged
   // the selection is meaningless, and on restart the tester defaults back to the bridge.
@@ -4310,6 +4314,17 @@ export class BridgeService extends EventEmitter {
     this.lastBridgeCensusAt = Date.now();
     try {
       this.bridgeCensus = await listBridges();
+      // An audio target that left the bus resets to the bridge.
+      if (this.audioTargetPath !== null) {
+        const stillPresent = this.bridgeCensus.hidDevices.some((device) =>
+          !device.isBridge
+          && device.hidUnavailable !== true
+          && BridgeService.bridgePathsEqual(device.path, this.audioTargetPath));
+        if (!stillPresent) {
+          this.audioTargetPath = null;
+          this.syncAudioHelperBridgeTarget();
+        }
+      }
       // A selected direct controller that left the bus takes its selection with it.
       if (this.directTesterSource) {
         const stillPresent = this.bridgeCensus.hidDevices.some((device) =>
@@ -4421,13 +4436,22 @@ export class BridgeService extends EventEmitter {
 
   private syncAudioHelperBridgeTarget(): void {
     const activePath = this.activeBridgePath();
-    const container = activePath
+    // The container decides which SINK helper invocations act on. When a USB controller is
+    // the audio target, its port path goes here and the helper's strict port matching keeps
+    // tones and haptics off the identically-named bridge sink. The devicePath (transport)
+    // stays the bridge's: firmware-bound operations are not retargetable.
+    const audioTarget = this.audioTargetPath !== null
+      ? this.bridgeCensus?.hidDevices.find((device) =>
+          !device.isBridge
+          && BridgeService.bridgePathsEqual(device.path, this.audioTargetPath))?.containerId ?? undefined
+      : undefined;
+    const bridgeContainer = activePath
       ? this.bridgeCensus?.bridges.find((bridge) =>
           BridgeService.bridgePathsEqual(bridge.path, activePath))?.containerId ?? undefined
       : undefined;
     setAudioHelperBridgeTarget({
       devicePath: activePath ?? undefined,
-      containerId: container
+      containerId: audioTarget ?? bridgeContainer
     });
   }
 
@@ -4887,7 +4911,8 @@ export class BridgeService extends EventEmitter {
             hidUnavailable
           };
         }),
-      selectedBridgePath: selectedPath ?? null
+      selectedBridgePath: selectedPath ?? null,
+      audioTargetPath: this.audioTargetPath
     };
   }
 
@@ -4915,6 +4940,24 @@ export class BridgeService extends EventEmitter {
       }
     }
     await this.refreshBridgeCensus();
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  /** Aim audio & haptics at a direct-USB controller, or back at the bridge with null. */
+  async setAudioTarget(devicePath: string | null): Promise<BridgeSnapshot> {
+    this.audioTargetPath = devicePath;
+    await this.refreshBridgeCensus();
+    if (this.audioTargetPath !== null) {
+      const present = this.bridgeCensus?.hidDevices.some((device) =>
+        !device.isBridge
+        && device.hidUnavailable !== true
+        && BridgeService.bridgePathsEqual(device.path, this.audioTargetPath));
+      if (!present) {
+        this.audioTargetPath = null;
+      }
+    }
+    this.syncAudioHelperBridgeTarget();
     this.emitSnapshot();
     return this.getSnapshot();
   }

@@ -86,6 +86,9 @@ const api = {
   selectTesterController: (devicePath: string | null): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:selectTesterController', devicePath)
   ),
+  setAudioTarget: (devicePath: string | null): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setAudioTarget', devicePath)
+  ),
   selectBridge: (devicePath: string | null): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:selectBridge', devicePath)
   ),

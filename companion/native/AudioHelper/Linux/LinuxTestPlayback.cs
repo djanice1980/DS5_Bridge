@@ -24,7 +24,7 @@ static class LinuxTestPlayback
         }
 
         var snapshot = PipeWireAudio.Query();
-        var device = LinuxEndpointManager.SelectBridgeSink(snapshot)
+        var device = LinuxEndpointManager.SelectBridgeSink(snapshot, options.BridgeContainer)
             ?? throw new IOException("DS5 Bridge audio endpoint was not found.");
 
         var volume = Math.Clamp(options.SpeakerVolumePercent, 0, 100) / 100.0;
@@ -80,7 +80,7 @@ static class LinuxTestPlayback
         try
         {
             snapshot = PipeWireAudio.Query();
-            device = LinuxEndpointManager.SelectBridgeSink(snapshot);
+            device = LinuxEndpointManager.SelectBridgeSink(snapshot, options.BridgeContainer);
         }
         catch (Exception error)
         {

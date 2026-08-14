@@ -1169,6 +1169,9 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:selectTesterController', (_event, devicePath: string | null) => (
     service.selectTesterController(devicePath)
   ));
+  ipcMain.handle('bridge:setAudioTarget', (_event, devicePath: string | null) => (
+    service.setAudioTarget(devicePath)
+  ));
   ipcMain.handle('bridge:refreshBridgeDevices', () => service.refreshBridgeDevices());
   ipcMain.handle('bridge:setBridgeLabel', (_event, uniqueId: string, label: string | null) => service.setBridgeLabel(uniqueId, label));
   ipcMain.handle('bridge:setSpeakerEnabled', (_event, value: boolean) => service.setSpeakerEnabled(value));

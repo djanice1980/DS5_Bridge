@@ -4,13 +4,13 @@ using System.Diagnostics;
 // controller mic clocked — same purpose as the WASAPI keepalive on Windows.
 static class LinuxMicKeepalive
 {
-    public static int Run()
+    public static int Run(string? targetContainer = null)
     {
         PipeWireNode? source;
         try
         {
             var snapshot = PipeWireAudio.Query();
-            source = LinuxEndpointManager.SelectBridgeSource(snapshot);
+            source = LinuxEndpointManager.SelectBridgeSource(snapshot, targetContainer);
         }
         catch (Exception error)
         {

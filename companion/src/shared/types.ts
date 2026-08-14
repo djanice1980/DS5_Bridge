@@ -254,6 +254,9 @@ export interface BridgeDeviceCensus {
   bridges: BridgeDeviceInfo[];
   directControllers: DirectControllerInfo[];
   selectedBridgePath: string | null;
+  /** Path of the USB controller that audio & haptics currently target, or null for the
+   *  active bridge (the default). */
+  audioTargetPath: string | null;
 }
 
 export interface HostPersonaTransition {

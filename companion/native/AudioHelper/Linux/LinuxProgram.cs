@@ -55,17 +55,17 @@ static class LinuxProgram
             }
             if (options.DefaultRenderStatus)
             {
-                LinuxEndpointManager.PrintDefaultRenderStatus();
+                LinuxEndpointManager.PrintDefaultRenderStatus(options.BridgeContainer);
                 return 0;
             }
             if (options.SetDefaultRenderBridge)
             {
-                LinuxEndpointManager.SetDefaultRenderBridge();
+                LinuxEndpointManager.SetDefaultRenderBridge(options.BridgeContainer);
                 return 0;
             }
             if (options.ApplySpeakerCompensation)
             {
-                LinuxEndpointManager.ApplySpeakerCompensation(options.SpeakerCompensationFactor);
+                LinuxEndpointManager.ApplySpeakerCompensation(options.SpeakerCompensationFactor, options.BridgeContainer);
                 return 0;
             }
             if (options.UinputKeyboard)
@@ -74,7 +74,7 @@ static class LinuxProgram
             }
             if (options.MicKeepaliveOnly)
             {
-                return LinuxMicKeepalive.Run();
+                return LinuxMicKeepalive.Run(options.BridgeContainer);
             }
             if (options.InhibitTouchpad)
             {
@@ -108,6 +108,7 @@ sealed class LinuxHelperOptions
     public bool ListDevices;
     public bool ListBridges;
     public string? DevicePath;
+    public string? BridgeContainer;
     public bool DefaultRenderStatus;
     public bool SetDefaultRenderBridge;
     public bool MicKeepaliveOnly;
@@ -165,9 +166,10 @@ sealed class LinuxHelperOptions
                     options.DevicePath = NextValue(args, ref index);
                     break;
                 case "--bridge-container":
-                    // Accepted and ignored: the Windows census keys bridges by container id,
-                    // where the Linux census uses the USB port path as both path and container.
-                    _ = NextValue(args, ref index);
+                    // The USB port path of the device this invocation should act on -- the same
+                    // identity the census reports. Audio endpoint selection uses it to tell the
+                    // bridge's DualSense-named sink apart from a real controller's.
+                    options.BridgeContainer = NextValue(args, ref index);
                     break;
                 case "--default-render-status":
                     options.DefaultRenderStatus = true;

@@ -73,7 +73,7 @@ static class LinuxHapticsMirror
         PipeWireNode? targetNode = null;
         if (!options.StdoutOnly)
         {
-            targetNode = LinuxEndpointManager.SelectBridgeSink(snapshot);
+            targetNode = LinuxEndpointManager.SelectBridgeSink(snapshot, options.BridgeContainer);
             if (targetNode is null)
             {
                 Console.Error.WriteLine(

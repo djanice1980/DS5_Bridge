@@ -3378,6 +3378,64 @@ describe('BridgeService', () => {
       expect(opened).toBe(0);
     });
 
+    it('aims helper invocations at the USB controller and back', async () => {
+      const { getAudioHelperBridgeTargetForTests } = await import('./audio-helper');
+      const service = serviceFixture();
+      service.directHidOpenForTests = () => new FakeDirectDevice('aabbccddeeff');
+      audioHelperMock.listBridges.mockResolvedValue({
+        bridges: [{ path: 'usb:5-1.3', containerId: 'usb:5-1.3' }],
+        hidDevices: [{
+          path: '/dev/hidraw9',
+          productId: 0x0ce6,
+          product: 'DualSense Wireless Controller',
+          containerId: 'usb:5-1.1.2',
+          isBridge: false
+        }]
+      });
+
+      const snapshot = await service.setAudioTarget('/dev/hidraw9');
+      expect(snapshot.bridgeDevices?.audioTargetPath).toBe('/dev/hidraw9');
+      // Helper calls now carry the controller's port as the sink container.
+      expect(getAudioHelperBridgeTargetForTests().containerId).toBe('usb:5-1.1.2');
+
+      const cleared = await service.setAudioTarget(null);
+      expect(cleared.bridgeDevices?.audioTargetPath).toBeNull();
+      expect(getAudioHelperBridgeTargetForTests().containerId).not.toBe('usb:5-1.1.2');
+    });
+
+    it('resets the audio target when the controller unplugs', async () => {
+      const { getAudioHelperBridgeTargetForTests } = await import('./audio-helper');
+      const service = serviceFixture();
+      service.directHidOpenForTests = () => new FakeDirectDevice('aabbccddeeff');
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+      await service.setAudioTarget('/dev/hidraw9');
+
+      audioHelperMock.listBridges.mockResolvedValue({ bridges: [], hidDevices: [] });
+      const snapshot = await service.refreshBridgeDevices();
+
+      expect(snapshot.bridgeDevices?.audioTargetPath).toBeNull();
+      expect(getAudioHelperBridgeTargetForTests().containerId).toBeUndefined();
+    });
+
+    it('refuses a charging-only controller as audio target', async () => {
+      const service = serviceFixture();
+      audioHelperMock.listBridges.mockResolvedValue({
+        bridges: [{ path: 'usb:5-1.3', containerId: 'usb:5-1.3' }],
+        hidDevices: [{
+          path: 'usb:5-1.1.2',
+          productId: 0x0ce6,
+          product: null,
+          containerId: 'usb:5-1.1.2',
+          isBridge: false,
+          hidUnavailable: true
+        }]
+      });
+
+      const snapshot = await service.setAudioTarget('usb:5-1.1.2');
+
+      expect(snapshot.bridgeDevices?.audioTargetPath).toBeNull();
+    });
+
     it('drops the selection when the controller leaves the bus', async () => {
       const service = serviceFixture();
       const fake = new FakeDirectDevice('aabbccddeeff');

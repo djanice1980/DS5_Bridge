@@ -7889,3 +7889,17 @@ input[type="color"]::-webkit-color-swatch {
   font-weight: 600;
   padding: 2px 4px;
 }
+
+.bridge-direct-controller-target {
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 11px;
+  border-radius: 9px;
+  border: 1px solid var(--border-soft, rgba(140, 160, 190, 0.35));
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.bridge-direct-controller-target:hover {
+  border-color: var(--accent, #4d9dff);
+}
