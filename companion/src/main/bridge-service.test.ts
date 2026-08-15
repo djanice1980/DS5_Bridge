@@ -138,7 +138,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
   COMMAND_ID.SET_CLASSIC_RUMBLE_V1,
   COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
-  COMMAND_ID.SET_STICK_DEADZONE,
+  COMMAND_ID.SET_RADIAL_DEADZONES,
   COMMAND_ID.SET_SPEAKER_GAIN,
   COMMAND_ID.SET_SPEAKER_VOLUME,
   COMMAND_ID.SET_DUPLEX_ENABLED,
@@ -182,6 +182,7 @@ class MockHidDevice extends EventEmitter {
   // tests written before bridge selection was keyed on the board id keep their old behaviour.
   uniqueId: string | null = null;
   controllerMac: string | null = null;
+  forkInfoReport: number[] | null = forkInfoReport();
 
   constructor() {
     super();
@@ -239,6 +240,14 @@ class MockHidDevice extends EventEmitter {
       }
       return shortcutEventReport(this.shortcutEvents.shift() ?? 0);
     }
+    if (reportId === REPORT_ID.FORK_INFO) {
+      // The fake models the fork's own firmware, so by default it answers the lineage probe.
+      // Set to null to impersonate upstream firmware (probe fails, fork commands must gate off).
+      if (this.forkInfoReport === null) {
+        throw new Error('Fork info unsupported');
+      }
+      return [...this.forkInfoReport];
+    }
     throw new Error(`Unexpected report ID: ${reportId}`);
   }
 
@@ -272,6 +281,19 @@ class MockHidDevice extends EventEmitter {
 // Minimal DEVICE_IDENTITY report: enough for the board id, which is what bridge selection
 // is keyed on. Everything past the id stays zero, which parses as "no controller, no
 // watchdog telemetry" -- exactly what older firmware looks like.
+function forkInfoReport(forkRevision = 1, protocolMinor = PROTOCOL_MINOR, featureBits = 0x01): number[] {
+  const report = new Array(REPORT_LENGTH).fill(0);
+  report[0] = REPORT_ID.FORK_INFO;
+  report[1] = 0x4c; // 'L'
+  report[2] = 0x4e; // 'N'
+  report[3] = 0x58; // 'X'
+  report[4] = 0x46; // 'F'
+  report[5] = forkRevision;
+  report[6] = protocolMinor;
+  report[7] = featureBits;
+  return report;
+}
+
 function deviceIdentityReport(uniqueId: string, controllerMac?: string): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.DEVICE_IDENTITY;
@@ -3567,6 +3589,65 @@ describe('BridgeService', () => {
       expect(fake.closed).toBe(true);
       expect(snapshot.bridgeDevices?.directControllers).toHaveLength(0);
       expect(await service.readControllerInput()).toBeNull();
+    });
+  });
+
+  describe('firmware lineage gating', () => {
+    async function connectedService(forkInfo: number[] | null): Promise<{ service: BridgeService; device: MockHidDevice }> {
+      const service = serviceFixture();
+      const device = new MockHidDevice();
+      device.forkInfoReport = forkInfo;
+      device.status = statusReport({ controllerConnected: true, settingsRevision: 1, uptimeSeconds: 30 });
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+      await poll(service);
+      return { service, device };
+    }
+
+    it('sends radial deadzones in the upstream wire format', async () => {
+      const { service, device } = await connectedService(forkInfoReport());
+      await service.setStickDeadzone(12, 7);
+      const report = device.sentReports.find((sent) => sent[7] === COMMAND_ID.SET_RADIAL_DEADZONES);
+      expect(report).toBeDefined();
+      // Upstream v1.7.0 shape (firmware sees the report without its id byte, so firmware
+      // buffer[8..9]=value, buffer[10..11]=percents land at report[9..10] and [11..12] here).
+      expect(report![9]).toBe(0);
+      expect(report![10]).toBe(0);
+      expect(report![11]).toBe(12);
+      expect(report![12]).toBe(7);
+    });
+
+    it('refuses fork-only commands against non-fork firmware', async () => {
+      const { service, device } = await connectedService(null);
+      await expect(service.setNvsUnlocked(true)).rejects.toThrow(/Linux-fork firmware/);
+      await expect(service.sendStickCalibration(1, 1)).rejects.toThrow(/Linux-fork firmware/);
+      expect(device.sentReports.find((sent) => sent[7] === COMMAND_ID.SET_NVS_UNLOCKED)).toBeUndefined();
+      expect(device.sentReports.find((sent) => sent[7] === COMMAND_ID.STICK_CALIBRATION)).toBeUndefined();
+    });
+
+    it('hold-input-forwarding silently no-ops against non-fork firmware', async () => {
+      const { service, device } = await connectedService(null);
+      await service.holdInputForwarding(1000);
+      expect(device.sentReports.find((sent) => sent[7] === COMMAND_ID.HOLD_INPUT_FORWARDING)).toBeUndefined();
+    });
+
+    it('withholds deadzones from old upstream firmware but not from protocol-21 upstream', async () => {
+      const { service } = await connectedService(null);
+      // No fork marker and the fake reports the fork's own minor (18 < 21): no deadzone path.
+      await expect(service.setStickDeadzone(5, 5)).rejects.toThrow(/radial-deadzone/);
+    });
+
+    it('skips the deadzone during settings replay when firmware cannot speak it', async () => {
+      const service = serviceFixture();
+      const device = new MockHidDevice();
+      device.forkInfoReport = null;
+      device.status = statusReport({ controllerConnected: true, settingsRevision: 4, uptimeSeconds: 30, statusFlags: 0 });
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+      await poll(service);
+      await flushReapply();
+      const sentIds = device.sentReports.map((sent) => sent[7]);
+      expect(sentIds).toEqual(FULL_REAPPLY_COMMANDS.filter((id) => id !== COMMAND_ID.SET_RADIAL_DEADZONES));
     });
   });
 });

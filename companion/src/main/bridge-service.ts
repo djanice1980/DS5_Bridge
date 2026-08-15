@@ -60,6 +60,7 @@ import {
 } from '../shared/protocol';
 import { TRIGGER_EFFECT_SIZE, type TriggerEffect } from '../shared/trigger-effects';
 import { decodeDualSenseInputReport, type ControllerInputSnapshot } from '../shared/dualsense-input';
+import { parseForkInfoReport, type ForkInfo } from '../shared/protocol';
 import type {
   AdaptiveTriggerPreviewEffect,
   AudioReactiveHapticsAttack,
@@ -143,7 +144,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.70';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.71';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -1262,6 +1263,10 @@ export class BridgeService extends EventEmitter {
   private bridgeCensus: BridgeCensus | null = null;
   // Output channel to the USB target (rumble, lightbar, LEDs, triggers over hidraw).
   private usbOutput: DirectControllerOutput | null = null;
+  // Lineage of the connected firmware: fork firmware answers the FORK_INFO report with the
+  // LNXF magic, upstream firmware answers nothing. Fork-only commands (0x60+) and the shared
+  // radial-deadzone id are gated on this -- see forkCommandsAvailable / radialDeadzoneAvailable.
+  private forkInfo: ForkInfo | null = null;
   // Audio & haptics target: null = the active bridge (default); a direct controller's path
   // aims Test Speaker, Test Haptics, the Audio Haptics mirror and use-as-system-output at
   // that controller's own sink instead. Session state, same reasoning as the tester source.
@@ -2335,12 +2340,20 @@ export class BridgeService extends EventEmitter {
    * sending them separately would have the second overwrite the first.
    */
   async setStickDeadzone(leftPercent: number, rightPercent: number): Promise<BridgeSnapshot> {
+    if (!this.radialDeadzoneAvailable()) {
+      throw new Error(
+        'Stick deadzones need firmware that speaks the shared radial-deadzone command '
+        + '(Linux-fork 1.6.71+, or upstream 1.7.0+). Flash the bundled firmware from Bridge Settings.'
+      );
+    }
     const left = Math.max(0, Math.min(50, Math.round(leftPercent)));
     const right = Math.max(0, Math.min(50, Math.round(rightPercent)));
+    // Upstream v1.7.0 wire format: value 0, percents in the payload.
     await this.sendSettingCommand(
-      COMMAND_ID.SET_STICK_DEADZONE,
-      left | (right << 8),
-      customSettingUpdate({ stickDeadzoneLeftPercent: left, stickDeadzoneRightPercent: right })
+      COMMAND_ID.SET_RADIAL_DEADZONES,
+      0,
+      customSettingUpdate({ stickDeadzoneLeftPercent: left, stickDeadzoneRightPercent: right }),
+      [left, right]
     );
     return this.getSnapshot();
   }
@@ -3098,6 +3111,7 @@ export class BridgeService extends EventEmitter {
     rightEffect: TriggerEffect,
     leftEffect: TriggerEffect
   ): Promise<BridgeSnapshot> {
+    this.requireForkFirmware('Trigger Lab raw effects');
     const report = buildRawTriggerEffectReport(0, target, rightEffect, leftEffect);
     // report[9..10] is the command value; report[11..] the effect bytes.
     const value = report[9] | (report[10] << 8);
@@ -3133,6 +3147,7 @@ export class BridgeService extends EventEmitter {
       }
       return this.getSnapshot();
     }
+    this.requireForkFirmware('Stick calibration over the bridge');
     await this.sendCommand(COMMAND_ID.STICK_CALIBRATION, (op & 0xff) | ((target & 0xff) << 8), {
       throwOnCommandError: false
     });
@@ -3155,6 +3170,7 @@ export class BridgeService extends EventEmitter {
       this.directTesterSource.setNvsUnlocked(unlocked);
       return;
     }
+    this.requireForkFirmware('Permanent-calibration unlock over the bridge');
     await this.sendCommand(COMMAND_ID.SET_NVS_UNLOCKED, unlocked ? 1 : 0, {
       throwOnCommandError: false
     });
@@ -3224,6 +3240,11 @@ export class BridgeService extends EventEmitter {
     if (this.directTesterSource) {
       // Direct-USB mode: input reaches the OS through the kernel driver, not the bridge, so
       // there is nothing here that could pause it. The tester disables the toggle.
+      return;
+    }
+    if (!this.forkCommandsAvailable()) {
+      // The hold is a convenience lease renewed on a timer; against non-fork firmware it
+      // silently does not exist rather than spamming errors every renewal.
       return;
     }
     await this.sendCommand(COMMAND_ID.HOLD_INPUT_FORWARDING, Math.max(0, Math.min(5000, Math.round(holdMs))), {
@@ -4188,11 +4209,12 @@ export class BridgeService extends EventEmitter {
       this.effectiveTriggerEffectIntensity(settings),
       { expectSettingsRevisionChange }
     );
-    await this.sendCommand(
-      COMMAND_ID.SET_STICK_DEADZONE,
-      settings.stickDeadzoneLeftPercent | (settings.stickDeadzoneRightPercent << 8),
-      { expectSettingsRevisionChange }
-    );
+    if (this.radialDeadzoneAvailable()) {
+      await this.sendCommand(COMMAND_ID.SET_RADIAL_DEADZONES, 0, {
+        expectSettingsRevisionChange,
+        extraPayload: [settings.stickDeadzoneLeftPercent, settings.stickDeadzoneRightPercent]
+      });
+    }
     if (!settings.adaptiveTriggersEnabled) {
       await this.sendCommand(COMMAND_ID.RESET_ADAPTIVE_TRIGGERS, 0, { throwOnCommandError: false });
     }
@@ -4518,6 +4540,16 @@ export class BridgeService extends EventEmitter {
     this.connectedControllerMac = null;
     if (!this.device) {
       return;
+    }
+    this.forkInfo = null;
+    try {
+      // Lineage first: everything below is common to both, but command gating needs to know
+      // which firmware this is before any fork-only id could be sent. Upstream firmware throws
+      // on the unknown report id; that is the expected "not the fork" answer, not an error.
+      const forkReport = await this.device.getFeatureReport(REPORT_ID.FORK_INFO, REPORT_LENGTH);
+      this.forkInfo = parseForkInfoReport(forkReport);
+    } catch {
+      this.forkInfo = null;
     }
     try {
       const report = await this.device.getFeatureReport(REPORT_ID.DEVICE_IDENTITY, REPORT_LENGTH);
@@ -5054,6 +5086,35 @@ export class BridgeService extends EventEmitter {
     await this.refreshBridgeCensus();
     this.emitSnapshot();
     return this.getSnapshot();
+  }
+
+  /** Fork-only wire commands (0x60+) exist only on fork firmware >= protocol 18. */
+  private forkCommandsAvailable(): boolean {
+    return this.forkInfo !== null && this.forkInfo.protocolMinor >= 18;
+  }
+
+  /**
+   * The shared radial-deadzone id (0x37) is safe for fork firmware >= 18 and upstream >= 21.
+   * The fork's OWN pre-18 firmware used 0x37 for the input-forwarding hold, and mid-vintage
+   * upstream used 0x36/0x37 differently again -- for anything else the only safe move is to
+   * refuse and point at a firmware update.
+   */
+  private radialDeadzoneAvailable(): boolean {
+    if (this.forkCommandsAvailable()) {
+      return true;
+    }
+    // status.protocolVersion is "major.minor" as text.
+    const version = this.snapshot.status?.protocolVersion ?? '';
+    const minor = Number.parseInt(version.split('.')[1] ?? '0', 10);
+    return this.forkInfo === null && Number.isFinite(minor) && minor >= 21;
+  }
+
+  private requireForkFirmware(feature: string): void {
+    if (!this.forkCommandsAvailable()) {
+      throw new Error(
+        `${feature} needs the Linux-fork firmware (1.6.71 or newer). Flash the bundled firmware from Bridge Settings.`
+      );
+    }
   }
 
   /**

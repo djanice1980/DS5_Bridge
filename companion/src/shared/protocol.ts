@@ -7,7 +7,9 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 17;
+// 18 = the convergence release: shared command ids match upstream (radial deadzones on 0x37)
+// and fork-only commands live at 0x60+. See COMMAND_ID and the fork-info report.
+export const PROTOCOL_MINOR = 18;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -24,8 +26,34 @@ export const REPORT_ID = {
   // firmware serves its cached copy on demand, so nothing is streamed and a closed tester
   // window costs nothing.
   CONTROLLER_INPUT: 0x0b,
-  CALIBRATION_STATUS: 0x0c
+  CALIBRATION_STATUS: 0x0c,
+  // Fork lineage marker (0x60+, the fork-reserved id space). Upstream firmware answers this
+  // GET with nothing; fork firmware answers "LNXF" + fork revision + protocol minor. The magic
+  // is the guard: a reply without all four bytes is NOT fork firmware, whatever else it says.
+  FORK_INFO: 0x60
 } as const;
+
+export interface ForkInfo {
+  forkRevision: number;
+  protocolMinor: number;
+  featureBits: number;
+}
+
+/** Null when the reply is absent or does not carry the fork magic. */
+export function parseForkInfoReport(report: ArrayLike<number> | null | undefined): ForkInfo | null {
+  if (!report || report.length < 8) {
+    return null;
+  }
+  // GET replies arrive with the report id at [0]; the payload starts at [1].
+  if (report[1] !== 0x4c || report[2] !== 0x4e || report[3] !== 0x58 || report[4] !== 0x46) {
+    return null;
+  }
+  return {
+    forkRevision: report[5] & 0xff,
+    protocolMinor: report[6] & 0xff,
+    featureBits: report[7] & 0xff
+  };
+}
 
 export const SHORTCUT_EVENT = {
   CONTROLLER_VOLUME_DOWN: 0x01,
@@ -109,19 +137,25 @@ export const COMMAND_ID = {
   // firmware reads it.
   FORGET_CONTROLLER_PAIRING: 0x2e,
   SET_WAKE_ON_CONNECT: 0x35,
+  // Radial stick deadzones, wire-compatible with UPSTREAM v1.7.0 (their allocation): value 0,
+  // payload [0] = left percent, [1] = right percent. Only send when the firmware is known to
+  // speak it -- fork protocol >= 18, or upstream >= 21. The fork's OLD firmware (minor 17)
+  // used this id for the input-forwarding hold, so sending blind is exactly the misfire this
+  // convergence exists to end.
+  SET_RADIAL_DEADZONES: 0x37,
+  // ---- Fork-reserved command range: 0x60-0x6F. Never below. Upstream is asked not to
+  // allocate here (docs/upstream-backport-notes.md). Requires fork firmware >= 18. ----
   // App-composed trigger effect bytes. The percent-based PREVIEW/APPLY commands quantize to
   // zones and 3-bit force; this one carries the effect verbatim.
-  SET_RAW_TRIGGER_EFFECT: 0x36,
+  SET_RAW_TRIGGER_EFFECT: 0x60,
   // Hold input forwarding to the host, in milliseconds. A lease: the holder renews it and it
   // expires by itself, so a crashed app cannot leave the controller silent.
-  HOLD_INPUT_FORWARDING: 0x37,
-  // Stick deadzone: low byte left percent, high byte right percent.
-  SET_STICK_DEADZONE: 0x38,
+  HOLD_INPUT_FORWARDING: 0x61,
   // Stick calibration: low byte op, high byte target. TEMPORARY -- nothing unlocks NVS.
-  STICK_CALIBRATION: 0x39,
+  STICK_CALIBRATION: 0x62,
   // Unlock (1) or re-lock (0) the controller's permanent storage. Callers must re-lock on every
   // exit path, including failure -- see setNvsUnlocked.
-  SET_NVS_UNLOCKED: 0x3a
+  SET_NVS_UNLOCKED: 0x63
 } as const;
 
 export const ACK_RESULT = {
@@ -668,9 +702,12 @@ function assertVersion(report: ArrayLike<number>): void {
 }
 
 function assertCurrentOrOlderVersion(report: ArrayLike<number>): void {
-  if (report[5] !== PROTOCOL_MAJOR || report[6] > PROTOCOL_MINOR) {
+  // Major must match; minor may EXCEED ours. Both lineages extend report layouts additively,
+  // so a newer firmware's report still carries every field this parser reads -- rejecting it
+  // here would lock the app out of upstream firmware (minor 21+) and of its own future.
+  if (report[5] !== PROTOCOL_MAJOR) {
     throw new ProtocolError(
-      `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}, received ${report[5]}.${report[6]}.`,
+      `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.x, received ${report[5]}.${report[6]}.`,
       'bad-version'
     );
   }
@@ -997,7 +1034,10 @@ export function parseAudioStatusReport(report: ArrayLike<number>): AudioStatusPa
   assertReport(report, REPORT_ID.AUDIO_STATUS);
   const protocolMajor = report[5];
   const protocolMinor = report[6];
-  if (protocolMajor !== PROTOCOL_MAJOR || protocolMinor < 2 || protocolMinor > PROTOCOL_MINOR) {
+  // No upper bound on minor: both lineages extend layouts additively, so a NEWER firmware
+  // (this fork's future, or upstream at minor 21+) still parses -- unknown trailing bytes are
+  // simply not read. Feature availability is gated separately (fork-info + minor thresholds).
+  if (protocolMajor !== PROTOCOL_MAJOR || protocolMinor < 2) {
     throw new ProtocolError(
       `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}, received ${protocolMajor}.${protocolMinor}.`,
       'bad-version'

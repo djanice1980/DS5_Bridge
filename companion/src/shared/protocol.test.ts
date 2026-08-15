@@ -24,6 +24,7 @@ import {
   parseAudioStatsReport,
   parseAckReport,
   parseFeedbackTraceReport,
+  parseForkInfoReport,
   parseTriggerTraceReport,
   parseStatusReport,
   remapButtonIdValue
@@ -603,5 +604,30 @@ describe('companion protocol', () => {
     expect(normalizeBridgePresetId('quiet')).toBe('quiet');
     expect(normalizeBridgePresetId('ptt-f24')).toBe('balanced');
     expect(normalizeBridgePresetId('retired-profile', 'custom')).toBe('custom');
+  });
+  it('parses a fork-info report by its LNXF magic', () => {
+    const report = new Array<number>(64).fill(0);
+    report[0] = REPORT_ID.FORK_INFO;
+    report[1] = 0x4c;
+    report[2] = 0x4e;
+    report[3] = 0x58;
+    report[4] = 0x46;
+    report[5] = 1;
+    report[6] = PROTOCOL_MINOR;
+    report[7] = 0x01;
+    expect(parseForkInfoReport(report)).toEqual({
+      forkRevision: 1,
+      protocolMinor: PROTOCOL_MINOR,
+      featureBits: 0x01
+    });
+  });
+  it('rejects fork-info reports without the magic', () => {
+    // Upstream firmware answers unknown GET reports with zeros rather than erroring;
+    // an all-zero echo must read as "not the fork", never as fork revision 0.
+    const zeros = new Array<number>(64).fill(0);
+    zeros[0] = REPORT_ID.FORK_INFO;
+    expect(parseForkInfoReport(zeros)).toBeNull();
+    expect(parseForkInfoReport(null as unknown as number[])).toBeNull();
+    expect(parseForkInfoReport([REPORT_ID.FORK_INFO, 0x4c, 0x4e])).toBeNull();
   });
 });

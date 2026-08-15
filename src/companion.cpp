@@ -1,4 +1,5 @@
 #include "companion.h"
+#include "radial_deadzone.h"
 
 #include <algorithm>
 #include <cmath>
@@ -27,7 +28,13 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 17;
+// Lineage note: the fork and upstream both advance this counter, so the NUMBER alone cannot
+// distinguish them -- that is what the fork-info report (0x60, "LNXF") is for. 18 is the
+// first fork minor whose command ids match upstream's shared allocations (radial deadzones on
+// 0x37; fork-only commands at 0x60+). An app must never send fork-only ids to firmware that
+// does not answer fork-info, and must not send 0x37 unless the firmware is fork>=18 or
+// upstream>=21.
+constexpr uint8_t kProtocolMinor = 18;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 // From CMake (DS5_BRIDGE_VERSION_* in CMakeLists.txt) -- deliberately no #ifdef fallback, so
 // a build that loses the defines fails to compile instead of reporting a stale version.
@@ -160,18 +167,26 @@ enum CommandId : uint8_t {
     CommandForgetControllerPairings = 0x28,
     CommandForgetControllerPairing = 0x2E,
     CommandSetWakeOnConnect = 0x35,
+    // 0x36/0x37 belong to UPSTREAM (SetLightbarRestoreEnabled / SetRadialDeadzones): both
+    // lineages once allocated them independently with different meanings, which made every
+    // cross-pairing of app and firmware silently misfire commands. The fork now mirrors
+    // upstream's allocations for shared concepts and keeps its own inventions in 0x60-0x6F,
+    // a range reserved for this fork -- upstream is being asked (see
+    // docs/upstream-backport-notes.md) not to allocate there. Never add fork commands below
+    // 0x60 again.
+    // Radial stick deadzones, wire-compatible with upstream v1.7.0: value must be 0, payload
+    // [10] = left percent, [11] = right percent, both capped at kMaxPercent.
+    CommandSetRadialDeadzones = 0x37,
     // App-composed effect bytes. See bt_set_raw_adaptive_trigger_effects.
-    CommandSetRawTriggerEffect = 0x36,
+    CommandSetRawTriggerEffect = 0x60,
     // Hold input forwarding to the host. See host_input_hold_forwarding.
-    CommandHoldInputForwarding = 0x37,
-    // Stick deadzone: low byte left percent, high byte right percent.
-    CommandSetStickDeadzone = 0x38,
+    CommandHoldInputForwarding = 0x61,
     // Stick calibration: low byte op (1 begin, 2 store, 3 sample), high byte target
     // (1 centre, 2 range). TEMPORARY on its own -- see CommandSetNvsUnlocked.
-    CommandStickCalibration = 0x39,
+    CommandStickCalibration = 0x62,
     // Unlock (value 1) or re-lock (value 0) the controller's permanent storage. This is what
     // makes a calibration survive a reset, and what can leave a controller unusable.
-    CommandSetNvsUnlocked = 0x3A,
+    CommandSetNvsUnlocked = 0x63,
 };
 
 enum AckResult : uint8_t {
@@ -2352,23 +2367,24 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
             }
 
-        case CommandSetStickDeadzone:
-            {
-            const uint8_t left = static_cast<uint8_t>(value & 0xff);
-            const uint8_t right = static_cast<uint8_t>((value >> 8) & 0xff);
-            // Capped well below 100: past about half travel the rescale leaves so little usable
-            // range that the stick reads as broken rather than as filtered.
-            constexpr uint8_t kMaxDeadzonePercent = 50;
-            if (left > kMaxDeadzonePercent || right > kMaxDeadzonePercent) {
+        case CommandSetRadialDeadzones:
+            // Byte-for-byte upstream's handler shape, so either lineage's app can set the
+            // deadzone on either lineage's firmware. Capped well below 100: past about half
+            // travel the rescale leaves so little usable range that the stick reads as broken
+            // rather than as filtered.
+            if (
+                value != 0
+                || buffer[10] > ds5::radial_deadzone::kMaxPercent
+                || buffer[11] > ds5::radial_deadzone::kMaxPercent
+            ) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            stick_deadzone_left_percent = left;
-            stick_deadzone_right_percent = right;
+            stick_deadzone_left_percent = buffer[10];
+            stick_deadzone_right_percent = buffer[11];
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
-            }
 
         case CommandStickCalibration:
             {
@@ -3282,34 +3298,12 @@ void companion_loop() {
  * precision near the centre but does not cost reach at the edge -- without it, a 20% deadzone
  * would leave the stick unable to report its last 20% of travel.
  */
+// The fork's original implementation here was also radial with the same rescale curve; the
+// shared header (adopted from upstream) replaces it so both lineages compute identical bytes.
 static void apply_stick_deadzone(uint8_t *x_byte, uint8_t *y_byte, uint8_t deadzone_percent) {
-    if (deadzone_percent == 0) {
-        return;
-    }
-
-    constexpr float kFullTravel = 127.0f;
-    const float deadzone = (static_cast<float>(deadzone_percent) / 100.0f) * kFullTravel;
-    const float x = static_cast<float>(*x_byte) - 128.0f;
-    const float y = static_cast<float>(*y_byte) - 128.0f;
-    const float magnitude = sqrtf((x * x) + (y * y));
-
-    if (magnitude <= deadzone) {
-        *x_byte = 128;
-        *y_byte = 128;
-        return;
-    }
-
-    float scaled = ((magnitude - deadzone) / (kFullTravel - deadzone)) * kFullTravel;
-    if (scaled > kFullTravel) {
-        scaled = kFullTravel;
-    }
-    const float unit_x = x / magnitude;
-    const float unit_y = y / magnitude;
-
-    const int32_t out_x = static_cast<int32_t>(lroundf(unit_x * scaled)) + 128;
-    const int32_t out_y = static_cast<int32_t>(lroundf(unit_y * scaled)) + 128;
-    *x_byte = static_cast<uint8_t>(out_x < 0 ? 0 : (out_x > 255 ? 255 : out_x));
-    *y_byte = static_cast<uint8_t>(out_y < 0 ? 0 : (out_y > 255 ? 255 : out_y));
+    const auto corrected = ds5::radial_deadzone::apply(*x_byte, *y_byte, deadzone_percent);
+    *x_byte = corrected.x;
+    *y_byte = corrected.y;
 }
 
 void companion_process_controller_report(uint8_t *report, uint16_t len) {
@@ -3569,6 +3563,26 @@ bool companion_lightbar_override_enabled() {
     return lightbar_override_enabled;
 }
 
+// The Linux fork's lineage marker. Upstream firmware returns nothing for this id, and the
+// magic guards against any future upstream report that happens to reuse it: an app treats the
+// firmware as fork-lineage only when all four magic bytes match.
+static uint16_t build_fork_info(uint8_t *buffer, uint16_t reqlen) {
+    if (buffer == nullptr || reqlen < 8) {
+        return 0;
+    }
+    buffer[0] = 'L';
+    buffer[1] = 'N';
+    buffer[2] = 'X';
+    buffer[3] = 'F';
+    // Fork protocol revision: bumped when fork-only wire semantics change.
+    buffer[4] = 1;
+    buffer[5] = kProtocolMinor;
+    // Feature bits, reserved. Bit 0 = fork command range 0x60+ live.
+    buffer[6] = 0x01;
+    buffer[7] = 0;
+    return 8;
+}
+
 uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
     if (report_type != HID_REPORT_TYPE_FEATURE) {
         return 0;
@@ -3595,6 +3609,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_audio_status(buffer, reqlen);
         case COMPANION_REPORT_DEVICE_IDENTITY:
             return build_device_identity(buffer, reqlen);
+        case COMPANION_REPORT_FORK_INFO:
+            return build_fork_info(buffer, reqlen);
 #if DS5_TRIGGER_TRACE_ENABLED
         case COMPANION_REPORT_TRIGGER_TRACE:
             return build_trigger_trace(buffer, reqlen);

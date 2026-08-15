@@ -27,6 +27,11 @@
 // re-recognize individual bridges regardless of USB port. Same report id
 // upstream uses for its device-identity concept.
 #define COMPANION_REPORT_DEVICE_IDENTITY 0x0D
+// Fork-lineage marker. 0x60+ is the Linux fork's reserved id space (reports AND commands);
+// upstream firmware answers this GET with nothing, which is exactly how the app tells the two
+// lineages apart -- shared STATUS bytes could be claimed by upstream at any release, but an
+// id they never answer cannot false-positive: the reply must also carry the "LNXF" magic.
+#define COMPANION_REPORT_FORK_INFO 0x60
 #define COMPANION_PAYLOAD_SIZE 63
 
 enum CompanionTriggerTraceStage : uint8_t {

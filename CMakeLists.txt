@@ -238,7 +238,7 @@ pico_set_program_name(ds5-bridge "ds5-bridge")
 # tools/check-firmware-version-sync.mjs parses these set() lines and fails CI on drift.
 set(DS5_BRIDGE_VERSION_MAJOR 1)
 set(DS5_BRIDGE_VERSION_MINOR 6)
-set(DS5_BRIDGE_VERSION_PATCH 70)
+set(DS5_BRIDGE_VERSION_PATCH 71)
 set(DS5_BRIDGE_VERSION "${DS5_BRIDGE_VERSION_MAJOR}.${DS5_BRIDGE_VERSION_MINOR}.${DS5_BRIDGE_VERSION_PATCH}")
 pico_set_program_version(ds5-bridge "${DS5_BRIDGE_VERSION}")
 target_compile_definitions(ds5-bridge PRIVATE

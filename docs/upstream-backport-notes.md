@@ -38,6 +38,8 @@ Items 10+ were added 2026-08-07 and are the substance of this revision.
 | 6 | **Blank profile dropdown** — a fixed-column CSS grid assumed a conditionally-rendered icon | Companion | ⚠️ Latent |
 | 7 | **App version not surfaced anywhere in the UI** (`app:getVersion` IPC + About line) | Companion | ✅ Low |
 | 8 | **`DS5_DEBUG=1` opt-in debug mode** (DevTools + load logging) | Companion | ✅ Low |
+| 18 | **Protocol convergence: fork moved to 0x60–0x6F, adopted your 0x36/0x37** — proposal to reserve the range | Both | ✅ High (discussion) |
+| 19 | **HID feature-report cache serves a stale controller until manual refresh** | Companion | ⚠️ High (discussion) |
 | 9 | Linux audio-haptics, libusb transport, uinput, WirePlumber, packaging, KDE icon | Linux plumbing | ❌ |
 | 10 | **Never bump `PROTOCOL_MINOR` for an additive command id** — it is compared exactly, so every older firmware reads as "bridge not detected" | Both | ✅ **High** |
 | 11 | **A disconnect that never completes wedges the connection phase** until power-cycle | Firmware | ✅ **High** |
@@ -770,4 +772,56 @@ our fork than in yours:
 | DualSense headphone volume | Already had it independently |
 | Stale bridge selection | Not needed — we key on the RP2350 board id, so a changed USB path is matched by identity |
 
-*Generated at companion 1.6.104 / firmware 1.6.68.*
+## 18. Protocol convergence after your v1.7.0 — ✅ Discussion + a proposal
+
+Reviewed at your v1.7.0. Both trees grew commands past 0x35 independently and collided:
+
+| Id | Yours (v1.7.0) | Ours (through 1.6.70) |
+|----|----------------|------------------------|
+| 0x36 | SetLightbarRestoreEnabled | SetRawTriggerEffect |
+| 0x37 | SetRadialDeadzones | HoldInputForwarding |
+| 0x38–0x3A | — | calibration / NVS unlock |
+
+Same magic, same major, overlapping minors — an app from either lineage against firmware
+from the other would issue commands that *do something else entirely* (our old app's
+"hold input forwarding" would toggle your lightbar-restore). As of our **1.6.71 / app 1.6.111**
+we resolved it unilaterally on our side:
+
+- **We adopted your ids and wire format verbatim** for everything you shipped: 0x36, and
+  0x37 SetRadialDeadzones (value 0, percents in payload bytes 10/11, cap 50). Our
+  `radial_deadzone.h` is your file, unmodified, credited.
+- **Our fork-only commands moved to 0x60–0x6F** (raw trigger effect 0x60, hold-input
+  forwarding 0x61, stick calibration 0x62, NVS unlock 0x63). **Proposal: treat 0x60–0x6F as
+  reserved for the Linux fork** in your tree — never allocate there, and we never allocate
+  below 0x60 again. Collision problem ends permanently, and your app running against our
+  firmware degrades cleanly (unknown ids nack; unknown GETs return zeros).
+- **Lineage handshake**: GET feature report **0x60** answers `"LNXF"` + fork revision +
+  protocol minor + feature bits on our firmware; yours answers zeros, which our app reads as
+  "upstream". We looked at putting a fork bit in STATUS instead and could not: both lineages
+  have independently consumed every byte through offset 62, so STATUS has no free bytes —
+  which is itself a good argument for the separate-report approach on your side too if you
+  ever want a capability mask.
+- Our app now gates by lineage: fork commands require the LNXF answer; SetRadialDeadzones is
+  sent to fork ≥ 1.18 **or upstream ≥ 1.21**, so the app works against your firmware.
+
+## 19. Your HID feature-report cache can serve a stale controller — ⚠️ with our planned fix
+
+Observation from the v1.7.0 review, for discussion. Your companion caches controller HID
+feature reports (pairing info, calibration blocks) keyed on the device handle and reuses
+them until a manual refresh. The cache has no invalidation tied to the *bus*: swap
+controllers on the same port between polls (or bridge the controller so the kernel tears
+down and re-creates the hidraw node) and the app keeps answering with the previous
+controller's MAC and calibration until the user hits refresh. Reality and the UI disagree
+until then — pairing decisions and calibration writes can target the wrong physical device.
+
+How we are fixing it in the fork (so you can compare): we are adopting your cache — the
+repeated feature-report reads it eliminates are real cost — but keying invalidation to our
+existing 10-second USB census. The census already produces the set of DualSense-class
+devices by **port path**; when that set changes in any way (arrival, departure, or a port's
+identity changing), every cache entry for a path in the delta is dropped. No manual refresh,
+and the polling infrastructure was already there. The equivalent hook on Windows would be
+WM_DEVICECHANGE / CM_Register_Notification rather than a census diff.
+
+---
+
+*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71.*
