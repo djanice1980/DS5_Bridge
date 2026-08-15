@@ -1129,14 +1129,14 @@ void dualsense_persona_feature_reports_cover_identity_probe_surface() {
     std::array<uint8_t, 63> feature{};
 
     feature.fill(0xaa);
-    EXPECT_EQ(dualsense_persona_get_feature_report(0x03, feature.data(), 47), 47);
+    EXPECT_EQ(dualsense_persona_get_feature_report(HostPersonaModeDualSense, 0x03, feature.data(), 47), 47);
     EXPECT_TRUE(dualsense_persona_has_synthetic_feature_report(0x03));
     EXPECT_EQ(feature[1], 0x28);
     EXPECT_EQ(feature[3], 0x4e);
     EXPECT_EQ(feature[19], 0x81);
 
     feature.fill(0xaa);
-    EXPECT_EQ(dualsense_persona_get_feature_report(0x05, feature.data(), 40), 40);
+    EXPECT_EQ(dualsense_persona_get_feature_report(HostPersonaModeDualSense, 0x05, feature.data(), 40), 40);
     EXPECT_TRUE(dualsense_persona_has_synthetic_feature_report(0x05));
     EXPECT_EQ(feature[6], 0x00);
     EXPECT_EQ(feature[7], 0x04);
@@ -1144,7 +1144,7 @@ void dualsense_persona_feature_reports_cover_identity_probe_surface() {
     EXPECT_EQ(feature[9], 0xfc);
 
     feature.fill(0xaa);
-    EXPECT_EQ(dualsense_persona_get_feature_report(0x09, feature.data(), 19), 19);
+    EXPECT_EQ(dualsense_persona_get_feature_report(HostPersonaModeDualSense, 0x09, feature.data(), 19), 19);
     EXPECT_TRUE(dualsense_persona_has_synthetic_feature_report(0x09));
     EXPECT_EQ(feature[0], 0x00);
     EXPECT_EQ(feature[1], 0xa5);
@@ -1154,7 +1154,7 @@ void dualsense_persona_feature_reports_cover_identity_probe_surface() {
     EXPECT_EQ(feature[5], 0x02);
 
     feature.fill(0xaa);
-    EXPECT_EQ(dualsense_persona_get_feature_report(0x20, feature.data(), 63), 63);
+    EXPECT_EQ(dualsense_persona_get_feature_report(HostPersonaModeDualSense, 0x20, feature.data(), 63), 63);
     EXPECT_TRUE(dualsense_persona_has_synthetic_feature_report(0x20));
     EXPECT_EQ(feature[0], static_cast<uint8_t>('J'));
     EXPECT_EQ(feature[11], static_cast<uint8_t>('1'));
@@ -1174,7 +1174,7 @@ void dualsense_persona_feature_reports_cover_identity_probe_surface() {
     EXPECT_EQ(feature[55], 0x06);
 
     feature.fill(0xaa);
-    EXPECT_EQ(dualsense_persona_get_feature_report(0x22, feature.data(), 63), 63);
+    EXPECT_EQ(dualsense_persona_get_feature_report(HostPersonaModeDualSense, 0x22, feature.data(), 63), 63);
     EXPECT_FALSE(dualsense_persona_has_synthetic_feature_report(0x22));
     for (uint8_t value : feature) {
         EXPECT_EQ(value, 0);

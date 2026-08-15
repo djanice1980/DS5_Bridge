@@ -68,6 +68,19 @@ if (!/pico_set_program_version\(ds5-bridge\s+"\$\{DS5_BRIDGE_VERSION\}"\)/.test(
   failed = true;
 }
 
+// The release workflow reads the version too. It broke silently for three releases when the
+// kFirmware* constants it grepped from companion.cpp were removed by the single-sourcing this
+// checker enforces -- so the checker now also proves the workflow reads the surviving source.
+const releaseWorkflow = read('.github/workflows/release.yml');
+if (/kFirmware(Major|Minor|Patch)/.test(releaseWorkflow)) {
+  console.error('\nFAIL: .github/workflows/release.yml still greps kFirmware* from companion.cpp; those constants no longer exist');
+  failed = true;
+}
+if (!/DS5_BRIDGE_VERSION_MAJOR/.test(releaseWorkflow)) {
+  console.error('\nFAIL: .github/workflows/release.yml must read the firmware version from CMakeLists.txt (DS5_BRIDGE_VERSION_*)');
+  failed = true;
+}
+
 if (failed) {
   process.exit(1);
 }

@@ -17,6 +17,7 @@
 #include "controller_packet_compositor.h"
 #include "feature_report_cache.h"
 #include "controller_output_policy.h"
+#include "dualsense_output.h"
 #include "controller_output_rumble_state.h"
 #include "controller_output_state.h"
 #ifdef ENABLE_COMPANION
@@ -66,7 +67,6 @@
 #define DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE 0x10
 #define DS_OUTPUT_HEADPHONE_VOLUME_MAX 0x7f
 #define DS_OUTPUT_SPEAKER_VOLUME_MAX 0x64
-#define DS_OUTPUT_MIC_VOLUME_MAX 0x40
 #define DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x04
 #define DS_OUTPUT_LIGHTBAR_SETUP_LIGHT_OUT 0x02
 #define DS_TRIGGER_EFFECT_SIZE 11
@@ -247,6 +247,8 @@ struct output_scheduler_counters {
 
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
+static void l2cap_packet_handler_cold(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
+static void handle_l2cap_can_send_now(uint8_t *packet);
 static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet);
 static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason);
@@ -634,7 +636,7 @@ uint8_t bt_copy_pairing_events(uint8_t *out, uint8_t max_events) {
     return count;
 }
 
-bool bt_is_controller_connected() {
+bool __not_in_flash_func(bt_is_controller_connected)() {
     return hid_interrupt_ready;
 }
 
@@ -1194,7 +1196,7 @@ void bt_set_microphone_state(uint8_t volume_percent, bool muted, bool control_mu
     }
     report[3 + OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = muted
         ? 0
-        : static_cast<uint8_t>((companion_mic_volume_percent * DS_OUTPUT_MIC_VOLUME_MAX + 50) / 100);
+        : ds5::output::mic_volume_from_percent(companion_mic_volume_percent);
     report[3 + OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] = muted ? DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE : 0;
     bt_write(report, sizeof(report));
 }
@@ -1446,7 +1448,14 @@ static void cancel_hid_channel_recovery_if_ready() {
  * it. A second copy would drift the moment either one gained a line, and duplicated state in this
  * file has been the cause of more than one bug already.
  */
+static bool restore_uncommitted_pairing_key(char const *reason);
+
 static void finish_controller_disconnect(uint8_t reason) {
+    // A transaction record present here means the link died mid-pairing: either commit the
+    // accepted bond's policy or put the prior key back, exactly as boot recovery would --
+    // but immediately, so the controller is not stranded keyless until the next reset.
+    // The storage-status probe is one TLV read; the common no-record case costs nothing else.
+    (void)restore_uncommitted_pairing_key("controller disconnect");
     const bool host_suspended = usb_host_suspended_active();
     usb_handle_controller_transport_disconnect();
     reset_controller_input_report_cache();
@@ -2183,6 +2192,88 @@ static bool finalize_pairing_transaction(bd_addr_t addr) {
     return ok;
 }
 
+// Ported from upstream (persist_notified_link_key), adapted to this fork's security driving:
+// we issue hci_authentication_requested directly instead of using the GAP security model, so
+// "the existing link is secured" is judged from our own connection phase (post-encryption)
+// rather than gap_security_level().
+//
+// BTstack has already stored the notified key by the time this event reaches us. This
+// re-derives whether that store was AUTHORIZED and whether it actually LANDED in flash:
+// - Authorized means an explicit pairing session (a staged transaction for this address, or
+//   an open pairing window), or a key rotation (CHANGED_COMBINATION_KEY) on an already
+//   encrypted link that had a stored key. An unsolicited key outside those cases is refused
+//   -- a controller must not be able to silently replace a bond it was never invited to.
+// - Landed is proven by read-back. A key that exists only in RAM enables passive reconnect
+//   until the next reboot and then strands the controller; failing closed now (drop, restore
+//   the prior key, disconnect) turns that ghost bond into a visible retry instead.
+static bool persist_notified_link_key(
+    uint8_t const *packet,
+    bd_addr_t addr,
+    bool explicit_pairing_session,
+    bool existing_link_is_secured
+) {
+    link_key_t notified_key;
+    memcpy(notified_key, packet + 8, LINK_KEY_LEN);
+    const link_key_type_t notified_type = static_cast<link_key_type_t>(packet[24]);
+
+    link_key_t stored_key;
+    link_key_type_t stored_type;
+    const bool had_stored_key = gap_get_link_key_for_bd_addr(addr, stored_key, &stored_type);
+    // A CHANGED_COMBINATION_KEY event does not carry the original key's type; the rotated
+    // key keeps the security properties of the key it replaces.
+    const link_key_type_t effective_type =
+        notified_type == CHANGED_COMBINATION_KEY
+        ? (had_stored_key ? stored_type : INVALID_LINK_KEY)
+        : notified_type;
+    const bool update_authorized =
+        explicit_pairing_session
+        || (
+            had_stored_key
+            && notified_type == CHANGED_COMBINATION_KEY
+            && existing_link_is_secured
+        );
+
+    bool key_has_material = false;
+    for (uint8_t i = 0; i < LINK_KEY_LEN; ++i) {
+        key_has_material = key_has_material || notified_key[i] != 0;
+    }
+    if (!update_authorized || !key_has_material || effective_type == INVALID_LINK_KEY) {
+        return false;
+    }
+
+    const bool stored_matches =
+        had_stored_key
+        && memcmp(stored_key, notified_key, LINK_KEY_LEN) == 0
+        && stored_type == effective_type;
+    if (stored_matches) {
+        return true;
+    }
+
+    link_key_t prior_key;
+    link_key_type_t prior_type = INVALID_LINK_KEY;
+    if (had_stored_key) {
+        memcpy(prior_key, stored_key, LINK_KEY_LEN);
+        prior_type = stored_type;
+    }
+    gap_store_link_key_for_bd_addr(addr, notified_key, effective_type);
+    const bool persisted =
+        gap_get_link_key_for_bd_addr(addr, stored_key, &stored_type)
+        && memcmp(stored_key, notified_key, LINK_KEY_LEN) == 0
+        && stored_type == effective_type;
+    if (persisted) {
+        return true;
+    }
+
+    // Fail closed. A first-time partial write must not enable passive reconnect after
+    // reboot, and a failed rotation should keep the previously verified key rather than
+    // stranding an otherwise valid bond.
+    gap_drop_link_key_for_bd_addr(addr);
+    if (had_stored_key) {
+        gap_store_link_key_for_bd_addr(addr, prior_key, prior_type);
+    }
+    return false;
+}
+
 // A reset mid-pairing is the exact case this exists for, so recovery runs at boot.
 static bool recover_pairing_transaction_on_boot() {
     return restore_uncommitted_pairing_key("boot recovery");
@@ -2544,6 +2635,10 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 connection_phase_started_us = time_us_32();
                 HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
             } else {
+                // A staged re-pair has already dropped the prior key; the ACL never forming
+                // means no replacement is coming on this attempt. Put the prior bond back NOW
+                // rather than leaving the controller keyless until the next boot recovery.
+                (void)restore_uncommitted_pairing_key("ACL connection failure");
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
                 note_connection_phase(BtConnectionPhase::Listening);
@@ -2554,13 +2649,42 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_LINK_KEY_NOTIFICATION: {
-            // The new bond exists from here on (BTstack stores it). Advance the transaction
-            // to KeyAccepted so a later failure does NOT roll back over a good key -- past
-            // this point the rollback would destroy the pairing it is meant to protect.
             bd_addr_t addr;
             // BTstack has no ..._notification_ accessor for this; the address sits at the
             // same offset as the request event, which is what upstream reads here too.
             hci_event_link_key_request_get_bd_addr(packet, addr);
+
+            // An explicit pairing session is one this bridge invited: a staged transaction
+            // for this address (outbound re-pair or inbound during the window staged it), or
+            // the button-armed window itself for a first-time bond that had nothing to stage.
+            bool explicit_session = pairing_window_active(time_us_32());
+            {
+                pairing_transaction staged{};
+                if (read_pairing_transaction(staged) && bd_addr_cmp(staged.addr, addr) == 0) {
+                    explicit_session = true;
+                }
+            }
+            // "Secured" for the rotation case: encryption completed on the current link,
+            // which is when connection_phase moves past Securing.
+            const bool link_secured =
+                bd_addr_cmp(addr, current_device_addr) == 0
+                && (connection_phase == BtConnectionPhase::HidOpening
+                    || connection_phase == BtConnectionPhase::Ready);
+
+            if (!persist_notified_link_key(packet, addr, explicit_session, link_secured)) {
+                DS5_LOG("[PAIR] Reject non-durable or unauthorized link key for %s\n",
+                       bd_addr_to_str(addr));
+                // The unauthorized/unpersisted key may still sit in BTstack's DB from its own
+                // default handling; remove it, then put the prior bond back if one was staged.
+                gap_drop_link_key_for_bd_addr(addr);
+                (void)restore_uncommitted_pairing_key("link key persistence failure");
+                bt_disconnect();
+                break;
+            }
+
+            // The new bond is durable from here on. Advance the transaction to KeyAccepted so
+            // a later failure does NOT roll back over a good key -- past this point the
+            // rollback would destroy the pairing it is meant to protect.
             if (!mark_pairing_transaction_key_accepted(addr)) {
                 // No matching record is normal for a first-time bond with nothing to roll
                 // back to. Only flag it when a record exists but could not be updated.
@@ -2831,7 +2955,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
     }
 }
 
-static void note_output_packet_sent(const output_packet &packet, uint32_t now) {
+static __attribute__((noinline, noclone, optimize("O2"))) void __not_in_flash_func(note_output_packet_sent)(const output_packet &packet, uint32_t now) {
     const uint32_t age_us = packet_age_us(now, packet.enqueue_time_us);
     if (last_bt_send_us != 0) {
         update_max_u32(output_counters.bt_send_gap_max_us, packet_age_us(now, last_bt_send_us));
@@ -2892,7 +3016,7 @@ static void note_output_packet_sent(const output_packet &packet, uint32_t now) {
     consecutive_audio_sends = 0;
 }
 
-static bool select_next_output_packet_locked(output_packet &packet, uint32_t now) {
+static __attribute__((noinline, noclone, optimize("O2"))) bool __not_in_flash_func(select_next_output_packet_locked)(output_packet &packet, uint32_t now) {
     if (!output_pending_locked()) {
         return false;
     }
@@ -2994,7 +3118,24 @@ static uint64_t idle_disconnect_timeout_us() {
     return static_cast<uint64_t>(idle_disconnect_timeout_minutes) * 60ULL * 1000ULL * 1000ULL;
 }
 
-static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
+static void __not_in_flash_func(l2cap_packet_handler)(
+    uint8_t packet_type,
+    uint16_t channel,
+    uint8_t *packet,
+    uint16_t size
+) {
+    if (
+        packet_type == HCI_EVENT_PACKET
+        && hci_event_packet_get_type(packet) == L2CAP_EVENT_CAN_SEND_NOW
+        && l2cap_event_can_send_now_get_local_cid(packet) == hid_interrupt_cid
+    ) {
+        handle_l2cap_can_send_now(packet);
+        return;
+    }
+    l2cap_packet_handler_cold(packet_type, channel, packet, size);
+}
+
+static __attribute__((noinline)) void l2cap_packet_handler_cold(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     (void) channel;
 
     if (packet_type == L2CAP_DATA_PACKET) {
@@ -3181,69 +3322,81 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 request_control_can_send_if_needed(has_more_control && should_request_control);
                 break;
             }
-            if (local_cid != hid_interrupt_cid) {
-                break;
+            if (local_cid == hid_interrupt_cid) {
+                handle_l2cap_can_send_now(packet);
             }
-
-            output_packet next_packet{};
-            const uint32_t now = time_us_32();
-            critical_section_enter_blocking(&queue_lock);
-            if (!select_next_output_packet_locked(next_packet, now)) {
-                critical_section_exit(&queue_lock);
-                break;
-            }
-            const bool has_more = output_pending_locked();
-            bool should_request_control = false;
-            request_control_if_audio_window_open_locked(now, should_request_control);
-            critical_section_exit(&queue_lock);
-
-            uint8_t status = l2cap_send(hid_interrupt_cid, next_packet.data.data(), next_packet.data.size());
-            if (status != 0) {
-                DS5_LOG("[L2CAP] Interrupt Error, Status: 0x%02X class=%u reason=%u\n",
-                    status,
-                    static_cast<unsigned>(next_packet.packet_class),
-                    static_cast<unsigned>(next_packet.reason));
-                // The packet was already dequeued and counted as sent by
-                // note_output_packet_sent(), so a failure here is silent loss.
-                // Mirror it into the audio debug ring: preset=audio builds carry
-                // the ring but not the UART log, and that is the build used to
-                // chase speaker dropouts. arg4 is the age of the frame that died
-                // (x100 us) -- already-late means a scheduling problem, fresh
-                // means a pure link failure.
-                audio_debug_note_bt_event(
-                    BtAudioDebugInterruptSendFail,
-                    status,
-                    next_packet.packet_class,
-                    next_packet.reason,
-                    packet_age_us(now, next_packet.enqueue_time_us) / 100
-                );
-            } else if (!next_packet.data.empty()) {
-#ifdef ENABLE_COMPANION
-                companion_note_trigger_trace_report(
-                    CompanionTriggerTraceBt,
-                    next_packet.data.data() + 1,
-                    static_cast<uint16_t>(next_packet.data.size() - 1),
-                    next_packet.reason
-                );
-                companion_note_feedback_trace_report(
-                    CompanionFeedbackTraceBt,
-                    next_packet.data.data() + 1,
-                    static_cast<uint16_t>(next_packet.data.size() - 1),
-                    next_packet.reason,
-                    next_packet.trace_detail0,
-                    next_packet.trace_detail1,
-                    next_packet.trace_detail2,
-                    next_packet.trace_detail3
-                );
-#endif
-            }
-            if (has_more) {
-                l2cap_request_can_send_now_event(hid_interrupt_cid);
-            }
-            request_control_can_send_if_needed(should_request_control);
             break;
         }
     }
+}
+
+// The busiest path in the firmware: one call per outgoing interrupt-channel packet, audio
+// included. RAM-resident (with the dispatcher below) so an XIP flash stall -- a settings or
+// link-key TLV write locking out the flash -- cannot wedge send scheduling mid-audio, and so
+// the send cadence does not eat icache misses. Structure ported from upstream; the body is
+// this fork's own send path unchanged.
+static __attribute__((optimize("O2"))) void __not_in_flash_func(handle_l2cap_can_send_now)(uint8_t *packet) {
+    const uint16_t local_cid = l2cap_event_can_send_now_get_local_cid(packet);
+    if (local_cid != hid_interrupt_cid) {
+        return;
+    }
+
+    output_packet next_packet{};
+    const uint32_t now = time_us_32();
+    critical_section_enter_blocking(&queue_lock);
+    if (!select_next_output_packet_locked(next_packet, now)) {
+        critical_section_exit(&queue_lock);
+        return;
+    }
+    const bool has_more = output_pending_locked();
+    bool should_request_control = false;
+    request_control_if_audio_window_open_locked(now, should_request_control);
+    critical_section_exit(&queue_lock);
+
+    uint8_t status = l2cap_send(hid_interrupt_cid, next_packet.data.data(), next_packet.data.size());
+    if (status != 0) {
+        DS5_LOG("[L2CAP] Interrupt Error, Status: 0x%02X class=%u reason=%u\n",
+            status,
+            static_cast<unsigned>(next_packet.packet_class),
+            static_cast<unsigned>(next_packet.reason));
+        // The packet was already dequeued and counted as sent by
+        // note_output_packet_sent(), so a failure here is silent loss.
+        // Mirror it into the audio debug ring: preset=audio builds carry
+        // the ring but not the UART log, and that is the build used to
+        // chase speaker dropouts. arg4 is the age of the frame that died
+        // (x100 us) -- already-late means a scheduling problem, fresh
+        // means a pure link failure.
+        audio_debug_note_bt_event(
+            BtAudioDebugInterruptSendFail,
+            status,
+            next_packet.packet_class,
+            next_packet.reason,
+            packet_age_us(now, next_packet.enqueue_time_us) / 100
+        );
+    } else if (!next_packet.data.empty()) {
+#ifdef ENABLE_COMPANION
+        companion_note_trigger_trace_report(
+            CompanionTriggerTraceBt,
+            next_packet.data.data() + 1,
+            static_cast<uint16_t>(next_packet.data.size() - 1),
+            next_packet.reason
+        );
+        companion_note_feedback_trace_report(
+            CompanionFeedbackTraceBt,
+            next_packet.data.data() + 1,
+            static_cast<uint16_t>(next_packet.data.size() - 1),
+            next_packet.reason,
+            next_packet.trace_detail0,
+            next_packet.trace_detail1,
+            next_packet.trace_detail2,
+            next_packet.trace_detail3
+        );
+#endif
+    }
+    if (has_more) {
+        l2cap_request_can_send_now_event(hid_interrupt_cid);
+    }
+    request_control_can_send_if_needed(should_request_control);
 }
 
 static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet) {
@@ -4208,7 +4361,7 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     return enqueue_classic_rumble_immediate_or_state_output(data, len, reason);
 }
 
-bool bt_write_audio_stream(uint8_t *data, uint16_t len) {
+bool __not_in_flash_func(bt_write_audio_stream)(uint8_t *data, uint16_t len) {
     output_packet packet{};
     if (!make_output_packet(data, len, OutputPacketAudio, OutputReasonAudioStream, packet)) {
         return false;

@@ -10,8 +10,10 @@
 
 namespace {
 
-constexpr uint16_t kExpectedUsbDeviceRevision = 0x0154;
-constexpr uint64_t kExpectedCompanionDescriptorHash = 0x57632c24ad95e61dull;
+// 0x0155: persona-specific microphone audio contracts changed the configuration descriptor
+// (mono base EP size, Edge stereo variant).
+constexpr uint16_t kExpectedUsbDeviceRevision = 0x0155;
+constexpr uint64_t kExpectedCompanionDescriptorHash = 0xbf4f9410baf82bc4ull;
 
 std::string read_text(std::filesystem::path const &path) {
     std::ifstream input(path, std::ios::binary);
@@ -211,14 +213,19 @@ void assert_dse_identity_reports_do_not_use_edge_passthrough(std::filesystem::pa
         bt_h.find("ControllerTypeDualSenseEdge = 2") == std::string::npos
         || main_cpp.find("dualsense_feature_report_may_use_bt_passthrough") == std::string::npos
         || main_cpp.find("report_id != 0x20 && report_id != 0x22") == std::string::npos
-        || main_cpp.find("bt_controller_type() != ControllerTypeDualSenseEdge") == std::string::npos
+        // The guard is persona-aware: the Edge persona relays only real Edge identity, every
+        // other Sony persona relays only real (non-Edge) DualSense identity.
+        || main_cpp.find("output_persona == HostPersonaModeDualSenseEdge") == std::string::npos
+        || main_cpp.find("upstream_type == ControllerTypeDualSenseEdge") == std::string::npos
+        || main_cpp.find("upstream_type == ControllerTypeDualSense") == std::string::npos
         || get_report_callback.find("report_type != HID_REPORT_TYPE_FEATURE") == std::string::npos
-        || get_report_callback.find("dualsense_feature_report_may_use_bt_passthrough(report_id)") == std::string::npos
+        || get_report_callback.find("dualsense_feature_report_may_use_bt_passthrough(active_persona, report_id)") == std::string::npos
         || get_report_callback.find("get_feature_data(report_id, cached_feature, sizeof(cached_feature))") == std::string::npos
-        || get_report_callback.find("dualsense_persona_get_feature_report(report_id, buffer, reqlen)") == std::string::npos
+        || get_report_callback.find("dualsense_persona_get_feature_report(active_persona, report_id, buffer, reqlen)") == std::string::npos
         || dualsense_persona_h.find("dualsense_persona_get_feature_report") == std::string::npos
         || dualsense_persona_cpp.find("kDualSenseFeatureFirmwareInfo = 0x20") == std::string::npos
-        || dualsense_persona_cpp.find("write_firmware_feature_report") == std::string::npos
+        || dualsense_persona_cpp.find("write_dualsense_firmware_feature_report") == std::string::npos
+        || dualsense_persona_cpp.find("write_dualsense_edge_firmware_feature_report") == std::string::npos
         || dualsense_persona_cpp.find("kFirmwareVersion = 0x0110002a") == std::string::npos
     ) {
         throw std::runtime_error("DualSense identity feature reports must not leak DualSense Edge identity through BT passthrough");

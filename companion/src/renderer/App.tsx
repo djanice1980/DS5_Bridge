@@ -392,6 +392,7 @@ const POLLING_RATE_OPTIONS: Array<[string, PollingRateMode]> = [
 ];
 const HOST_PERSONA_OPTIONS: Array<[string, HostPersonaMode]> = [
   ['DualSense', 'dualsense'],
+  ['DualSense Edge', 'dualsense-edge'],
   ['DualShock 4', 'ds4'],
   ['Xbox', 'xbox']
 ];
@@ -2564,7 +2565,7 @@ function ChordButtonGlyphOption({ label, value }: { label: string; value: ChordB
 }
 
 function HostPersonaOption({ label, value }: { label: string; value: HostPersonaMode }) {
-  const sonyPersona = value === 'dualsense' || value === 'ds4';
+  const sonyPersona = value === 'dualsense' || value === 'dualsense-edge' || value === 'ds4';
   return (
     <span className="host-persona-option">
       {sonyPersona ? (

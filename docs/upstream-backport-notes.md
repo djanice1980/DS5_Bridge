@@ -824,4 +824,20 @@ WM_DEVICECHANGE / CM_Register_Notification rather than a census diff.
 
 ---
 
-*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71.*
+## Backports taken from your v1.7.0 (at our 1.6.72)
+
+Adopted into the fork, so you know which of your inventions are now shared code:
+
+| Yours | Status in the fork |
+|---|---|
+| Pairing-transaction journal | Already had the core (ported earlier); completed the deltas: `persist_notified_link_key` (verified, authorization-gated key persistence, adapted to our direct-HCI security driving), restore-on-ACL-failure, restore-on-disconnect |
+| DualSense Edge persona (0x0DF2, stereo mic) | Taken whole, including your `8983c9b` mic corrections (mono base EP + Edge stereo variant, 0x30 mic ceiling). Linux side (udev, census, app) was already persona-ready |
+| Persona-aware Edge identity guard | Taken; replaces our stricter-but-narrower "never relay Edge identity" guard |
+| Hot/cold L2CAP handler split + RAM-resident send path | Structure taken (dispatcher + `__not_in_flash_func` send path); the body remains our own send scheduler |
+| Radial deadzone (`radial_deadzone.h`) | Taken verbatim at 1.6.71 (see §18) |
+
+Deliberately NOT taken, with reasons: 0x39 audio carriers/batching (solves BT airtime contention we have not observed; will revisit on evidence of audio dropouts), ExactAudioQueue (sound, but nothing here is starved for the 5 KiB), key-journal-era `finish_hid_session_if_ready` gate (redundant once persistence failures disconnect, which our port does).
+
+---
+
+*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72.*

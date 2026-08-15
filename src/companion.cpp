@@ -886,6 +886,9 @@ uint8_t supported_host_persona_mask() {
     if (host_persona_is_supported(HostPersonaModeDs4)) {
         mask |= 1 << HostPersonaModeDs4;
     }
+    if (host_persona_is_supported(HostPersonaModeDualSenseEdge)) {
+        mask |= 1 << HostPersonaModeDualSenseEdge;
+    }
     return mask;
 }
 

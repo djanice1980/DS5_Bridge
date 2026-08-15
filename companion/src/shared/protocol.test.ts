@@ -25,6 +25,7 @@ import {
   parseAckReport,
   parseFeedbackTraceReport,
   parseForkInfoReport,
+  supportedHostPersonaModes,
   parseTriggerTraceReport,
   parseStatusReport,
   remapButtonIdValue
@@ -604,6 +605,12 @@ describe('companion protocol', () => {
     expect(normalizeBridgePresetId('quiet')).toBe('quiet');
     expect(normalizeBridgePresetId('ptt-f24')).toBe('balanced');
     expect(normalizeBridgePresetId('retired-profile', 'custom')).toBe('custom');
+  });
+  it('maps the DualSense Edge persona to mode 7 both ways', () => {
+    expect(hostPersonaModeValue('dualsense-edge')).toBe(7);
+    // Firmware advertises support as a bitmask by mode number: Edge is bit 7.
+    expect(supportedHostPersonaModes(0x01 | 0x80)).toEqual(['dualsense', 'dualsense-edge']);
+    expect(supportedHostPersonaModes(0x07)).toEqual(['dualsense', 'xbox', 'ds4']);
   });
   it('parses a fork-info report by its LNXF magic', () => {
     const report = new Array<number>(64).fill(0);
