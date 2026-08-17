@@ -2721,7 +2721,9 @@ button {
 .overview-persona-grid {
   min-height: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* One column per persona: the grid sits in a height-budgeted panel, so a wrapped row
+     paints over the Shortcuts block below instead of growing the panel. */
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-auto-rows: minmax(0, 1fr);
   align-self: stretch;
   gap: 6px;
@@ -2740,10 +2742,14 @@ button {
   gap: 5px;
   color: var(--text-control);
   background: var(--surface-control-soft);
-  font-size: 12px;
+  /* Four tiles across: labels wrap at spaces only ("DualSense Edge" -> two lines), never
+     mid-word -- "DualSens/e" is what break-anywhere produced at this width. */
+  font-size: 11px;
   font-weight: 760;
-  line-height: 1.05;
+  line-height: 1.1;
   text-align: center;
+  overflow-wrap: normal;
+  word-break: normal;
   transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
 }
 
