@@ -26,6 +26,7 @@ import {
   parseFeedbackTraceReport,
   parseForkInfoReport,
   supportedHostPersonaModes,
+  MIN_SUPPORTED_FIRMWARE_PROTOCOL_MINOR,
   parseTriggerTraceReport,
   parseStatusReport,
   remapButtonIdValue
@@ -184,16 +185,23 @@ describe('companion protocol', () => {
     expect(ack.resultCode).toBe(ACK_RESULT.ERR_BUSY);
     expect(ack.settingsRevision).toBe(9);
   });
-  it('can parse an older ACK report when protocol mismatch is explicitly allowed', () => {
+  it('parses ACK reports across the supported minor range, rejecting only below the floor', () => {
+    // An app newer than the firmware is the NORMAL state right after an app update; older
+    // minors within the floor parse without any escape hatch.
     const report = baseReport(REPORT_ID.ACK);
     report[6] = PROTOCOL_MINOR - 1;
     report[7] = COMMAND_ID.ENTER_BOOTLOADER;
     report[8] = 4;
     report[9] = ACK_RESULT.OK;
-    expect(() => parseAckReport(report)).toThrow(ProtocolError);
-    const ack = parseAckReport(report, { allowProtocolMismatch: true });
+    const ack = parseAckReport(report);
     expect(ack.commandId).toBe(COMMAND_ID.ENTER_BOOTLOADER);
     expect(ack.protocolVersion).toBe(`${PROTOCOL_MAJOR}.${PROTOCOL_MINOR - 1}`);
+
+    // Below the floor only the explicit mismatch path (the firmware-update flow) may parse.
+    report[6] = MIN_SUPPORTED_FIRMWARE_PROTOCOL_MINOR - 1;
+    expect(() => parseAckReport(report)).toThrow(ProtocolError);
+    const stale = parseAckReport(report, { allowProtocolMismatch: true });
+    expect(stale.commandId).toBe(COMMAND_ID.ENTER_BOOTLOADER);
   });
   it('parses an audio debug report', () => {
     const report = baseReport(REPORT_ID.AUDIO_DEBUG);

@@ -3980,13 +3980,22 @@ export class BridgeService extends EventEmitter {
   }
 
   private commandProtocolMinorFor(options: CommandOptions): number | undefined {
-    if (!options.allowProtocolMismatch) {
-      return undefined;
+    if (options.allowProtocolMismatch) {
+      const version = this.incompatibleCompanionProtocolVersion;
+      return version?.major === PROTOCOL_MAJOR && version.minor <= PROTOCOL_MINOR
+        ? version.minor
+        : undefined;
     }
-    const version = this.incompatibleCompanionProtocolVersion;
-    return version?.major === PROTOCOL_MAJOR && version.minor <= PROTOCOL_MINOR
-      ? version.minor
-      : undefined;
+    // Negotiate DOWN to the connected firmware: firmware rejects command headers stamped
+    // with a minor above its own (has_supported_version), so an app newer than the firmware
+    // must speak the firmware's minor. Capability gating already keeps commands the old
+    // firmware lacks from being sent at all.
+    const status = this.snapshot.status?.protocolVersion ?? '';
+    const firmwareMinor = Number.parseInt(status.split('.')[1] ?? '', 10);
+    if (Number.isFinite(firmwareMinor) && firmwareMinor < PROTOCOL_MINOR) {
+      return firmwareMinor;
+    }
+    return undefined;
   }
 
   private rememberIncompatibleProtocolVersion(report: ArrayLike<number>): void {

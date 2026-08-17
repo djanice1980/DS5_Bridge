@@ -2340,7 +2340,10 @@ describe('BridgeService', () => {
   it('sends Pico bootloader command using an older incompatible firmware protocol minor', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
-    const oldMinor = PROTOCOL_MINOR - 1;
+    // Below the supported floor: minors down to the floor now CONNECT (they are the normal
+    // state right after an app update); only sub-floor firmware is incompatible, and the
+    // bootloader mount must still work there so the user can flash their way out.
+    const oldMinor = 6;
     device.status = statusReport({ protocolMinor: oldMinor });
     device.ackReports.push(ackReport({
       commandId: COMMAND_ID.ENTER_BOOTLOADER,
@@ -3635,6 +3638,24 @@ describe('BridgeService', () => {
       const { service } = await connectedService(null);
       // No fork marker and the fake reports the fork's own minor (18 < 21): no deadzone path.
       await expect(service.setStickDeadzone(5, 5)).rejects.toThrow(/radial-deadzone/);
+    });
+
+    it('stamps commands with the connected firmware minor when the app is newer', async () => {
+      const service = serviceFixture();
+      const device = new MockHidDevice();
+      // Old fork firmware: protocol 1.17, before the fork-info report existed.
+      device.forkInfoReport = null;
+      device.status = statusReport({ controllerConnected: true, settingsRevision: 1, uptimeSeconds: 30, protocolMinor: 17 });
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+      await poll(service);
+      expect(service.getSnapshot().state).not.toBe('incompatible');
+
+      await service.setHapticsGain(80);
+      const command = device.sentReports.find((sent) => sent[7] === COMMAND_ID.SET_HAPTICS_GAIN);
+      expect(command).toBeDefined();
+      // Firmware rejects command headers stamped above its own minor; the app must speak 17.
+      expect(command![6]).toBe(17);
     });
 
     it('skips the deadzone during settings replay when firmware cannot speak it', async () => {

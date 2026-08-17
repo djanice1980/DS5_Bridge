@@ -692,10 +692,20 @@ function assertReport(report: ArrayLike<number>, reportId: number): void {
   }
 }
 
+// The oldest firmware protocol the app still speaks: the firmware's own floor
+// (kProtocolMinSupportedMinor). Report layouts are additive from there on -- parsers read
+// fields the old layouts already had, and minor-gated fields degrade to null/defaults.
+export const MIN_SUPPORTED_FIRMWARE_PROTOCOL_MINOR = 7;
+
 function assertVersion(report: ArrayLike<number>): void {
-  if (report[5] !== PROTOCOL_MAJOR || report[6] !== PROTOCOL_MINOR) {
+  // A RANGE, not an exact match: older firmware within the floor keeps base features
+  // (capability gating handles the rest), and NEWER firmware -- this fork's future or
+  // upstream at minor 21+ -- parses because layouts are additive in both lineages. The
+  // exact-match this replaced made every app update brick the bridge UI until a reflash,
+  // and made the cross-lineage compatibility the convergence promised impossible.
+  if (report[5] !== PROTOCOL_MAJOR || report[6] < MIN_SUPPORTED_FIRMWARE_PROTOCOL_MINOR) {
     throw new ProtocolError(
-      `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.${PROTOCOL_MINOR}, received ${report[5]}.${report[6]}.`,
+      `Firmware update required. Expected companion protocol ${PROTOCOL_MAJOR}.${MIN_SUPPORTED_FIRMWARE_PROTOCOL_MINOR}+, received ${report[5]}.${report[6]}.`,
       'bad-version'
     );
   }
