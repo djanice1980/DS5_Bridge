@@ -3980,20 +3980,23 @@ export class BridgeService extends EventEmitter {
   }
 
   private commandProtocolMinorFor(options: CommandOptions): number | undefined {
-    if (options.allowProtocolMismatch) {
-      const version = this.incompatibleCompanionProtocolVersion;
-      return version?.major === PROTOCOL_MAJOR && version.minor <= PROTOCOL_MINOR
-        ? version.minor
-        : undefined;
-    }
     // Negotiate DOWN to the connected firmware: firmware rejects command headers stamped
     // with a minor above its own (has_supported_version), so an app newer than the firmware
-    // must speak the firmware's minor. Capability gating already keeps commands the old
-    // firmware lacks from being sent at all.
+    // must speak the firmware's minor. This applies to EVERY command -- including the
+    // firmware-update flow's, which is how "flash the new firmware" itself got nacked with
+    // AckBadVersion when this branch-ordered behind allowProtocolMismatch.
     const status = this.snapshot.status?.protocolVersion ?? '';
     const firmwareMinor = Number.parseInt(status.split('.')[1] ?? '', 10);
     if (Number.isFinite(firmwareMinor) && firmwareMinor < PROTOCOL_MINOR) {
       return firmwareMinor;
+    }
+    if (options.allowProtocolMismatch) {
+      // Sub-floor firmware: no parsed status exists, so fall back to the version remembered
+      // from the failed parse. This is the flash-your-way-out path.
+      const version = this.incompatibleCompanionProtocolVersion;
+      return version?.major === PROTOCOL_MAJOR && version.minor <= PROTOCOL_MINOR
+        ? version.minor
+        : undefined;
     }
     return undefined;
   }

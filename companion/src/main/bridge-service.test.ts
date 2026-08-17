@@ -3658,6 +3658,32 @@ describe('BridgeService', () => {
       expect(command![6]).toBe(17);
     });
 
+    it('negotiates the bootloader command minor against connected older firmware', async () => {
+      // The firmware-update flow itself: fw 1.6.70 (minor 17) is CONNECTED (not sub-floor),
+      // and ENTER_BOOTLOADER must carry the firmware's minor or the firmware nacks the very
+      // command that would fix the mismatch.
+      const service = serviceFixture();
+      const device = new MockHidDevice();
+      device.forkInfoReport = null;
+      device.status = statusReport({ controllerConnected: false, settingsRevision: 1, uptimeSeconds: 30, protocolMinor: 17 });
+      device.ackReports.push(ackReport({
+        commandId: COMMAND_ID.ENTER_BOOTLOADER,
+        sequence: 1,
+        result: ACK_RESULT.OK,
+        settingsRevision: 1,
+        protocolMinor: 17
+      }));
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+      await poll(service);
+      expect(service.getSnapshot().state).not.toBe('incompatible');
+
+      await service.mountPicoBootloader();
+      const command = device.sentReports.find((sent) => sent[7] === COMMAND_ID.ENTER_BOOTLOADER);
+      expect(command).toBeDefined();
+      expect(command![6]).toBe(17);
+    });
+
     it('skips the deadzone during settings replay when firmware cannot speak it', async () => {
       const service = serviceFixture();
       const device = new MockHidDevice();
