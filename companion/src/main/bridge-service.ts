@@ -162,6 +162,9 @@ const HOST_PERSONA_TRANSITION_OPEN_RETRY_MS = 250;
 const HOST_PERSONA_RECONNECT_GRACE_MS = 5000;
 const HOST_PERSONA_DEFAULT_RENDER_RESTORE_RETRY_MS = 500;
 const HOST_PERSONA_DEFAULT_RENDER_RESTORE_GRACE_MS = 4000;
+// A flash is slower than a persona switch: bootloader mount, user copies the UF2 (or
+// walks away), reboot, re-enumeration. Keep claiming for a few minutes.
+const FIRMWARE_FLASH_DEFAULT_RENDER_RESTORE_EXTRA_MS = 5 * 60 * 1000;
 const MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES = 1;
 const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
@@ -1349,6 +1352,9 @@ export class BridgeService extends EventEmitter {
   private hostPersonaTransition: HostPersonaTransitionState | null = null;
   private completedHostPersonaMode: HostPersonaMode | null = null;
   private hostPersonaDefaultRenderRestore: HostPersonaDefaultRenderRestore | null = null;
+  // Sampled on the census cadence; consulted when the transport drops, when it is too late
+  // to ask the (now absent) endpoint whether it was the default.
+  private defaultRenderWasBridgeAtLastCheck = false;
   private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
@@ -1746,14 +1752,15 @@ export class BridgeService extends EventEmitter {
     }
   }
 
-  private queueHostPersonaDefaultRenderRestore(to: HostPersonaMode): void {
+  private queueHostPersonaDefaultRenderRestore(to: HostPersonaMode, extraDeadlineMs = 0): void {
     const now = Date.now();
     this.hostPersonaDefaultRenderRestore = {
       to,
       deadlineAt: now
         + HOST_PERSONA_TRANSITION_TIMEOUT_MS
         + HOST_PERSONA_RECONNECT_GRACE_MS
-        + HOST_PERSONA_DEFAULT_RENDER_RESTORE_GRACE_MS,
+        + HOST_PERSONA_DEFAULT_RENDER_RESTORE_GRACE_MS
+        + extraDeadlineMs,
       nextAttemptAt: 0,
       attempts: 0,
       inFlight: false
@@ -2959,6 +2966,16 @@ export class BridgeService extends EventEmitter {
   }
 
   async mountPicoBootloader(): Promise<void> {
+    // A firmware flash takes the bridge off the bus; the OS immediately elects some other
+    // device as the default audio output and never elects the bridge back on its own. If
+    // the user's audio was routed to the controller, re-claim the route when the flashed
+    // bridge returns -- same restore the persona switch uses, with a flash-sized deadline.
+    if (await this.defaultRenderIsBridgeEndpoint()) {
+      this.queueHostPersonaDefaultRenderRestore(
+        this.currentHostPersonaMode(),
+        FIRMWARE_FLASH_DEFAULT_RENDER_RESTORE_EXTRA_MS
+      );
+    }
     await this.sendCommand(COMMAND_ID.ENTER_BOOTLOADER, 0, {
       allowAckTransportLoss: true,
       allowProtocolMismatch: true
@@ -4082,6 +4099,16 @@ export class BridgeService extends EventEmitter {
     if (this.device !== closedDevice) {
       return;
     }
+    // Unexpected loss (replug, hub reset, manual BOOTSEL flash): if the bridge held the
+    // default audio output at the last census check, claim it back when it returns. The
+    // flag is sampled ahead of time because once the device is gone the endpoint status
+    // can no longer say "bridge".
+    if (this.defaultRenderWasBridgeAtLastCheck && !this.hostPersonaDefaultRenderRestore) {
+      this.queueHostPersonaDefaultRenderRestore(
+        this.currentHostPersonaMode(),
+        FIRMWARE_FLASH_DEFAULT_RENDER_RESTORE_EXTRA_MS
+      );
+    }
     this.closeDevice();
     let rawDevices: HidDeviceSummary[] = [];
     try {
@@ -4386,6 +4413,18 @@ export class BridgeService extends EventEmitter {
 
   private async refreshBridgeCensus(): Promise<void> {
     this.lastBridgeCensusAt = Date.now();
+    // Sample whether the bridge currently holds the default audio output, so a later
+    // unexpected transport loss knows whether there is a route worth re-claiming. Sampled
+    // only while a bridge is connected: with no device the answer is trivially "no" and
+    // must not overwrite the last useful sample mid-outage.
+    if (this.device) {
+      try {
+        const status = await getDefaultRenderEndpointStatus();
+        this.defaultRenderWasBridgeAtLastCheck = status.isBridgeEndpoint;
+      } catch {
+        // Keep the previous sample; census must stay best-effort.
+      }
+    }
     try {
       this.bridgeCensus = await listBridges();
       // A controller freshly seen over USB updates its history entry -- otherwise the

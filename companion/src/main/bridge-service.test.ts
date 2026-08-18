@@ -2326,6 +2326,9 @@ describe('BridgeService', () => {
     hidMock.state.openDevices.set('companion-path', device);
 
     await poll(service);
+    // Settle the startup settings replay first: the armed one-shot ACK error must be
+    // consumed by ENTER_BOOTLOADER's ACK read, not by a still-queued replay command.
+    await flushReapply();
 
     device.ackReadErrorOnce = new Error('WinUSB bridge GET_REPORT failed: A device attached to the system is not functioning.');
     await service.mountPicoBootloader();
@@ -2375,6 +2378,9 @@ describe('BridgeService', () => {
     hidMock.state.openDevices.set('companion-path', device);
 
     await poll(service);
+    // Same replay-settling as the ACK-drop test above: the one-shot write error must land
+    // on ENTER_BOOTLOADER's send, not on a queued replay command.
+    await flushReapply();
 
     device.featureReportWriteErrorOnce = new Error('WinUSB bridge helper request timed out.');
     await service.mountPicoBootloader();
@@ -3656,6 +3662,33 @@ describe('BridgeService', () => {
       expect(command).toBeDefined();
       // Firmware rejects command headers stamped above its own minor; the app must speak 17.
       expect(command![6]).toBe(17);
+    });
+
+    it('re-claims the default audio output after a firmware flash', async () => {
+      const service = serviceFixture();
+      const device = new MockHidDevice();
+      device.status = statusReport({ controllerConnected: true, settingsRevision: 1, uptimeSeconds: 30 });
+      device.ackReports.push(ackReport({
+        commandId: COMMAND_ID.ENTER_BOOTLOADER,
+        sequence: 1,
+        result: ACK_RESULT.OK,
+        settingsRevision: 1
+      }));
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+      await poll(service);
+
+      // The bridge holds the default output when the flash starts.
+      audioHelperMock.getDefaultRenderEndpointStatus.mockResolvedValue({
+        deviceName: 'DualSense wireless controller (PS5)',
+        isBridgeEndpoint: true
+      });
+
+      await service.mountPicoBootloader();
+      // The flashed firmware comes back; the next status poll must re-claim the route.
+      await poll(service);
+
+      expect(audioHelperMock.setDefaultRenderBridgeEndpoint).toHaveBeenCalledWith('dualsense');
     });
 
     it('negotiates the bootloader command minor against connected older firmware', async () => {
