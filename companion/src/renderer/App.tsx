@@ -2157,9 +2157,22 @@ function stopMicLiveListen(): void {
   micListenAudio = null;
   micListenStream?.getTracks().forEach((track) => track.stop());
   micListenStream = null;
+  void window.bridge.releaseMicPortal?.().catch(() => undefined);
   const resolve = micListenResolve;
   micListenResolve = null;
   resolve?.();
+}
+
+async function findMicPortalInputId(portalLabel: string): Promise<string | null> {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const portal = devices.find((device) => (
+      device.kind === 'audioinput' && device.label.includes(portalLabel)
+    ));
+    return portal?.deviceId ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function openBridgeMicStream(): Promise<MediaStream> {
@@ -2167,8 +2180,21 @@ async function openBridgeMicStream(): Promise<MediaStream> {
     throw new Error(BRIDGE_MIC_ENDPOINT_UNAVAILABLE);
   }
 
-  const inputId = await findBridgeAudioInputId();
+  // Chromium hides PlayStation-controller microphones from enumeration by name, so on Linux
+  // the bridge mic is re-exposed under a neutral name for the duration of the listen.
+  let inputId: string | null = null;
+  const portalLabel = await window.bridge.prepareMicPortal?.().catch(() => null);
+  if (portalLabel) {
+    inputId = await findMicPortalInputId(portalLabel);
+    if (!inputId && await unlockMediaDeviceLabels()) {
+      inputId = await findMicPortalInputId(portalLabel);
+    }
+  }
   if (!inputId) {
+    inputId = await findBridgeAudioInputId();
+  }
+  if (!inputId) {
+    void window.bridge.releaseMicPortal?.().catch(() => undefined);
     throw new Error(BRIDGE_MIC_ENDPOINT_UNAVAILABLE);
   }
 

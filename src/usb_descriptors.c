@@ -152,7 +152,9 @@ static tusb_desc_device_t const desc_device =
     // changed descriptor instead of serving a stale cached copy.
     // Persona-specific microphone audio contracts change the configuration
     // descriptor again (mono base EP, Edge stereo variant): 0x0155.
-    .bcdDevice = 0x0155,
+    // 0x0156: the mic endpoint returns to its mono size after the 1.6.72
+    // stereo allocation corrupted the audio function.
+    .bcdDevice = 0x0156,
 
     .iManufacturer = 0x01,
     .iProduct = 0x02,
@@ -463,8 +465,8 @@ uint8_t descriptor_configuration[] = {
     0x05, // bDescriptorType (ENDPOINT)
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
-    CONTROLLER_MIC_MONO_EP_SIZE & 0xFF,
-    (CONTROLLER_MIC_MONO_EP_SIZE >> 8) & 0xFF,
+    CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN & 0xFF,
+    (CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN >> 8) & 0xFF,
     0x01, // bInterval: 1
     0x00, // bRefresh
     0x00, // bSynchAddress
@@ -830,7 +832,7 @@ static uint16_t build_xusb_configuration_descriptor(void) {
     return dest;
 }
 
-static uint16_t build_dualsense_edge_configuration_descriptor(void) {
+__attribute__((unused)) static uint16_t build_dualsense_edge_configuration_descriptor(void) {
     if (descriptor_configuration_dualsense_edge_len != 0) {
         return descriptor_configuration_dualsense_edge_len;
     }
@@ -916,15 +918,11 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
         }
     }
 
-    if (host_persona_active() == HostPersonaModeDualSenseEdge) {
-        if (descriptor_configuration_dualsense_edge_len == 0) {
-            (void)build_dualsense_edge_configuration_descriptor();
-        }
-        if (descriptor_configuration_dualsense_edge_len != 0) {
-            return descriptor_configuration_dualsense_edge;
-        }
-    }
-
+    // The Edge persona intentionally serves the BASE configuration (mono mic): the stereo
+    // variant built by build_dualsense_edge_configuration_descriptor corrupted the audio
+    // function via the doubled TX allocation (1.6.72). Identity stays Edge (device
+    // descriptor + HID report descriptor via the runtime patch below); only the audio
+    // contract stays DualSense-shaped until the stereo rework.
     apply_gamepad_hid_runtime_configuration(descriptor_configuration, sizeof(descriptor_configuration));
     return descriptor_configuration;
 }

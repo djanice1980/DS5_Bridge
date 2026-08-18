@@ -129,9 +129,10 @@
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX              16
 
 // Microphone (IN/TX) path: 1-channel, 16-bit.
-// The largest runtime controller-microphone contract is DualSense Edge stereo.
-// Other personas expose mono and use only one channel of this allocation.
-#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX              2
+// Mono. Doubling this for the Edge persona's stereo mic (1.6.72) corrupted the whole UAC
+// function -- speaker buzz, dead mic -- so the Edge persona ships with a mono mic until the
+// stereo allocation is reworked against what TinyUSB actually does with these sizes.
+#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX              1
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_TX              16
 

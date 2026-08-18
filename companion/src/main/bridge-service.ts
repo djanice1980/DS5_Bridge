@@ -125,6 +125,10 @@ import { CompanionDebugConfig } from './debug-config';
 import { HidDiscoveryClient } from './hid-discovery-client';
 import { SettingsStore, normalizeUiScalePercent, normalizeUiThemePreset } from './settings-store';
 import { WinUsbCompanionTransport } from './winusb-companion-transport';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 const POLL_INTERVAL_MS = 500;
 const SHORTCUT_POLL_INTERVAL_MS = 50;
@@ -144,7 +148,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.72';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.73';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -3020,6 +3024,97 @@ export class BridgeService extends EventEmitter {
       throw error;
     }
     return this.getSnapshot();
+  }
+
+  // --- Linux mic portal --------------------------------------------------------------
+  //
+  // Chromium refuses to enumerate PlayStation-controller microphones by NAME (so a game
+  // controller's mic cannot hijack the default input), which hides the bridge's mic from the
+  // renderer's getUserMedia path entirely -- "DualSense microphone unavailable" forever. The
+  // portal re-exposes the same PipeWire source under a neutral name for the duration of a
+  // listen, via pactl module-remap-source; the renderer captures the portal instead.
+  private micPortalModuleId: string | null = null;
+
+  private async resolveBridgeMicSourceName(): Promise<string | null> {
+    const portTail = this.snapshot.diagnostics.hidPath?.match(/^usb:\d+-(.+)$/)?.[1] ?? null;
+    try {
+      const { stdout } = await execFileAsync('pw-dump', [], { maxBuffer: 32 * 1024 * 1024 });
+      const objects = JSON.parse(stdout) as Array<{
+        id: number;
+        info?: { props?: Record<string, unknown> };
+      }>;
+      const devicesByBusPath = new Map<number, string>();
+      for (const object of objects) {
+        const props = object.info?.props ?? {};
+        if (props['media.class'] === 'Audio/Device' && typeof props['device.bus-path'] === 'string') {
+          devicesByBusPath.set(object.id, props['device.bus-path'] as string);
+        }
+      }
+      let fallback: string | null = null;
+      for (const object of objects) {
+        const props = object.info?.props ?? {};
+        if (props['media.class'] !== 'Audio/Source' || typeof props['node.name'] !== 'string') {
+          continue;
+        }
+        const name = props['node.name'] as string;
+        if (!/dualsense|sony_interactive/i.test(name)) {
+          continue;
+        }
+        fallback = fallback ?? name;
+        const deviceId = typeof props['device.id'] === 'number' ? (props['device.id'] as number) : null;
+        const busPath = deviceId !== null ? devicesByBusPath.get(deviceId) : undefined;
+        // The two DualSense card names are identical and swap suffixes by plug order; only
+        // the bus path distinguishes the bridge from a wired controller.
+        if (portTail && busPath && busPath.includes(`:${portTail}:`)) {
+          return name;
+        }
+      }
+      return fallback;
+    } catch {
+      return null;
+    }
+  }
+
+  async prepareMicPortal(): Promise<string | null> {
+    if (process.platform !== 'linux') {
+      return null;
+    }
+    await this.releaseMicPortal();
+    const master = await this.resolveBridgeMicSourceName();
+    if (!master) {
+      return null;
+    }
+    try {
+      const { stdout } = await execFileAsync('pactl', [
+        'load-module',
+        'module-remap-source',
+        'source_name=ds5_bridge_mic_portal',
+        `master=${master}`,
+        // The description is what Chromium shows as the device label. It must NOT contain
+        // the strings Chromium filters (dualsense / wireless controller).
+        'source_properties=device.description=DS5BridgeMicPortal'
+      ]);
+      this.micPortalModuleId = stdout.trim() || null;
+      this.appendAudioDebugLines([`[MicPortal] opened over '${master}' module=${this.micPortalModuleId}`]);
+      return this.micPortalModuleId ? 'DS5BridgeMicPortal' : null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAudioDebugLines([`[MicPortal] open failed: ${message}`]);
+      return null;
+    }
+  }
+
+  async releaseMicPortal(): Promise<void> {
+    const moduleId = this.micPortalModuleId;
+    this.micPortalModuleId = null;
+    if (!moduleId) {
+      return;
+    }
+    try {
+      await execFileAsync('pactl', ['unload-module', moduleId]);
+    } catch {
+      // Already gone (device unplug tears the module down with the master source).
+    }
   }
 
   async testSpeaker(): Promise<BridgeSnapshot> {

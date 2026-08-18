@@ -12,8 +12,8 @@ namespace {
 
 // 0x0155: persona-specific microphone audio contracts changed the configuration descriptor
 // (mono base EP size, Edge stereo variant).
-constexpr uint16_t kExpectedUsbDeviceRevision = 0x0155;
-constexpr uint64_t kExpectedCompanionDescriptorHash = 0xbf4f9410baf82bc4ull;
+constexpr uint16_t kExpectedUsbDeviceRevision = 0x0156;
+constexpr uint64_t kExpectedCompanionDescriptorHash = 0x93930b64f2ccbc7cull;
 
 std::string read_text(std::filesystem::path const &path) {
     std::ifstream input(path, std::ios::binary);

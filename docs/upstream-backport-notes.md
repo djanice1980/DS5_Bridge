@@ -831,7 +831,7 @@ Adopted into the fork, so you know which of your inventions are now shared code:
 | Yours | Status in the fork |
 |---|---|
 | Pairing-transaction journal | Already had the core (ported earlier); completed the deltas: `persist_notified_link_key` (verified, authorization-gated key persistence, adapted to our direct-HCI security driving), restore-on-ACL-failure, restore-on-disconnect |
-| DualSense Edge persona (0x0DF2, stereo mic) | Taken whole, including your `8983c9b` mic corrections (mono base EP + Edge stereo variant, 0x30 mic ceiling). Linux side (udev, census, app) was already persona-ready |
+| DualSense Edge persona (0x0DF2, stereo mic) | Identity taken whole; **stereo mic REVERTED at 1.6.73** — doubling `CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX` corrupted the whole UAC function on our TinyUSB 0.20.0 build (speaker buzz, dead mic). Our Edge persona ships a mono mic until reworked. Worth checking whether your build exhibits the same with a real Edge |
 | Persona-aware Edge identity guard | Taken; replaces our stricter-but-narrower "never relay Edge identity" guard |
 | Hot/cold L2CAP handler split + RAM-resident send path | Structure taken (dispatcher + `__not_in_flash_func` send path); the body remains our own send scheduler |
 | Radial deadzone (`radial_deadzone.h`) | Taken verbatim at 1.6.71 (see §18) |

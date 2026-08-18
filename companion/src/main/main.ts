@@ -1272,6 +1272,8 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:testNotification', () => service.testNotification());
   ipcMain.handle('bridge:testHaptics', () => service.testHaptics());
   ipcMain.handle('bridge:testSpeaker', () => service.testSpeaker());
+  ipcMain.handle('bridge:prepareMicPortal', () => service.prepareMicPortal());
+  ipcMain.handle('bridge:releaseMicPortal', () => service.releaseMicPortal());
   ipcMain.handle('bridge:testClassicRumble', () => service.testClassicRumble());
   ipcMain.handle('bridge:testAdaptiveTriggers', (_event, value?: TriggerTestMode, target?: TriggerTestTarget) => (
     service.testAdaptiveTriggers(value, target)
