@@ -1462,6 +1462,11 @@ export class BridgeService extends EventEmitter {
   }
 
   start(): void {
+    // The touchpad grab must reflect the ACTIVE profile from the first frame, not wait for
+    // a profile selection or a manual toggle -- at app launch the selected profile is
+    // already in the store, so no selection event ever fires. Missing this is how
+    // touchpad-as-mouse "defaulted on" after every reboot regardless of the profile.
+    void this.updateTouchpadInhibitEngine();
     this.runPoll();
     this.pollTimer = setInterval(() => {
       this.runPoll();

@@ -3736,6 +3736,24 @@ describe('BridgeService', () => {
       expect(command![6]).toBe(17);
     });
 
+    it('starts the touchpad grab at service start when the active profile disables mouse', async () => {
+      const service = serviceFixture({ touchpadMouseEnabled: false });
+      const engine = { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) };
+      (service as unknown as { touchpadInhibitEngine: typeof engine }).touchpadInhibitEngine = engine;
+      const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      try {
+        service.start();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        // The profile said touchpad-as-mouse OFF before any selection event or manual
+        // toggle; the grab engine must come up from the stored profile alone.
+        expect(engine.start).toHaveBeenCalled();
+      } finally {
+        if (platform) Object.defineProperty(process, 'platform', platform);
+        await service.stop();
+      }
+    });
+
     it('skips the deadzone during settings replay when firmware cannot speak it', async () => {
       const service = serviceFixture();
       const device = new MockHidDevice();
