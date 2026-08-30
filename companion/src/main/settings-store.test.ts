@@ -544,6 +544,19 @@ describe('SettingsStore', () => {
     expect(new SettingsStore(userDataPath).get().uiThemePreset).toBe('kiwi');
   });
 
+  it('keeps the dualsense-edge persona through normalization and the profile fork', () => {
+    const store = new SettingsStore(tempUserDataPath());
+    // The Edge persona was silently normalized back to 'dualsense' by the store's sanitizer,
+    // so switching to Edge from the UI could never persist.
+    const updated = store.update({ hostPersonaMode: 'dualsense-edge' });
+    expect(updated.hostPersonaMode).toBe('dualsense-edge');
+    // A profile-scoped change while Default is selected auto-forks into the Custom profile,
+    // and the persona must survive that fork too.
+    const custom = updated.controllerProfiles.find((profile) => profile.id === 'custom');
+    expect(custom?.settings.hostPersonaMode).toBe('dualsense-edge');
+    expect(updated.selectedControllerProfileId).toBe('custom');
+  });
+
   describe('durability', () => {
     it('recovers the previous settings when settings.json is truncated', () => {
       const userDataPath = tempUserDataPath();

@@ -95,7 +95,7 @@ const DEFAULT_CONTROLLER_PROFILE: ControllerProfile = {
   settings: { ...DEFAULT_CONTROLLER_PROFILE_SETTINGS }
 };
 
-const CUSTOM_CONTROLLER_PROFILE_ID = 'custom';
+export const CUSTOM_CONTROLLER_PROFILE_ID = 'custom';
 const CUSTOM_BUTTON_REMAP_PROFILE_ID = 'custom';
 const CUSTOM_CONTROLLER_PROFILE: ControllerProfile = {
   id: CUSTOM_CONTROLLER_PROFILE_ID,
@@ -251,6 +251,7 @@ function normalizeHostPersonaMode(value: unknown): HostPersonaMode {
   switch (value) {
     case 'xbox':
     case 'ds4':
+    case 'dualsense-edge':
       return value;
     default:
       return 'dualsense';

@@ -123,7 +123,7 @@ import {
 } from './audio-helper';
 import { CompanionDebugConfig } from './debug-config';
 import { HidDiscoveryClient } from './hid-discovery-client';
-import { SettingsStore, normalizeUiScalePercent, normalizeUiThemePreset } from './settings-store';
+import { SettingsStore, CUSTOM_CONTROLLER_PROFILE_ID, normalizeUiScalePercent, normalizeUiThemePreset } from './settings-store';
 import { WinUsbCompanionTransport } from './winusb-companion-transport';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -836,7 +836,7 @@ function formatUsbDebugEvent(prefix: string, args: number[]): string {
 }
 
 function normalizeHostPersonaMode(mode: HostPersonaMode): HostPersonaMode {
-  if (mode === 'xbox' || mode === 'ds4') {
+  if (mode === 'xbox' || mode === 'ds4' || mode === 'dualsense-edge') {
     return mode;
   }
   return 'dualsense';
@@ -4394,11 +4394,20 @@ export class BridgeService extends EventEmitter {
       pollingRateModeValue(settings.pollingRateMode),
       { expectSettingsRevisionChange }
     );
-    await this.sendCommand(
-      COMMAND_ID.SET_HOST_PERSONA,
-      hostPersonaModeValue(settings.hostPersonaMode),
-      { expectSettingsRevisionChange }
-    );
+    // Persona is special-cased two ways. It is read from the LIVE store, not the settings
+    // snapshot captured when this replay started: a persona switch lands mid-replay (the
+    // switch itself forces a reconnect and thus a replay), and the stale snapshot would
+    // stomp the firmware straight back -- which is exactly how every persona switch used to
+    // revert within seconds. And while a switch transition is in flight, the replay does not
+    // send the persona at all; the transition owns it.
+    const personaTransition = this.hostPersonaTransition;
+    if (!personaTransition || personaTransition.completedAt !== null) {
+      await this.sendCommand(
+        COMMAND_ID.SET_HOST_PERSONA,
+        hostPersonaModeValue(this.settingsStore.get().hostPersonaMode),
+        { expectSettingsRevisionChange }
+      );
+    }
   }
 
   private async applyLightbarSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
@@ -4830,13 +4839,30 @@ export class BridgeService extends EventEmitter {
       settings.controllerBindings,
       DEFAULT_CONTROLLER_PROFILE_ID
     );
-    const alreadySelected = boundProfileId === this.settingsStore.get().selectedControllerProfileId;
+    const selectedProfileId = this.settingsStore.get().selectedControllerProfileId;
+    const alreadySelected = boundProfileId === selectedProfileId;
     const known = settings.controllerProfiles.some((profile) => profile.id === boundProfileId);
     if (alreadySelected || !known) {
       // The assignment is already the selected profile, so there is nothing to switch -- but
       // this controller has just powered on and holds NONE of these settings. Returning here
       // is why a red lightbar came back blue after a power cycle: the profile was correct and
       // simply never sent. The controller, not the app, is what needs convincing.
+      await this.applyCurrentSettings(this.settingsStore.get(), false);
+      return;
+    }
+    if (selectedProfileId === CUSTOM_CONTROLLER_PROFILE_ID) {
+      // The selection sits on Custom because a direct settings change auto-forked into it --
+      // the user's LATEST intent. Re-selecting the stale binding here is what made every
+      // such change (persona switch, touchpad toggle, ...) silently revert on the next
+      // controller reconnect: a persona switch re-enumerates USB, this ran, and the stale
+      // profile stomped the switch within seconds. Adopt the fork instead: this controller's
+      // binding follows the settings the user just chose.
+      this.snapshot.settings = this.settingsStore.update({
+        controllerBindings: {
+          ...this.settingsStore.get().controllerBindings,
+          [mac]: CUSTOM_CONTROLLER_PROFILE_ID
+        }
+      });
       await this.applyCurrentSettings(this.settingsStore.get(), false);
       return;
     }

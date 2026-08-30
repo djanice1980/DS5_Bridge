@@ -3646,6 +3646,25 @@ describe('BridgeService', () => {
       await expect(service.setStickDeadzone(5, 5)).rejects.toThrow(/radial-deadzone/);
     });
 
+    it('replay sends the live persona, not the snapshot captured at replay start', async () => {
+      // A persona switch lands mid-replay by construction (the switch forces a reconnect,
+      // the reconnect forces a replay). The replay used to send the persona from its stale
+      // captured settings object, stomping the switch back within seconds.
+      const service = serviceFixture({ hostPersonaMode: 'ds4' });
+      const device = new MockHidDevice();
+      device.status = statusReport({ controllerConnected: true, settingsRevision: 4, uptimeSeconds: 30, statusFlags: 0, hostPersonaMode: 'ds4', supportedHostPersonaModesMask: 0x87 });
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+      await poll(service);
+      await flushReapply();
+      const personaCommands = device.sentReports.filter((sent) => sent[7] === COMMAND_ID.SET_HOST_PERSONA);
+      expect(personaCommands.length).toBeGreaterThan(0);
+      // Every persona sent must be the stored one (ds4 = 2); a stray 0 is the stomp.
+      for (const command of personaCommands) {
+        expect(command[9]).toBe(2);
+      }
+    });
+
     it('stamps commands with the connected firmware minor when the app is newer', async () => {
       const service = serviceFixture();
       const device = new MockHidDevice();
