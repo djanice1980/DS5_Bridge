@@ -1153,6 +1153,23 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
         );
     }
 
+    if (
+        host_persona_active() == HostPersonaModeXusb360
+        && request->bmRequestType_bit.direction == TUSB_DIR_IN
+        && request->bRequest == 0x01
+        && request->wValue == 0x0100
+    ) {
+        // Linux xpad's "magic message": sent to every wired Xbox 360 pad when input starts
+        // (bmRequestType 0xC1 with wIndex 0 -- hardcoded, regardless of which interface the
+        // gamepad actually is). Real pads answer 20 bytes the driver discards; a STALL earns
+        // a kernel warning on every open. Answer zeros.
+        static uint8_t const xusb_magic_reply[20] = {0};
+        const uint16_t len = request->wLength < sizeof(xusb_magic_reply)
+            ? request->wLength
+            : (uint16_t)sizeof(xusb_magic_reply);
+        return tud_control_xfer(rhport, request, (void *)(uintptr_t)xusb_magic_reply, len);
+    }
+
     if (request->bRequest == VENDOR_MS_OS_VENDOR_REQUEST && request->wIndex == 7) {
         uint8_t const *descriptor = desc_ms_os_20;
         uint16_t descriptor_len = VENDOR_MS_OS_20_DESC_LEN;
