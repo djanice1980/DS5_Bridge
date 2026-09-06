@@ -40,6 +40,7 @@ Items 10+ were added 2026-08-07 and are the substance of this revision.
 | 8 | **`DS5_DEBUG=1` opt-in debug mode** (DevTools + load logging) | Companion | ✅ Low |
 | 18 | **Protocol convergence: fork moved to 0x60–0x6F, adopted your 0x36/0x37** — proposal to reserve the range | Both | ✅ High (discussion) |
 | 19 | **HID feature-report cache serves a stale controller until manual refresh** | Companion | ⚠️ High (discussion) |
+| 20 | **Windows drops every output report Steam sends** — SET_REPORT control requests are ignored by the DualSense persona | Firmware | ✅ **High** |
 | 9 | Linux audio-haptics, libusb transport, uinput, WirePlumber, packaging, KDE icon | Linux plumbing | ❌ |
 | 10 | **Never bump `PROTOCOL_MINOR` for an additive command id** — it is compared exactly, so every older firmware reads as "bridge not detected" | Both | ✅ **High** |
 | 11 | **A disconnect that never completes wedges the connection phase** until power-cycle | Firmware | ✅ **High** |
@@ -822,6 +823,34 @@ identity changing), every cache entry for a path in the delta is dropped. No man
 and the polling infrastructure was already there. The equivalent hook on Windows would be
 WM_DEVICECHANGE / CM_Register_Notification rather than a census diff.
 
+## 20. Windows drops every output report Steam sends — ✅ High
+
+**Symptom.** On Windows, Steam sees the bridge as a DualSense over USB, reads every input,
+and none of its outputs do anything: the Rumble button in Test Device Inputs, the identify
+pulse, in-game rumble through Steam Input. The bridge's own rumble test works (it uses the
+companion command channel, not HID), so the failure looks like Steam, not the bridge.
+
+**Root cause.** A host can deliver an HID output report two ways, and TinyUSB hands them to
+`tud_hid_set_report_cb` differently:
+
+- interrupt OUT endpoint: `report_id == 0`, report id still in `buffer[0]`;
+- `SET_REPORT` control request: `report_id == 0x02`, and TinyUSB strips the id from the buffer.
+
+`tud_hid_set_report_cb` (`src/main.cpp`) only handled the endpoint form for the DualSense
+persona, so the control-request form fell through to the feature-id check and was dropped.
+Linux never exercises this: the kernel always uses the interrupt endpoint when one exists.
+Windows uses the endpoint for `WriteFile` (hidapi, DS4Windows-style tools) but a control
+request for `HidD_SetOutputReport` — and that is what Steam's client sends. Proven on hardware
+by sending the identical 48-byte report both ways: the endpoint write rumbled, the control
+request was ACKed and ignored.
+
+**Fix (fw 1.6.75).** Handle `report_id == 0x02 && report_type == HID_REPORT_TYPE_OUTPUT` by
+re-prefixing the id and feeding the same submit path as the endpoint form. The DS4 persona
+branch of the same callback already did this; the DualSense branch now matches it.
+
+**Windows applicability.** ✅ Direct — the callback is shared firmware and the symptom is
+Windows-only. Steam rumble on your build would be worth a check.
+
 ---
 
 ## Backports taken from your v1.7.0 (at our 1.6.72)
@@ -840,4 +869,4 @@ Deliberately NOT taken, with reasons: 0x39 audio carriers/batching (solves BT ai
 
 ---
 
-*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72.*
+*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72; section 20 added at 1.6.120 / 1.6.75.*

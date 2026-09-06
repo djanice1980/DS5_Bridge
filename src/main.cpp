@@ -622,6 +622,30 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         return;
     }
 
+    // The host's output report (0x02) arrives two ways. On the interrupt OUT endpoint
+    // TinyUSB hands it over whole with report_id == 0 and the id in buffer[0]. As a
+    // SET_REPORT control request it hands over report_id == 0x02 and STRIPS the id from
+    // the buffer. Linux always uses the endpoint; Windows uses the endpoint for WriteFile
+    // but a control request for HidD_SetOutputReport -- which is what Steam sends. Only the
+    // endpoint form was handled, so on Windows every output Steam wrote (rumble, the
+    // identify pulse) was silently dropped while the bridge's own tests kept working.
+    if (report_id == 0x02 && report_type == HID_REPORT_TYPE_OUTPUT) {
+        if (buffer == nullptr || bufsize == 0) {
+            return;
+        }
+        uint8_t output_report[ds5::output::kCommonPayloadSize + 1]{};
+        output_report[0] = 0x02;
+        const uint16_t copy_len = static_cast<uint16_t>(std::min<uint16_t>(bufsize, sizeof(output_report) - 1));
+        memcpy(output_report + 1, buffer, copy_len);
+        usb_note_hid_output();
+#ifdef ENABLE_COMPANION
+        companion_note_trigger_trace_report(CompanionTriggerTraceHost, output_report, static_cast<uint16_t>(copy_len + 1));
+        companion_note_feedback_trace_report(CompanionFeedbackTraceHost, output_report, static_cast<uint16_t>(copy_len + 1));
+#endif
+        controller_output_submit_usb_payload(output_report + 1, copy_len);
+        return;
+    }
+
     // INTERRUPT OUT
     if (report_id == 0) {
         if (buffer == nullptr || bufsize == 0) {
