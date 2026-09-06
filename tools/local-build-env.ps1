@@ -100,6 +100,15 @@ $env:PATH = ($parts -join ';') + ';' + $env:PATH
 $env:PICO_SDK_PATH = Join-Path $picoSdkRoot "sdk\$sdkVersion"
 $env:DOTNET_ROLL_FORWARD = 'Major'
 
+# A per-user .NET SDK (dotnet-install.ps1 -InstallDir "$env:LOCALAPPDATA\dotnet", no admin
+# needed) is shadowed by a runtime-only C:\Program Files\dotnet on PATH. Put it first and
+# export DOTNET_ROOT so both `dotnet` and the npm scripts (scripts/run-dotnet-sdk.mjs) use it.
+$userDotnet = Join-Path $env:LOCALAPPDATA 'dotnet'
+if ((Test-Path (Join-Path $userDotnet 'sdk')) -and -not $env:DOTNET_ROOT) {
+    $env:DOTNET_ROOT = $userDotnet
+    $env:PATH = $userDotnet + ';' + $env:PATH
+}
+
 # Any build directory configured with ENABLE_COMPANION=OFF produces firmware that silently
 # never enumerates when no controller is attached. Nothing in the build output hints at it, so
 # check the configured caches and say so loudly.

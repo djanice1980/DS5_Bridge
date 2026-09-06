@@ -45,8 +45,9 @@ function sourceNotice() {
   const commit = gitValue('rev-parse HEAD');
   const dirty = gitValue('status --porcelain', '') ? 'yes' : 'no';
   return [
-    'DS5 Bridge source code:',
-    'https://github.com/SundayMoments/DS5_Bridge',
+    'DS5 Bridge (djanice1980 fork, Linux port) source code:',
+    'https://github.com/djanice1980/DS5_Bridge',
+    'Original project: https://github.com/SundayMoments/DS5_Bridge',
     '',
     `This binary release corresponds to commit: ${commit}`,
     `Working tree dirty at build time: ${dirty}`,
@@ -92,8 +93,11 @@ function copyPackage(packageName) {
   }
 }
 
-if (!fs.existsSync(electronDist)) {
-  throw new Error('Electron runtime is missing. Run npm install in companion/ first.');
+// Check for the executable, not just the folder: an interrupted or script-blocked
+// `npm ci` leaves a dist/ with only locales/ in it, and packaging that yields a
+// portable folder with no DS5 Bridge.exe.
+if (!fs.existsSync(path.join(electronDist, 'electron.exe'))) {
+  throw new Error('Electron runtime is missing (node_modules/electron/dist/electron.exe). Run `npm ci` or `node node_modules/electron/install.js` in companion/ first.');
 }
 if (!fs.existsSync(path.join(companionDir, 'dist'))) {
   throw new Error('Companion dist is missing. Run npm run build first.');

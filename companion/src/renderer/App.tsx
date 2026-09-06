@@ -278,7 +278,10 @@ const TRIGGER_EFFECT_STEP = 10;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const TEST_HAPTICS_LOCK_MS = 1100;
 const TEST_SPEAKER_LOCK_MS = 900;
-const TEST_MIC_LISTEN_MS = 5000;
+// The mic test is record-then-play, never a live monitor: with the bridge as the default
+// output, a live monitor plays the controller mic straight back out of the controller
+// speaker an inch away and howls. The capture is closed before playback starts.
+const TEST_MIC_RECORD_MS = 3000;
 const TEST_SPEAKER_VOLUME_SETTLE_MS = 90;
 const TEST_SPEAKER_ENDPOINT_ATTEMPTS = 12;
 const TEST_SPEAKER_ENDPOINT_RETRY_MS = 150;
@@ -2136,31 +2139,51 @@ async function playSpeakerToneFile(): Promise<void> {
   await playSpeakerAudioSource(testSpeakerToneUrl);
 }
 
-let micListenAudio: HTMLAudioElement | null = null;
-let micListenStream: MediaStream | null = null;
-let micListenTimer: number | null = null;
-let micListenResolve: (() => void) | null = null;
+let micTestStream: MediaStream | null = null;
+let micTestRecorder: MediaRecorder | null = null;
+let micTestRecordTimer: number | null = null;
+let micTestAudio: HTMLAudioElement | null = null;
+let micTestPlaybackResolve: (() => void) | null = null;
+// Bumped by every stop; a test compares it after recording to know whether to play back.
+let micTestGeneration = 0;
 
-function stopMicLiveListen(): void {
-  if (micListenTimer !== null) {
-    window.clearTimeout(micListenTimer);
+type MicTestPhase = 'idle' | 'recording' | 'playback';
+
+function closeMicTestCapture(): void {
+  if (micTestRecordTimer !== null) {
+    window.clearTimeout(micTestRecordTimer);
   }
-  micListenTimer = null;
-  if (micListenAudio) {
+  micTestRecordTimer = null;
+  const recorder = micTestRecorder;
+  micTestRecorder = null;
+  if (recorder && recorder.state !== 'inactive') {
     try {
-      micListenAudio.pause();
-      micListenAudio.srcObject = null;
+      recorder.stop();
     } catch {
-      // Ignore teardown races while the mic endpoint is closing.
+      // The track may already be gone.
     }
   }
-  micListenAudio = null;
-  micListenStream?.getTracks().forEach((track) => track.stop());
-  micListenStream = null;
+  micTestStream?.getTracks().forEach((track) => track.stop());
+  micTestStream = null;
   void window.bridge.releaseMicPortal?.().catch(() => undefined);
-  const resolve = micListenResolve;
-  micListenResolve = null;
-  resolve?.();
+}
+
+function stopMicTest(): void {
+  micTestGeneration += 1;
+  closeMicTestCapture();
+  if (micTestAudio) {
+    try {
+      micTestAudio.pause();
+      micTestAudio.removeAttribute('src');
+      micTestAudio.load();
+    } catch {
+      // Ignore teardown races.
+    }
+  }
+  micTestAudio = null;
+  const resolvePlayback = micTestPlaybackResolve;
+  micTestPlaybackResolve = null;
+  resolvePlayback?.();
 }
 
 async function findMicPortalInputId(portalLabel: string): Promise<string | null> {
@@ -2181,7 +2204,7 @@ async function openBridgeMicStream(): Promise<MediaStream> {
   }
 
   // Chromium hides PlayStation-controller microphones from enumeration by name, so on Linux
-  // the bridge mic is re-exposed under a neutral name for the duration of the listen.
+  // the bridge mic is re-exposed under a neutral name for the duration of the recording.
   let inputId: string | null = null;
   const portalLabel = await window.bridge.prepareMicPortal?.().catch(() => null);
   if (portalLabel) {
@@ -2209,26 +2232,78 @@ async function openBridgeMicStream(): Promise<MediaStream> {
   });
 }
 
-async function playMicLiveListen(durationMs: number): Promise<void> {
-  stopMicLiveListen();
-  const stream = await openBridgeMicStream();
-  const audio = new Audio();
-  audio.srcObject = stream;
-  audio.volume = 1;
-  micListenAudio = audio;
-  micListenStream = stream;
-
-  try {
-    await audio.play();
-  } catch (error) {
-    stopMicLiveListen();
-    throw error;
+function createMicRecorder(stream: MediaStream): MediaRecorder {
+  const preferred = 'audio/webm;codecs=opus';
+  if (typeof MediaRecorder.isTypeSupported === 'function' && MediaRecorder.isTypeSupported(preferred)) {
+    return new MediaRecorder(stream, { mimeType: preferred });
   }
+  return new MediaRecorder(stream);
+}
 
-  await new Promise<void>((resolve) => {
-    micListenResolve = resolve;
-    micListenTimer = window.setTimeout(stopMicLiveListen, durationMs);
-  });
+/** Records the controller mic for `durationMs` and returns the clip. The capture (and the
+ *  Linux mic portal) is fully closed before this resolves, so playback can never feed back. */
+async function recordMicTestClip(durationMs: number): Promise<Blob> {
+  const stream = await openBridgeMicStream();
+  micTestStream = stream;
+  try {
+    return await new Promise<Blob>((resolve, reject) => {
+      const chunks: BlobPart[] = [];
+      let recorder: MediaRecorder;
+      try {
+        recorder = createMicRecorder(stream);
+      } catch {
+        reject(new Error(BRIDGE_MIC_ENDPOINT_UNAVAILABLE));
+        return;
+      }
+      micTestRecorder = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
+      };
+      recorder.onerror = () => reject(new Error(BRIDGE_MIC_ENDPOINT_UNAVAILABLE));
+      recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
+      stream.getAudioTracks()[0]?.addEventListener('ended', () => {
+        if (recorder.state !== 'inactive') {
+          recorder.stop();
+        }
+      });
+      recorder.start();
+      micTestRecordTimer = window.setTimeout(() => {
+        micTestRecordTimer = null;
+        if (recorder.state !== 'inactive') {
+          recorder.stop();
+        }
+      }, durationMs);
+    });
+  } finally {
+    closeMicTestCapture();
+  }
+}
+
+async function playMicTestClip(clip: Blob): Promise<void> {
+  if (clip.size === 0) {
+    throw new Error('No microphone audio was captured');
+  }
+  const url = URL.createObjectURL(clip);
+  const audio = new Audio(url);
+  audio.volume = 1;
+  micTestAudio = audio;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      // Stop Test pauses the element (no 'ended' event), so it resolves through this hook.
+      micTestPlaybackResolve = resolve;
+      audio.onended = () => resolve();
+      audio.onerror = () => reject(new Error('Microphone playback failed'));
+      audio.play().catch(reject);
+    });
+  } finally {
+    micTestPlaybackResolve = null;
+    if (micTestAudio === audio) {
+      micTestAudio = null;
+    }
+    URL.revokeObjectURL(url);
+  }
 }
 
 function CustomSelect<T extends SelectValue>({
@@ -2961,7 +3036,8 @@ export function App() {
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
   const [speakerOutputAvailable, setSpeakerOutputAvailable] = useState<boolean | null>(null);
   const [speakerTestError, setSpeakerTestError] = useState<string | null>(null);
-  const [micTestLocked, setMicTestLocked] = useState(false);
+  const [micTestPhase, setMicTestPhase] = useState<MicTestPhase>('idle');
+  const micTestLocked = micTestPhase !== 'idle';
   const [micTestError, setMicTestError] = useState<string | null>(null);
   const [triggerTestLocked, setTriggerTestLocked] = useState(false);
   const [hapticsCommitPending, setHapticsCommitPending] = useState(false);
@@ -3958,8 +4034,10 @@ export function App() {
       : connected && gameStreamActive
         ? 'warn'
         : 'idle';
-  const micTestStatusLabel = micTestLocked
-    ? 'Listening'
+  const micTestStatusLabel = micTestPhase === 'recording'
+    ? 'Recording'
+    : micTestPhase === 'playback'
+      ? 'Playing Back'
     : connected && micTestError
       ? micTestError
       : micStatusReady
@@ -4159,12 +4237,13 @@ export function App() {
   }, [connected, speakerOutputAvailable, speakerTestLocked]);
 
   useEffect(() => () => {
-    stopMicLiveListen();
+    stopMicTest();
   }, []);
 
   useEffect(() => {
     if ((!connected || !showMicrophoneControl) && micTestLocked) {
-      stopMicLiveListen();
+      stopMicTest();
+      setMicTestPhase('idle');
     }
   }, [connected, showMicrophoneControl, micTestLocked]);
 
@@ -4897,7 +4976,7 @@ export function App() {
   }
 
   function runTestMic() {
-    setMicTestLocked(true);
+    setMicTestPhase('recording');
     setPendingAction('mic-test');
     setMicTestError(null);
     void (async () => {
@@ -4911,8 +4990,17 @@ export function App() {
           setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
           micVolumeEditingRef.current = false;
         }
-        await playMicLiveListen(TEST_MIC_LISTEN_MS);
+        stopMicTest();
+        const generation = micTestGeneration;
+        const clip = await recordMicTestClip(TEST_MIC_RECORD_MS);
+        if (micTestGeneration !== generation) {
+          // Stop Test was pressed during the recording; don't play the partial clip.
+          return;
+        }
+        setMicTestPhase('playback');
+        await playMicTestClip(clip);
       } catch (error) {
+        stopMicTest();
         const message = error instanceof Error ? error.message : BRIDGE_MIC_ENDPOINT_UNAVAILABLE;
         setMicTestError(message);
         const next = await window.bridge.getStatus();
@@ -4921,7 +5009,7 @@ export function App() {
       } finally {
         micVolumeEditingRef.current = false;
         setPendingAction(null);
-        setMicTestLocked(false);
+        setMicTestPhase('idle');
       }
     })();
   }
@@ -6824,7 +6912,7 @@ export function App() {
                     onClick={runTestMic}
                   >
                     <Mic size={15} />
-                    Listen Mic
+                    Test Mic
                   </button>
                   <button
                     type="button"
@@ -7913,7 +8001,7 @@ export function App() {
                     <span className="feature-icon"><IconTestPipe size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
-                      <p>{showMicrophoneControl ? 'Listen to the controller microphone for five seconds.' : `Play a short sample through the controller ${outputControlLower}.`}</p>
+                      <p>{showMicrophoneControl ? 'Record three seconds from the controller microphone, then play it back.' : `Play a short sample through the controller ${outputControlLower}.`}</p>
                     </div>
                   </div>
                   <button
@@ -7924,8 +8012,10 @@ export function App() {
                   >
                     {showMicrophoneControl ? <Mic size={15} /> : <Play size={15} />}
                     {showMicrophoneControl
-                      ? connected && micTestLocked
-                        ? 'Live Listening'
+                      ? connected && micTestPhase === 'recording'
+                        ? 'Recording'
+                        : connected && micTestPhase === 'playback'
+                          ? 'Playing Back'
                         : connected && micTestError
                           ? 'Retry Mic'
                           : 'Test Mic'
@@ -7941,7 +8031,7 @@ export function App() {
                     className="secondary-action"
                     type="button"
                     disabled={!activeAudioTestLocked}
-                    onClick={showMicrophoneControl ? stopMicLiveListen : () => setSpeakerTestLocked(false)}
+                    onClick={showMicrophoneControl ? stopMicTest : () => setSpeakerTestLocked(false)}
                   >
                     <span className="stop-glyph" aria-hidden="true" />
                     Stop Test

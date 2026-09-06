@@ -20,8 +20,9 @@ function sourceNotice(repoDir) {
   const commit = gitValue(repoDir, 'rev-parse HEAD');
   const dirty = gitValue(repoDir, 'status --porcelain', '') ? 'yes' : 'no';
   return [
-    'DS5 Bridge source code:',
-    'https://github.com/SundayMoments/DS5_Bridge',
+    'DS5 Bridge (djanice1980 fork, Linux port) source code:',
+    'https://github.com/djanice1980/DS5_Bridge',
+    'Original project: https://github.com/SundayMoments/DS5_Bridge',
     '',
     `This binary release corresponds to commit: ${commit}`,
     `Working tree dirty at build time: ${dirty}`,

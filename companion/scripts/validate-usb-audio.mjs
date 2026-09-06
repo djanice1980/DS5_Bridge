@@ -74,7 +74,7 @@ try {
       console.log('haptics test clicked without error');
     }
 
-    const micButton = page.locator('.overview-action-grid button', { hasText: 'Listen Mic' });
+    const micButton = page.locator('.overview-action-grid button', { hasText: 'Test Mic' });
     const micTimeState = await page.evaluate(async () => {
       const snapshot = await window.bridge.getStatus();
       return {

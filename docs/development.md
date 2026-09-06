@@ -1,7 +1,7 @@
 # Development
 
-This page covers local builds for the Pico 2 W firmware and the Windows
-companion app.
+This page covers local builds for the Pico 2 W firmware and the Windows and
+Linux companion apps.
 
 ## Prerequisites
 
@@ -13,7 +13,8 @@ Install these tools before building:
 - Raspberry Pi Pico SDK `2.2.0`.
 - Node.js `22`.
 - .NET SDK `9.0`.
-- Windows, for building and running the companion app.
+- Windows, for building the Windows companion (the `net9.0-windows` audio helper
+  only restores on a Windows host); Linux for the Linux companion.
 
 The firmware CI currently builds with Pico SDK `2.2.0` and TinyUSB `0.20.0`.
 For the closest local match, use the same versions.
@@ -92,6 +93,17 @@ Build the companion app:
 npm run build
 ```
 
+The npm scripts run `dotnet` through `scripts/run-dotnet-sdk.mjs`, which tries
+`DOTNET_ROOT`, then a per-user SDK at `%LOCALAPPDATA%\dotnet`, then `PATH`. So the
+SDK does not need admin rights to install:
+
+```powershell
+Invoke-WebRequest https://dot.net/v1/dotnet-install.ps1 -OutFile "$env:TEMP\dotnet-install.ps1"
+& "$env:TEMP\dotnet-install.ps1" -Channel 9.0 -InstallDir "$env:LOCALAPPDATA\dotnet" -NoPath
+```
+
+`tools\local-build-env.ps1` also puts that SDK on `PATH` when it exists.
+
 `npm run build` publishes the audio helper from:
 
 ```text
@@ -160,6 +172,26 @@ npm run installer:win
 
 The installer build includes the published audio helper and Pico Universal Flash
 Nuke UF2/manifest as Electron extra resources.
+
+Both `package:win` and `installer:win` start by building the flash-nuke UF2, which
+needs the Pico toolchain from `tools\local-build-env.ps1`. Without that toolchain,
+take the UF2 from any published release of this fork instead — it is inside the
+`.pacman` at `opt/DS5 Bridge/resources/firmware/` — drop it and its `.sha256` into
+`companion/firmware/`, copy the hash into
+`companion/src/main/pico-universal-flash-nuke-hash.ts`, and run the two steps
+the scripts wrap:
+
+```powershell
+npm run build
+node scripts/package-win.mjs          # portable folder under companion/artifacts/
+npx electron-builder --win nsis --x64 # installer under companion/artifacts/installer/
+```
+
+**Windows builds are local-only and are never published.** The release workflow
+deliberately skips the Windows job (`if: false`): this fork does not ship a Windows
+companion, by agreement with the upstream author. Build it for your own machine if
+you need the fork's feature set on Windows; Windows users in general should use the
+[upstream project](https://github.com/SundayMoments/DS5_Bridge).
 
 ### Installer Upgrades
 
