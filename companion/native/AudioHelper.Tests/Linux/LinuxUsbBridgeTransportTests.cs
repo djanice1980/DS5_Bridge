@@ -84,12 +84,14 @@ public class LinuxUsbBridgeTransportTests
     public void FallsBackToTheIdleInterfaceWhenDescriptorsAreUnreadable()
     {
         // Descriptor parsing failed: guess from the product id rather than assuming interface 5,
-        // which does not exist on the idle device.
+        // which does not exist on the idle device. Since fw 1.6.76 the idle device is a
+        // composite whose bridge is interface 1 (older firmware: a lone interface 0, which the
+        // descriptor walk still finds by class when it is readable).
         var (interfaceNumber, endpoint) = LinuxUsbBridgeTransport.SelectBridgeInterface(
             Array.Empty<BridgeInterfaceCandidate>(),
             IdleProductId);
 
-        Assert.Equal(0, interfaceNumber);
+        Assert.Equal(1, interfaceNumber);
         Assert.Equal(BulkOutEndpoint, endpoint);
     }
 
