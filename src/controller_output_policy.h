@@ -18,6 +18,15 @@ bool controller_output_policy_render_classic_rumble_payload(
     uint8_t right,
     uint8_t left
 );
+// A HOST zero-motor rumble stop that keeps the classic-rumble selector set leaves the
+// controller in rumble-emulation mode, where it will not play actuator audio. While an Audio
+// Haptics session is active, rewrite such a stop into the selectorless handback form (see
+// controller_output_policy_render_classic_rumble_payload). Returns true when rewritten.
+bool controller_output_policy_normalize_classic_rumble_stop_payload(
+    uint8_t *payload,
+    uint16_t len,
+    bool audio_haptics_session_active
+);
 bool controller_output_policy_sanitize_host_speaker_amp_payload(uint8_t *payload, uint16_t len);
 bool controller_output_policy_sanitize_host_speaker_amp_report(uint8_t *report, uint16_t len);
 bool controller_output_policy_sanitize_host_mic_payload(uint8_t *payload, uint16_t len);

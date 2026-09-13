@@ -9,7 +9,7 @@ export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
 // 18 = the convergence release: shared command ids match upstream (radial deadzones on 0x37)
 // and fork-only commands live at 0x60+. See COMMAND_ID and the fork-info report.
-export const PROTOCOL_MINOR = 18;
+export const PROTOCOL_MINOR = 19;
 
 export const REPORT_ID = {
   STATUS: 0x01,

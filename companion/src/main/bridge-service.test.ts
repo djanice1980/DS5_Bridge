@@ -802,6 +802,38 @@ describe('BridgeService', () => {
     expect(snapshot.bridgeDevices?.directControllers[0]?.product).toBe('DualSense Wireless Controller');
   });
 
+  it('does not repeat full HID discovery during disconnected polling', async () => {
+    const service = serviceFixture();
+
+    await poll(service);
+    await poll(service);
+    await poll(service);
+
+    expect(hidMock.devices).toHaveBeenCalledTimes(1);
+
+    hidMock.state.devicesList = [normalFirmwareDeviceInfo()];
+    const refreshed = await service.refreshBridgeDevices();
+
+    expect(hidMock.devices).toHaveBeenCalledTimes(2);
+    expect(refreshed.state).toBe('normal-firmware');
+  });
+
+  it('connects when the Pico enumerates after the initial HID discovery', async () => {
+    const service = serviceFixture();
+
+    await poll(service);
+    await poll(service);
+    expect(service.getSnapshot().state).toBe('no-bridge');
+    expect(hidMock.devices).toHaveBeenCalledTimes(1);
+
+    const device = new MockHidDevice();
+    hidMock.state.openDevices.set('companion-path', device);
+    await poll(service);
+
+    expect(service.getSnapshot().state).toBe('connected');
+    expect(hidMock.devices).toHaveBeenCalledTimes(1);
+  });
+
   it('re-points the pinned bridge at its new path when the product id changes', async () => {
     // The bridge was pinned while a controller was attached (composite, pid_0ce6). The
     // controller powers off, the bridge re-enumerates companion-only under pid_0ce7, and the
@@ -1479,7 +1511,7 @@ describe('BridgeService', () => {
     const command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
     expect(command?.[9]).toBe(0);
-    expect(command?.slice(11, 18)).toEqual([0x81, 150, 0, 2, 2, 3, 2]);
+    expect(command?.slice(11, 19)).toEqual([0x81, 150, 0, 2, 2, 3, 2, 1]);
     expect(snapshot.settings).toMatchObject({
       audioReactiveHapticsEnabled: true,
       audioReactiveHapticsMode: 'replace',
@@ -1498,7 +1530,7 @@ describe('BridgeService', () => {
     const passthroughCommand = device.sentReports.at(-1);
     expect(passthroughCommand?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
     expect(passthroughCommand?.[9]).toBe(1);
-    expect(passthroughCommand?.slice(11, 18)).toEqual([0x81, 150, 0, 2, 2, 3, 2]);
+    expect(passthroughCommand?.slice(11, 19)).toEqual([0x81, 150, 0, 2, 2, 3, 2, 1]);
   });
 
   it('restarts system audio haptics immediately after a route change', async () => {
@@ -1657,7 +1689,7 @@ describe('BridgeService', () => {
     const command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
     expect(command?.[9]).toBe(0);
-    expect(command?.slice(11, 18)).toEqual([1, 100, 0, 1, 1, 1, 1]);
+    expect(command?.slice(11, 19)).toEqual([1, 100, 0, 1, 1, 1, 1, 0]);
   });
 
   it('sends and stores USB suspend disconnect settings', async () => {
@@ -2129,6 +2161,71 @@ describe('BridgeService', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('does not let a slow default-render query stall a host persona switch', async () => {
+    vi.useFakeTimers();
+    try {
+      const service = serviceFixture();
+      const device = new MockHidDevice();
+      device.status = statusReport({
+        controllerConnected: false,
+        hostPersonaMode: 'dualsense',
+        supportedHostPersonaModesMask: 0x07
+      });
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+      await poll(service);
+
+      const getDefaultRenderEndpointStatus = vi.fn(() => new Promise<never>(() => undefined));
+      (service as unknown as {
+        getDefaultRenderEndpointStatus: typeof getDefaultRenderEndpointStatus;
+      }).getDefaultRenderEndpointStatus = getDefaultRenderEndpointStatus;
+
+      const switching = service.setHostPersonaMode('ds4');
+      await vi.advanceTimersByTimeAsync(199);
+      expect(device.sentReports.at(-1)?.[7]).not.toBe(COMMAND_ID.SET_HOST_PERSONA);
+
+      await vi.advanceTimersByTimeAsync(1);
+      const snapshot = await switching;
+
+      expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HOST_PERSONA);
+      expect(snapshot.personaTransition?.to).toBe('ds4');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses cached default-render state without delaying a host persona switch', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    await poll(service);
+
+    const getDefaultRenderEndpointStatus = vi.fn(() => new Promise<never>(() => undefined));
+    const internals = service as unknown as {
+      getDefaultRenderEndpointStatus: typeof getDefaultRenderEndpointStatus;
+      lastDefaultRenderEndpointStatus: { deviceName: string; isBridgeEndpoint: boolean } | null;
+      lastDefaultRenderEndpointStatusAt: number;
+    };
+    internals.lastDefaultRenderEndpointStatus = {
+      deviceName: 'Speakers (DualSense Wireless Controller)',
+      isBridgeEndpoint: true
+    };
+    internals.lastDefaultRenderEndpointStatusAt = Date.now();
+    internals.getDefaultRenderEndpointStatus = getDefaultRenderEndpointStatus;
+
+    const snapshot = await service.setHostPersonaMode('ds4');
+
+    expect(getDefaultRenderEndpointStatus).toHaveBeenCalledOnce();
+    expect(snapshot.personaTransition?.to).toBe('ds4');
+    expect(snapshot.settings.hostPersonaMode).toBe('ds4');
   });
 
   it('masks transient bridge loss during host persona re-enumeration', async () => {

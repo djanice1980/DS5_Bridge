@@ -1834,7 +1834,25 @@ function healthLabel(snapshot: BridgeSnapshot | null | undefined): string {
   if (snapshot.diagnostics.firmwareUpdateAvailable) {
     return `Firmware ${snapshot.diagnostics.firmwareUpdateAvailable.availableVersion} available`;
   }
+  if (!snapshot.status?.controllerConnected && snapshot.settings.wakeOnControllerConnect) {
+    return 'Wake with controller enabled';
+  }
+  if (!snapshot.status?.controllerConnected) return 'Bridge online';
   return 'All systems normal';
+}
+
+function healthTitle(snapshot: BridgeSnapshot | null | undefined): string | undefined {
+  if (
+    snapshot?.state !== 'connected'
+    || snapshot.diagnostics.lastError
+    || snapshot.diagnostics.firmwareUpdateAvailable
+    || snapshot.status?.controllerConnected
+  ) {
+    return undefined;
+  }
+  return snapshot.settings.wakeOnControllerConnect
+    ? 'The Pico bridge is online. Controller wake is enabled, but no controller is connected.'
+    : 'The Pico bridge is online and waiting for a controller.';
 }
 
 function hexByte(value: number): string {
@@ -4108,6 +4126,7 @@ export function App() {
     ?? '--';
   const firmwareUpdateAvailable = Boolean(snapshot?.diagnostics.firmwareUpdateAvailable);
   const overviewHealthLabel = healthLabel(snapshot);
+  const overviewHealthTitle = healthTitle(snapshot);
   const overviewHealthTone = personaTransitionActive
     ? 'warn'
     : snapshot?.diagnostics.lastError
@@ -6793,7 +6812,7 @@ export function App() {
                 <h2>Overview</h2>
                 <p>At-a-glance status of your controller and active settings.</p>
               </div>
-              <span className={`overview-health health-label ${overviewHealthTone}`}>
+              <span className={`overview-health health-label ${overviewHealthTone}`} title={overviewHealthTitle}>
                 <span className={`dot ${overviewHealthTone}`} />
                 {overviewHealthLabel}
               </span>

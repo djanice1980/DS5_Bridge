@@ -71,9 +71,11 @@ during the sync window, a stray controller in pairing mode nearby can't latch on
 its own.
 
 **Waking a sleeping PC.** Connecting a controller can wake the PC from sleep — an already-paired
-controller as it reconnects, or a new one as soon as its Bluetooth link comes up during a sync. On
-Windows, enable the bridge's *"Allow this device to wake the computer"* power setting; on Linux the
-companion sets USB wakeup up for you.
+controller as it reconnects, or a new one as soon as its Bluetooth link comes up during a sync. It
+works whether the controller was still connected when the PC went to sleep or was off the whole
+time (firmware 1.6.76 or newer for the second case). No power setting to configure on Windows: the
+bridge carries a small keyboard interface that Windows arms for wake by default, and the companion
+sets USB wakeup up for you on Linux. It can be turned off under System > Wake with controller.
 
 | `BOOTSEL` gesture | Action |
 | --- | --- |

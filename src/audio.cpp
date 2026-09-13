@@ -209,6 +209,7 @@ static uint audio_buf_pos = 0;
 static int8_t audio_haptic_buf[SAMPLE_SIZE];
 static int audio_haptic_buf_pos = 0;
 static bool audio_reactive_haptics_config_enabled = false;
+static bool audio_haptics_session_config_active = false;
 static uint8_t audio_reactive_haptics_mode = AudioReactiveHapticsMix;
 static uint16_t audio_reactive_haptics_gain_percent = 100;
 static uint8_t audio_reactive_haptics_bass_focus = AudioReactiveHapticsBassBalanced;
@@ -839,6 +840,7 @@ static void refresh_audio_haptics_replace_policy() {
 
 bool audio_set_reactive_haptics_config(
     bool enabled,
+    bool session_active,
     uint8_t mode,
     uint16_t gain_percent,
     uint8_t bass_focus,
@@ -859,6 +861,7 @@ bool audio_set_reactive_haptics_config(
     }
 
     const bool changed = audio_reactive_haptics_config_enabled != enabled
+        || audio_haptics_session_config_active != session_active
         || audio_reactive_haptics_mode != mode
         || audio_reactive_haptics_gain_percent != gain_percent
         || audio_reactive_haptics_bass_focus != bass_focus
@@ -867,6 +870,7 @@ bool audio_set_reactive_haptics_config(
         || audio_reactive_haptics_release != release
         || audio_reactive_haptics_suppress_classic_rumble != suppress_classic_rumble;
     audio_reactive_haptics_config_enabled = enabled;
+    audio_haptics_session_config_active = session_active;
     audio_reactive_haptics_mode = mode;
     audio_reactive_haptics_gain_percent = gain_percent;
     audio_reactive_haptics_bass_focus = bass_focus;
@@ -883,6 +887,10 @@ bool audio_set_reactive_haptics_config(
 
 bool audio_reactive_haptics_enabled() {
     return audio_reactive_haptics_config_enabled;
+}
+
+bool audio_haptics_session_active() {
+    return audio_haptics_session_config_active;
 }
 
 static void clear_partial_audio_state() {

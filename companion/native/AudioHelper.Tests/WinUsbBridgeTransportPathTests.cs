@@ -18,6 +18,12 @@ public sealed class WinUsbBridgeTransportPathTests
     {
         Assert.True(WinUsbBridgeTransport.IsBridgeInterfacePath(
             @"\\?\usb#vid_054c&pid_0ce7#7&dd2a026&0&3#{e4c8b2a9-87f5-4c4c-9e52-2b4c1b8b4f62}"));
+        // fw 1.6.76+: companion-only is a composite and the bridge is its interface 1.
+        Assert.True(WinUsbBridgeTransport.IsBridgeInterfacePath(
+            @"\\?\usb#vid_054c&pid_0ce7&mi_01#7&dd2a026&0&0001#{e4c8b2a9-87f5-4c4c-9e52-2b4c1b8b4f62}"));
+        // ...and its other interfaces are not the bridge.
+        Assert.False(WinUsbBridgeTransport.IsBridgeInterfacePath(
+            @"\\?\usb#vid_054c&pid_0ce7&mi_00#7&dd2a026&0&0000#{e4c8b2a9-87f5-4c4c-9e52-2b4c1b8b4f62}"));
     }
 
     [Theory]

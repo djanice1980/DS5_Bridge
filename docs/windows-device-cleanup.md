@@ -6,7 +6,11 @@ instance and keeps the old one cached.
 
 Common identity-changing fields in this project are:
 
-- USB PID: `0x0CE6` for DualSense, `0x0DF2` for DualSense Edge.
+- USB PID: `0x0CE6` for DualSense, `0x0DF2` for DualSense Edge, `0x0CE7` for the
+  companion-only (no controller) device.
+- Companion-only shape: firmware up to 1.6.75 presented `0x0CE7` as a single
+  WinUSB interface; 1.6.76 makes it a composite (placeholder HID, bridge, wake
+  keyboard) at revision `0x0157`, so Windows installs it as a new device.
 - USB serial behavior: `iSerialNumber = 0x03` versus `iSerialNumber = 0x00`.
 - Interface layout: standard firmware, companion firmware, and any
   temporary diagnostic layouts.

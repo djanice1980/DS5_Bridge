@@ -14,7 +14,10 @@ sealed class LinuxUsbBridgeTransport : IDisposable
     // its interfaces from zero -- see HOST_BRIDGE_IDLE_INTERFACE_NUMBER in host_bridge.h.
     // Never assume either one: read the number off the descriptors and carry it.
     private const int FullBridgeInterfaceNumber = 5;
-    private const int IdleBridgeInterfaceNumber = 0;
+    // Companion-only is a composite since fw 1.6.76: placeholder HID (0), bridge (1), wake
+    // keyboard (2). Discovery walks the configuration for the vendor-class interface, so
+    // both this and the older lone-interface-0 shape resolve; this is only the fallback.
+    private const int IdleBridgeInterfaceNumber = 1;
     private const byte FallbackBulkOutEndpoint = 0x07; // HOST_BRIDGE_EP_OUT in firmware
     private const byte VendorInterfaceClass = 0xFF;
     private const int ReportBytes = 64;

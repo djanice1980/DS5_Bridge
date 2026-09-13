@@ -1,4 +1,5 @@
 #include "persona/host_persona.h"
+#include "host_bridge.h"
 
 #include "persona/ds4_persona.h"
 #include "persona/dualsense_persona.h"
@@ -40,6 +41,12 @@ extern "C" bool host_persona_is_native_hid(void) {
 
 extern "C" uint8_t host_persona_keyboard_hid_instance(void) {
 #ifdef ENABLE_COMPANION
+    // Companion-only: placeholder HID is instance 0, the keyboard is instance 1, whatever
+    // persona is selected (the xusb persona has no HID gamepad, so its keyboard is 0 only in
+    // the full configuration).
+    if (host_bridge_companion_only()) {
+        return 1;
+    }
     return host_persona_is_native_hid() ? 1 : 0;
 #else
     return 0;

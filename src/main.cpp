@@ -278,6 +278,13 @@ static bool host_input_ready_for_persona(HostPersonaMode persona) {
     if (!usb_device_stack_ready()) {
         return false;
     }
+#ifdef ENABLE_COMPANION
+    // Companion-only: HID instance 0 is the inert placeholder, not a gamepad. A controller
+    // report sent there would be garbage on the wire.
+    if (host_bridge_companion_only()) {
+        return false;
+    }
+#endif
     return persona == HostPersonaModeXusb360 ? xusb360_usb_ready() : tud_hid_ready();
 }
 
@@ -514,6 +521,9 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     if (itf == host_persona_keyboard_hid_instance()) {
         return 0;
     }
+    if (host_bridge_companion_only()) {
+        return 0; // Placeholder HID: no reports.
+    }
 #endif
 
     const HostPersonaMode active_persona = host_persona_active();
@@ -571,6 +581,9 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 #ifdef ENABLE_COMPANION
     if (itf == host_persona_keyboard_hid_instance()) {
         return;
+    }
+    if (host_bridge_companion_only()) {
+        return; // Placeholder HID: no reports.
     }
 #endif
 

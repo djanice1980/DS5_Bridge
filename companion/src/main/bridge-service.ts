@@ -148,7 +148,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.75';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.76';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -164,6 +164,11 @@ const HOST_PERSONA_TRANSITION_SETTLE_MS = 0;
 const HOST_PERSONA_TRANSITION_REDISCOVERY_POLL_MS = 50;
 const HOST_PERSONA_TRANSITION_OPEN_RETRY_MS = 250;
 const HOST_PERSONA_RECONNECT_GRACE_MS = 5000;
+// A persona switch asks the helper "is the bridge the default output?" first, so it knows
+// whether to re-claim it afterwards. That WASAPI query can take seconds on a busy machine;
+// bound it, and prefer a recent sample so the switch itself is not what the user waits on.
+const HOST_PERSONA_DEFAULT_RENDER_CAPTURE_BUDGET_MS = 200;
+const HOST_PERSONA_DEFAULT_RENDER_CACHE_MAX_AGE_MS = 5000;
 const HOST_PERSONA_DEFAULT_RENDER_RESTORE_RETRY_MS = 500;
 const HOST_PERSONA_DEFAULT_RENDER_RESTORE_GRACE_MS = 4000;
 // A flash is slower than a persona switch: bootloader mount, user copies the UF2 (or
@@ -1315,6 +1320,11 @@ export class BridgeService extends EventEmitter {
   private readonly micKeepaliveEngine = new MicKeepaliveEngine();
   private readonly touchpadInhibitEngine = new TouchpadInhibitEngine();
   private readonly hidDiscovery = new HidDiscoveryClient();
+  // node-hid's listDevices is a full system-wide HID enumeration. It ran on every 500 ms poll
+  // while no bridge was open (upstream b48afab). Now the disconnected scan runs once, and only
+  // an explicit refresh or a real transport loss forces another.
+  private unavailableDiscoveryRequested = false;
+  private unavailableDevices: HidDeviceSummary[] = [];
   private audioHapticsSessionCache: { key: string; expiresAt: number; sessions: AudioHapticsSession[] } | null = null;
   private audioHapticsSessionListInFlight: Promise<AudioHapticsSession[]> | null = null;
   private audioHapticsSessionListInFlightKey: string | null = null;
@@ -1356,6 +1366,8 @@ export class BridgeService extends EventEmitter {
   private hostPersonaTransition: HostPersonaTransitionState | null = null;
   private completedHostPersonaMode: HostPersonaMode | null = null;
   private hostPersonaDefaultRenderRestore: HostPersonaDefaultRenderRestore | null = null;
+  private lastDefaultRenderEndpointStatus: DefaultRenderEndpointStatus | null = null;
+  private lastDefaultRenderEndpointStatusAt = 0;
   // Sampled on the census cadence; consulted when the transport drops, when it is too late
   // to ask the (now absent) endpoint whether it was the default.
   private defaultRenderWasBridgeAtLastCheck = false;
@@ -1748,17 +1760,56 @@ export class BridgeService extends EventEmitter {
   }
 
   private async defaultRenderIsBridgeEndpoint(): Promise<boolean> {
-    try {
-      const status = await this.getDefaultRenderEndpointStatus();
+    const refresh = this.getDefaultRenderEndpointStatus()
+      .then((status) => {
+        this.lastDefaultRenderEndpointStatus = status;
+        this.lastDefaultRenderEndpointStatusAt = Date.now();
+        return status;
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.appendAudioDebugLines([`[HostBridge] default render check skipped: ${message}`]);
+        return null;
+      });
+    const cached = Date.now() - this.lastDefaultRenderEndpointStatusAt
+      <= HOST_PERSONA_DEFAULT_RENDER_CACHE_MAX_AGE_MS
+      ? this.lastDefaultRenderEndpointStatus
+      : null;
+
+    if (cached) {
+      // Give an already-resolved query one microtask to replace the sample. A real helper
+      // query stays in the background and cannot delay the command.
+      await Promise.resolve();
+      const status = this.lastDefaultRenderEndpointStatus ?? cached;
       this.appendAudioDebugLines([
-        `[HostBridge] default render before persona switch device='${status.deviceName}' bridge=${status.isBridgeEndpoint}`
+        `[HostBridge] default render before persona switch device='${status.deviceName}' bridge=${status.isBridgeEndpoint} source=cache`
       ]);
       return status.isBridgeEndpoint;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.appendAudioDebugLines([`[HostBridge] default render check skipped: ${message}`]);
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const result = await Promise.race([
+      refresh,
+      new Promise<'timeout'>((resolve) => {
+        timeout = setTimeout(() => resolve('timeout'), HOST_PERSONA_DEFAULT_RENDER_CAPTURE_BUDGET_MS);
+      })
+    ]);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    if (result === 'timeout') {
+      this.appendAudioDebugLines([
+        `[HostBridge] default render check deferred beyond ${HOST_PERSONA_DEFAULT_RENDER_CAPTURE_BUDGET_MS}ms; persona switch continuing`
+      ]);
       return false;
     }
+    if (!result) {
+      return false;
+    }
+    this.appendAudioDebugLines([
+      `[HostBridge] default render before persona switch device='${result.deviceName}' bridge=${result.isBridgeEndpoint} source=live`
+    ]);
+    return result.isBridgeEndpoint;
   }
 
   private queueHostPersonaDefaultRenderRestore(to: HostPersonaMode, extraDeadlineMs = 0): void {
@@ -2179,6 +2230,10 @@ export class BridgeService extends EventEmitter {
 
   private audioReactiveHapticsCommandPayload(settings: CompanionSettings): number[] {
     const gain = Math.max(0, Math.min(200, Math.round(settings.audioReactiveHapticsGainPercent)));
+    // Byte 17 (protocol 1.19): an Audio Haptics session is running. The firmware uses it to
+    // hand the actuators back to audio after a game's zero-rumble stop; older firmware
+    // ignores the trailing byte.
+    const sessionActive = settings.hapticsEnabled && settings.audioReactiveHapticsEnabled;
     const mode = audioReactiveHapticsModeValue(settings.audioReactiveHapticsMode)
       | (this.audioReactiveHapticsSuppressesClassicRumble(settings)
         ? AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG
@@ -2190,7 +2245,8 @@ export class BridgeService extends EventEmitter {
       audioReactiveHapticsBassFocusValue(settings.audioReactiveHapticsBassFocus),
       audioReactiveHapticsResponseValue(settings.audioReactiveHapticsResponse),
       audioReactiveHapticsAttackValue(settings.audioReactiveHapticsAttack),
-      audioReactiveHapticsReleaseValue(settings.audioReactiveHapticsRelease)
+      audioReactiveHapticsReleaseValue(settings.audioReactiveHapticsRelease),
+      sessionActive ? 1 : 0
     ];
   }
 
@@ -3186,7 +3242,12 @@ export class BridgeService extends EventEmitter {
         }
         this.beginHostPersonaTransition(normalizedMode, previousMode);
         this.systemAudioHapticsRetryAt = 0;
-        await this.systemAudioHapticsEngine.stop();
+        // Stopping the helper process can take a while; the persona command must not wait
+        // on it (upstream da4d063).
+        void this.systemAudioHapticsEngine.stop().catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          this.appendAudioDebugLines([`[SystemHaptics] persona switch stop failed: ${message}`]);
+        });
         this.applyHostPersonaTransitionSnapshot(this.snapshot.diagnostics.rawDevices);
       }
       this.emitSnapshot();
@@ -3906,7 +3967,7 @@ export class BridgeService extends EventEmitter {
     await this.refreshBridgeCensusIfDue();
     const currentSettings = this.settingsStore.get();
 
-    const rawDevices = await this.hidDiscovery.listDevices();
+    const rawDevices = await this.refreshUnavailableDevices();
     let status: BridgeStatusPayload | null;
     try {
       status = await this.openAndReadStatus();
@@ -4212,7 +4273,7 @@ export class BridgeService extends EventEmitter {
     this.closeDevice();
     let rawDevices: HidDeviceSummary[] = [];
     try {
-      rawDevices = await this.hidDiscovery.listDevices();
+      rawDevices = await this.refreshUnavailableDevices(true);
     } catch (error) {
       this.publishError(error);
     }
@@ -4626,6 +4687,8 @@ export class BridgeService extends EventEmitter {
     if (!matched) {
       // The pinned bridge is not present. Keep serving the one we have rather than showing
       // nothing, but leave the preference alone so it re-binds when that bridge returns.
+      // (Upstream ece0c5e adopts a lone replacement bridge instead; deliberately not taken --
+      // it would steal the preference every time the pinned board is unplugged for a moment.)
       return;
     }
     this.closeDevice();
@@ -5405,9 +5468,30 @@ export class BridgeService extends EventEmitter {
   }
 
   async refreshBridgeDevices(): Promise<BridgeSnapshot> {
-    await this.refreshBridgeCensus();
+    const [, rawDevices] = await Promise.all([
+      this.refreshBridgeCensus(),
+      this.refreshUnavailableDevices(true)
+    ]);
+    if (!this.device) {
+      this.markBridgeUnavailableAfterDisconnect(rawDevices, rawDevices.some(isDualSenseDevice));
+    }
     this.emitSnapshot();
     return this.getSnapshot();
+  }
+
+  private async refreshUnavailableDevices(force = false): Promise<HidDeviceSummary[]> {
+    if (this.device) {
+      return this.unavailableDevices;
+    }
+    if (this.unavailableDiscoveryRequested && !force) {
+      return this.unavailableDevices;
+    }
+    // Keep the initial scan used to classify normal controller firmware, but never repeat it
+    // from the 500 ms poll. Explicit user refreshes and actual transport-loss events force
+    // another scan.
+    this.unavailableDiscoveryRequested = true;
+    this.unavailableDevices = await this.hidDiscovery.listDevices();
+    return this.unavailableDevices;
   }
 
   private closeDevice(): void {

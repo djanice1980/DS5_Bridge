@@ -4280,6 +4280,20 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     bt_sanitize_host_speaker_amp_ownership(data, len);
     bt_sanitize_host_mic_ownership(data, len);
     apply_classic_rumble_gain(data, len);
+    {
+        // A game's zero-motor stop that keeps the rumble selector set would strand the
+        // actuators in rumble mode and silence Audio Haptics until something else flips the
+        // mode. Rewrite it into the handback form while a session is running (upstream 4e57396).
+        uint8_t *stop_payload = nullptr;
+        uint16_t stop_payload_len = 0;
+        if (output_report_payload(data, len, stop_payload, stop_payload_len)) {
+            (void)controller_output_policy_normalize_classic_rumble_stop_payload(
+                stop_payload,
+                stop_payload_len,
+                audio_haptics_session_active()
+            );
+        }
+    }
     uint8_t trace_critical_depth = 0;
     uint8_t trace_audio_depth = 0;
     uint8_t trace_route_flags = 0;

@@ -62,9 +62,18 @@ static volatile bool usb_host_suspended = false;
 static volatile uint32_t usb_suspend_at_us = 0;
 static volatile uint32_t usb_reconnect_grace_until_us = 0;
 // Wake-on-controller-connect: whether the host armed remote wakeup at suspend (only possible when the
-// active persona's descriptor declares remote wakeup), and the companion-controlled enable (default on).
+// active configuration declares remote wakeup -- DualSense/DS4 personas and the companion-only idle
+// device do, xusb360 does not), and the companion-controlled enable (default on).
 static volatile bool usb_remote_wakeup_armed = false;
 static volatile bool usb_wake_on_connect_enabled = true;
+// The wake request is PUBLISHED from Bluetooth callbacks and ISSUED from usb_pm_poll(): the same
+// rule as every other TinyUSB touch in this file (upstream 614968e).
+static volatile bool usb_remote_wakeup_pending = false;
+// After issuing a wake while companion-only, hold the idle->full re-enumeration until the host
+// resumes (or this much time passes). A detach in the middle of the host's own wake-up can be
+// missed; once the bus is awake the product-id swap is an ordinary hot-plug.
+#define USB_WAKE_RESUME_HOLD_US 3000000u
+static uint32_t usb_wake_hold_until_us = 0;
 
 extern "C" {
 uint8_t usb_hid_polling_interval_ms_value = 1;
@@ -303,14 +312,17 @@ void usb_handle_controller_transport_disconnect() {
 }
 
 void usb_wake_host_if_suspended() {
-    // Signal a USB resume to wake the host iff wake-on-connect is enabled and the host armed remote
-    // wakeup at suspend (only when the active persona's descriptor declares it -- DualSense/DS4, not
-    // xusb360). Safe no-op when the bus isn't actually suspended or remote wakeup wasn't enabled.
-    // Called BOTH early (BT link connected, before bonding/HID) and again at HID transport-ready, so a
-    // slow new-controller pairing wakes the host at the first sign of a controller -- while the host is
-    // still in its USB-wakeable sleep window -- instead of only after the HID transport is up.
+    // Request a USB resume to wake the host iff wake-on-connect is enabled and the host armed remote
+    // wakeup at suspend (only when the active configuration declares it -- DualSense/DS4 personas and
+    // the companion-only idle device; not xusb360). Safe no-op when the bus isn't actually suspended or
+    // remote wakeup wasn't enabled. Called BOTH early (BT link connected, before bonding/HID) and again
+    // at HID transport-ready, so a slow new-controller pairing wakes the host at the first sign of a
+    // controller -- while the host is still in its USB-wakeable sleep window -- instead of only after
+    // the HID transport is up.
+    //
+    // This runs from BTstack callbacks, so it only publishes the request; usb_pm_poll() issues it.
     if (usb_bus_suspended() && usb_wake_on_connect_enabled && usb_remote_wakeup_armed) {
-        tud_remote_wakeup();
+        usb_remote_wakeup_pending = true;
     }
 }
 
@@ -324,10 +336,10 @@ void usb_handle_controller_transport_ready() {
         usb_controller_transport_ready = true;
         usb_wake_host_if_suspended(); // Fallback wake in case the early link-connect signal was missed.
 #ifdef ENABLE_COMPANION
-        // Remote wakeup cannot rescue the companion-only device: its configuration does not
-        // declare the capability, and the host would have to re-enumerate anyway to see the
-        // full device. Publish the transition so usb_pm_poll re-attaches instead of waiting
-        // for a resume that never comes.
+        // The companion-only device declares remote wakeup and rides the bridge keyboard as
+        // its wake anchor, so the wake above can resume the host. The host still has to
+        // re-enumerate to see the full device, so publish the transition; usb_pm_poll holds
+        // it briefly for the resume when a wake was actually issued, then re-attaches.
         if (host_bridge_companion_only()) {
             usb_controller_transport_transition_pending = true;
         }
@@ -342,11 +354,17 @@ void usb_handle_controller_transport_ready() {
 
 void usb_set_wake_on_connect(bool enabled) {
     usb_wake_on_connect_enabled = enabled;
+    if (!enabled) {
+        usb_remote_wakeup_pending = false;
+    }
 }
 
 extern "C" void tud_mount_cb(void) {
     usb_mounted = true;
     usb_host_suspended = false;
+    usb_remote_wakeup_armed = false;
+    usb_remote_wakeup_pending = false;
+    usb_wake_hold_until_us = 0;
     usb_suspend_at_us = 0;
     usb_reconnect_grace_until_us = 0;
     host_input_note_usb_mounted();
@@ -354,6 +372,8 @@ extern "C" void tud_mount_cb(void) {
 
 extern "C" void tud_umount_cb(void) {
     usb_mounted = false;
+    usb_remote_wakeup_armed = false;
+    usb_remote_wakeup_pending = false;
 }
 
 extern "C" bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
@@ -399,6 +419,8 @@ extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
 
 extern "C" void tud_resume_cb(void) {
     usb_host_suspended = false;
+    usb_remote_wakeup_pending = false;
+    usb_wake_hold_until_us = 0;
     usb_suspend_at_us = 0;
 }
 
@@ -417,11 +439,30 @@ void usb_pm_poll() {
         usb_suspend_at_us = 0;
     }
 
+    // Issue a published wake request from here, the TinyUSB task context. A signalled resume
+    // takes effect only if the host armed remote wakeup at suspend; re-check everything, since
+    // the request may have been published a poll ago.
+    if (usb_remote_wakeup_pending) {
+        usb_remote_wakeup_pending = false;
+        if (usb_wake_on_connect_enabled && usb_remote_wakeup_armed && usb_bus_suspended() && tud_inited()) {
+            tud_remote_wakeup();
+#ifdef ENABLE_COMPANION
+            if (host_bridge_companion_only()) {
+                usb_wake_hold_until_us = now + USB_WAKE_RESUME_HOLD_US;
+                if (usb_wake_hold_until_us == 0) {
+                    usb_wake_hold_until_us = 1;
+                }
+            }
+#endif
+        }
+    }
+
     // A suspended bus normally means do nothing -- except when a controller has arrived and
     // we are still presenting the companion-only device. That transition is a detach/attach
     // cycle under a different product id, which the host notices regardless of suspend, and
-    // it is the ONLY way out: the idle configuration does not declare remote wakeup, so
-    // waiting to be resumed would wait forever.
+    // it is the way out when no wake was possible (wake-on-connect off, or the host never
+    // armed the idle device). When a wake WAS just issued, hold the transition until the host
+    // resumes -- tud_resume_cb clears the hold -- or the hold times out.
     const bool idle_transition_needed =
 #ifdef ENABLE_COMPANION
         usb_full_attach_pending
@@ -434,6 +475,14 @@ void usb_pm_poll() {
     if (usb_bus_suspended() && !idle_transition_needed) {
         return;
     }
+#ifdef ENABLE_COMPANION
+    if (usb_bus_suspended() && usb_wake_hold_until_us != 0) {
+        if (!time_reached(now, usb_wake_hold_until_us)) {
+            return;
+        }
+        usb_wake_hold_until_us = 0;
+    }
+#endif
 
     if (usb_controller_transport_transition_pending) {
         usb_controller_transport_transition_pending = false;

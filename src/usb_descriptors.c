@@ -56,8 +56,14 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #define VENDOR_MS_OS_20_DESC_LEN 0x00B2
 #define VENDOR_MS_OS_20_DESC_LEN_XUSB (VENDOR_MS_OS_20_DESC_LEN + MS_OS_20_XUSB_FUNCTION_DESC_LEN)
 // Companion-only is not a composite device, so its set carries no configuration/function
-// subsets -- see desc_ms_os_20_idle. Set header + compatible ID + registry property only.
-#define MS_OS_20_IDLE_DESC_LEN (0x000A + 0x0014 + MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN)
+// subsets. That was true while the idle device was a single interface; it is a composite
+// again now (placeholder HID + bridge + wake keyboard), so it uses the composite shape with
+// the function subset pointing at HOST_BRIDGE_IDLE_INTERFACE_NUMBER -- see
+// build_idle_ms_os_20_descriptor.
+#define MS_OS_20_IDLE_DESC_LEN VENDOR_MS_OS_20_DESC_LEN
+#define IDLE_PLACEHOLDER_HID_REPORT_DESC_LEN 0x0013
+#define IDLE_PLACEHOLDER_INTERFACE_NUMBER 0x00
+#define IDLE_KEYBOARD_INTERFACE_NUMBER 0x02
 #define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
 #define KEYBOARD_HID_REPORT_DESC_LEN 0x002D
 #define DUALSENSE_HID_REPORT_DESC_LEN 0x0121
@@ -93,7 +99,6 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #define DS4_USB_BCD_DEVICE 0x0102
 #define DS4_HID_REPORT_DESC_LEN 0x01FB
 #define DS4_HID_REPORT_DESC_FNV1A32 0x9316A41Du
-#define DS4_HID_EP_INTERVAL 0x04
 #define DS4_STRING_MANUFACTURER "Sony Interactive Entertainment"
 #define DS4_STRING_PRODUCT "Wireless Controller"
 
@@ -179,23 +184,56 @@ bool host_bridge_companion_only(void) {
     return host_bridge_companion_only_mode;
 }
 
-// Just the configuration, one vendor interface, one bulk endpoint.
-#define CONFIG_TOTAL_LEN_IDLE (0x09 + 0x09 + 0x07)
+// Configuration + placeholder HID (9+9+7) + vendor bridge (9+7) + wake keyboard (9+9+7).
+#define CONFIG_TOTAL_LEN_IDLE (0x09 + (0x09 + 0x09 + 0x07) + (0x09 + 0x07) + (0x09 + 0x09 + 0x07))
 
+// The idle device is a wake receiver, not just a management port. With the PC asleep and the
+// controller off, this is the configuration the host suspended, so it is the only thing that
+// can resume the host when the controller comes back. A USB device can only do that if the
+// configuration declares remote wakeup AND the host chose to arm it; Windows arms boot
+// keyboards by default and a lone WinUSB interface never, which is why the bridge keyboard
+// rides along here. The firmware never types on it without a controller, so it is inert.
 static const uint8_t descriptor_configuration_idle[] = {
     // --- CONFIGURATION DESCRIPTOR ---
     0x09, // bLength
     0x02, // bDescriptorType (CONFIGURATION)
     CONFIG_TOTAL_LEN_IDLE & 0xFF, (CONFIG_TOTAL_LEN_IDLE >> 8) & 0xFF,
-    0x01, // bNumInterfaces: 1 -- no gamepad, no audio
+    0x03, // bNumInterfaces: placeholder HID, vendor bridge, wake keyboard -- no gamepad, no audio
     0x01, // bConfigurationValue
     0x00, // iConfiguration
-    // Self-powered. NOT remote-wakeup: with no controller attached there is nothing to wake
-    // the host for, and claiming the capability without using it only confuses power policy.
-    0xC0,
+    0xE0, // bmAttributes: SELF-POWERED, REMOTE-WAKEUP (wake the host when a controller connects)
     0xFA, // bMaxPower: 500mA
 
-    // --- INTERFACE DESCRIPTOR (0.0): Vendor Bulk OUT (companion/control bridge) ---
+    // --- INTERFACE DESCRIPTOR (0.0): HID placeholder ---
+    // Keeps TinyUSB HID instance 0 in the gamepad endpoint slot so the keyboard stays instance
+    // 1 and every "is this the keyboard" check in the firmware keeps working. Reports one
+    // constant vendor byte; the host never sees anything controller-shaped.
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    IDLE_PLACEHOLDER_INTERFACE_NUMBER,
+    0x00, // bAlternateSetting
+    0x01, // bNumEndpoints
+    0x03, // bInterfaceClass: HID
+    0x00, // bInterfaceSubClass
+    0x00, // bInterfaceProtocol
+    0x00, // iInterface
+
+    0x09, // bLength
+    0x21, // bDescriptorType (HID)
+    0x11, 0x01, // bcdHID: 1.11
+    0x00, // bCountryCode
+    0x01, // bNumDescriptors
+    0x22, // bDescriptorType: Report
+    IDLE_PLACEHOLDER_HID_REPORT_DESC_LEN & 0xFF, (IDLE_PLACEHOLDER_HID_REPORT_DESC_LEN >> 8) & 0xFF,
+
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    0x84, // bEndpointAddress: IN EP4 (the gamepad's slot)
+    0x03, // bmAttributes: Interrupt
+    0x40, 0x00, // wMaxPacketSize: 64
+    0x01, // bInterval
+
+    // --- INTERFACE DESCRIPTOR (1.0): Vendor Bulk OUT (companion/control bridge) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
     HOST_BRIDGE_IDLE_INTERFACE_NUMBER,
@@ -211,7 +249,33 @@ static const uint8_t descriptor_configuration_idle[] = {
     VENDOR_BRIDGE_EP_OUT,
     0x02, // bmAttributes: Bulk
     0x40, 0x00, // wMaxPacketSize: 64
-    0x00  // bInterval: ignored for bulk
+    0x00, // bInterval: ignored for bulk
+
+    // --- INTERFACE DESCRIPTOR (2.0): HID (Bridge Keyboard, wake anchor) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    IDLE_KEYBOARD_INTERFACE_NUMBER,
+    0x00, // bAlternateSetting
+    0x01, // bNumEndpoints
+    0x03, // bInterfaceClass: HID
+    0x01, // bInterfaceSubClass: Boot
+    0x01, // bInterfaceProtocol: Keyboard
+    0x06, // iInterface: DS5 Bridge Keyboard
+
+    0x09, // bLength
+    0x21, // bDescriptorType (HID)
+    0x11, 0x01, // bcdHID: 1.11
+    0x00, // bCountryCode
+    0x01, // bNumDescriptors
+    0x22, // bDescriptorType: Report
+    KEYBOARD_HID_REPORT_DESC_LEN & 0xFF, (KEYBOARD_HID_REPORT_DESC_LEN >> 8) & 0xFF,
+
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    0x86, // bEndpointAddress: IN EP6 (same slot as the full configuration)
+    0x03, // bmAttributes: Interrupt
+    0x08, 0x00, // wMaxPacketSize: 8
+    0x01  // bInterval
 };
 
 TU_VERIFY_STATIC(
@@ -230,6 +294,7 @@ uint8_t const *tud_descriptor_device_cb(void) {
         // caching one VID/PID against two different interface layouts. Personas are
         // irrelevant here -- there is no gamepad in this configuration.
         desc_device_runtime.idProduct = HOST_BRIDGE_IDLE_PRODUCT_ID;
+        desc_device_runtime.bcdDevice = HOST_BRIDGE_IDLE_USB_BCD_DEVICE;
         desc_device_runtime.bDeviceClass = 0x00;
         desc_device_runtime.bDeviceSubClass = 0x00;
         desc_device_runtime.bDeviceProtocol = 0x00;
@@ -743,9 +808,9 @@ static uint16_t active_gamepad_hid_report_descriptor_len(void) {
 static void apply_gamepad_hid_runtime_configuration(uint8_t *configuration, uint16_t len) {
     bool in_gamepad_interface = false;
     const uint16_t report_descriptor_len = active_gamepad_hid_report_descriptor_len();
-    const uint8_t gamepad_hid_interval = host_persona_active() == HostPersonaModeDs4
-        ? DS4_HID_EP_INTERVAL
-        : usb_hid_polling_interval_ms_value;
+    // Every HID persona honours the selected 1/2/4 ms interval; the DS4 persona used to pin
+    // 4 ms regardless of the setting (upstream d1fecc7).
+    const uint8_t gamepad_hid_interval = usb_hid_polling_interval_ms_value;
     for (uint16_t offset = 0; offset + 2 <= len;) {
         uint8_t const length = configuration[offset];
         if (length == 0 || offset + length > len) {
@@ -764,6 +829,35 @@ static void apply_gamepad_hid_runtime_configuration(uint8_t *configuration, uint
             && (configuration[offset + 2] == 0x84 || configuration[offset + 2] == 0x03)
         ) {
             configuration[offset + 6] = gamepad_hid_interval;
+        }
+        offset = (uint16_t)(offset + length);
+    }
+}
+
+// The XUSB configuration is built once and cached; patch its IN endpoint interval to the
+// selected polling rate before every enumeration, like the HID personas. The OUT (rumble)
+// endpoint keeps its own interval.
+static void apply_xusb_runtime_configuration(uint8_t *configuration, uint16_t len) {
+    bool in_xusb_interface = false;
+    const uint8_t input_interval = usb_hid_polling_interval_ms_value;
+    for (uint16_t offset = 0; offset + 2 <= len;) {
+        const uint8_t length = configuration[offset];
+        if (length == 0 || offset + length > len) {
+            break;
+        }
+
+        const uint8_t descriptor_type = configuration[offset + 1];
+        if (descriptor_type == TUSB_DESC_INTERFACE && length >= 9) {
+            in_xusb_interface = configuration[offset + 5] == 0xFF
+                && configuration[offset + 6] == 0x5D
+                && configuration[offset + 7] == 0x01;
+        } else if (
+            in_xusb_interface
+            && descriptor_type == TUSB_DESC_ENDPOINT
+            && length >= 7
+            && configuration[offset + 2] == XUSB360_EP_IN
+        ) {
+            configuration[offset + 6] = input_interval;
         }
         offset = (uint16_t)(offset + length);
     }
@@ -914,6 +1008,10 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
             (void)build_xusb_configuration_descriptor();
         }
         if (descriptor_configuration_xusb_len != 0) {
+            apply_xusb_runtime_configuration(
+                descriptor_configuration_xusb,
+                descriptor_configuration_xusb_len
+            );
             return descriptor_configuration_xusb;
         }
     }
@@ -942,17 +1040,12 @@ uint8_t const desc_bos_xusb[] = {
     TUD_BOS_MS_OS_20_DESCRIPTOR(VENDOR_MS_OS_20_DESC_LEN_XUSB, VENDOR_MS_OS_VENDOR_REQUEST)
 };
 
-// BOS advertises how many bytes the MS OS 2.0 set contains, and the companion-only set is a
-// different size. Advertising 0xB2 and then returning 0xA2 leaves Windows short-read, so the
-// idle device needs its own BOS rather than sharing the composite one.
-uint8_t const desc_bos_idle[] = {
-    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
-    TUD_BOS_MS_OS_20_DESCRIPTOR(MS_OS_20_IDLE_DESC_LEN, VENDOR_MS_OS_VENDOR_REQUEST)
-};
-
+// The companion-only MS OS 2.0 set is the composite one with a different interface number,
+// so it is the same size and shares desc_bos. (It used to be a shorter, non-composite set
+// with its own BOS; that shape went with the single-interface idle device.)
 uint8_t const *tud_descriptor_bos_cb(void) {
     if (host_bridge_companion_only()) {
-        return desc_bos_idle;
+        return desc_bos;
     }
     return host_persona_active() == HostPersonaModeXusb360 ? desc_bos_xusb : desc_bos;
 }
@@ -1000,53 +1093,25 @@ TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == VENDOR_MS_OS_20_DESC_LEN, "Incorrect M
 
 // Companion-only MS OS 2.0 descriptor set.
 //
-// This is a DIFFERENT SHAPE, not a patched copy of the composite one, and the reason is worth
-// writing down because two releases were spent on the wrong theory.
-//
-// The full device exposes six interfaces, so Windows loads usbccgp, which creates one child
-// device per interface. A function subset names one of those children, and WinUSB binds to
-// the child. The companion-only configuration has a SINGLE interface, so the device is not
-// composite: usbccgp never loads, no child device exists, and a function subset names
-// something that is not there. Windows finds nothing to bind and reports ProblemCode 28.
-//
-// For a non-composite device the features apply to the device itself, so the compatible ID
-// and the registry property sit directly under the set header -- no configuration subset, no
-// function subset. Renumbering the interface (the previous fix) was never the issue.
-static uint8_t const desc_ms_os_20_idle[] = {
-    // Set header: length, type, Windows version, total length.
-    U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR),
-    U32_TO_U8S_LE(0x06030000), U16_TO_U8S_LE(MS_OS_20_IDLE_DESC_LEN),
+// The idle device is a composite again (placeholder HID + bridge + wake keyboard), so this is
+// the composite descriptor with the function subset re-pointed at the idle bridge interface
+// number. A composite needs the function subset: usbccgp creates one child per interface and
+// WinUSB binds to the child the subset names. (An earlier single-interface idle device needed
+// the opposite -- no subsets at all -- and two releases were lost to that distinction, so if
+// the idle shape ever changes again, this is the first thing to revisit.)
+static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_idle[VENDOR_MS_OS_20_DESC_LEN];
+static bool desc_ms_os_20_idle_ready = false;
 
-    // Compatible ID: bind the DEVICE to WinUSB.
-    U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
-    'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-
-    // Registry property: the same DeviceInterfaceGUIDs value as the composite descriptor, so
-    // the companion finds this device under exactly the GUID it already looks for.
-    U16_TO_U8S_LE(MS_OS_20_DEVICE_INTERFACE_GUID_PROPERTY_LEN),
-    U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
-    U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A),
-    'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00,
-    'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
-    'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00,
-    'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00,
-    0x00, 0x00,
-    U16_TO_U8S_LE(0x0050),
-    '{', 0x00, 'E', 0x00, '4', 0x00, 'C', 0x00, '8', 0x00,
-    'B', 0x00, '2', 0x00, 'A', 0x00, '9', 0x00, '-', 0x00,
-    '8', 0x00, '7', 0x00, 'F', 0x00, '5', 0x00, '-', 0x00,
-    '4', 0x00, 'C', 0x00, '4', 0x00, 'C', 0x00, '-', 0x00,
-    '9', 0x00, 'E', 0x00, '5', 0x00, '2', 0x00, '-', 0x00,
-    '2', 0x00, 'B', 0x00, '4', 0x00, 'C', 0x00, '1', 0x00,
-    'B', 0x00, '8', 0x00, 'B', 0x00, '4', 0x00, 'F', 0x00,
-    '6', 0x00, '2', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
-TU_VERIFY_STATIC(
-    sizeof(desc_ms_os_20_idle) == MS_OS_20_IDLE_DESC_LEN,
-    "Incorrect companion-only MS OS 2.0 descriptor size"
-);
+static uint16_t build_idle_ms_os_20_descriptor(void) {
+    if (!desc_ms_os_20_idle_ready) {
+        memcpy(desc_ms_os_20_idle, desc_ms_os_20, sizeof(desc_ms_os_20));
+        // Function subset header: set header (10) + configuration subset header (8) precede
+        // it; the interface number is its fifth byte.
+        desc_ms_os_20_idle[22] = HOST_BRIDGE_IDLE_INTERFACE_NUMBER;
+        desc_ms_os_20_idle_ready = true;
+    }
+    return VENDOR_MS_OS_20_DESC_LEN;
+}
 
 static CFG_TUD_MEM_ALIGN uint8_t desc_ms_os_20_xusb[VENDOR_MS_OS_20_DESC_LEN_XUSB];
 static bool desc_ms_os_20_xusb_ready = false;
@@ -1174,10 +1239,8 @@ bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_requ
         uint8_t const *descriptor = desc_ms_os_20;
         uint16_t descriptor_len = VENDOR_MS_OS_20_DESC_LEN;
         if (host_bridge_companion_only()) {
-            // Non-composite shape, and a shorter one. The length must move with the
-            // descriptor -- desc_bos_idle advertises this same value.
+            descriptor_len = build_idle_ms_os_20_descriptor();
             descriptor = desc_ms_os_20_idle;
-            descriptor_len = MS_OS_20_IDLE_DESC_LEN;
         } else if (host_persona_active() == HostPersonaModeXusb360) {
             descriptor_len = build_xusb_ms_os_20_descriptor();
             descriptor = desc_ms_os_20_xusb;
@@ -1381,6 +1444,23 @@ uint8_t const desc_hid_report_ds[] = {
 };
 
 #ifdef ENABLE_COMPANION
+// Companion-only placeholder HID (interface 0): one constant vendor byte, never sent.
+uint8_t const desc_hid_report_idle_placeholder[] = {
+    0x06, 0x00, 0xFF, // Usage Page (Vendor Defined)
+    0x09, 0x01,       // Usage (1)
+    0xA1, 0x01,       // Collection (Application)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x26, 0xFF, 0x00, //   Logical Maximum (255)
+    0x75, 0x08,       //   Report Size (8)
+    0x95, 0x01,       //   Report Count (1)
+    0x81, 0x03,       //   Input (Constant, Variable, Absolute)
+    0xC0,             // End Collection
+};
+TU_VERIFY_STATIC(
+    sizeof(desc_hid_report_idle_placeholder) == IDLE_PLACEHOLDER_HID_REPORT_DESC_LEN,
+    "Incorrect idle placeholder HID report descriptor size"
+);
+
 uint8_t const desc_hid_report_keyboard[] = {
     0x05, 0x01, // Usage Page (Generic Desktop)
     0x09, 0x06, // Usage (Keyboard)
@@ -1735,6 +1815,9 @@ bool host_persona_descriptors_verified(HostPersonaMode mode) {
 // Descriptor contents must exist long enough for transfer to complete
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
 #ifdef ENABLE_COMPANION
+    if (host_bridge_companion_only()) {
+        return itf == 0 ? desc_hid_report_idle_placeholder : desc_hid_report_keyboard;
+    }
     if (itf == host_persona_keyboard_hid_instance()) {
         return desc_hid_report_keyboard;
     }

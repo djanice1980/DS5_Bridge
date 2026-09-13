@@ -34,7 +34,7 @@ constexpr uint8_t kProtocolMajor = 1;
 // 0x37; fork-only commands at 0x60+). An app must never send fork-only ids to firmware that
 // does not answer fork-info, and must not send 0x37 unless the firmware is fork>=18 or
 // upstream>=21.
-constexpr uint8_t kProtocolMinor = 18;
+constexpr uint8_t kProtocolMinor = 19;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 // From CMake (DS5_BRIDGE_VERSION_* in CMakeLists.txt) -- deliberately no #ifdef fallback, so
 // a build that loses the defines fails to compile instead of reporting a stale version.
@@ -43,6 +43,9 @@ constexpr uint8_t kFirmwareMinor = DS5_BRIDGE_VERSION_MINOR;
 constexpr uint8_t kFirmwarePatch = DS5_BRIDGE_VERSION_PATCH;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
+// Minor 19 (fork) appends byte 17 to SetAudioReactiveHaptics: 1 while an Audio Haptics
+// session is running. Older apps do not send it; they are read as "session == enabled".
+constexpr uint8_t kAudioHapticsSessionProtocolMinor = 19;
 constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kSquareButtonBit = 0x10;
 constexpr uint8_t kCrossButtonBit = 0x20;
@@ -822,6 +825,7 @@ void restore_defaults() {
     audio_set_quiet_mode(false);
     audio_set_duplex_requested(true);
     audio_set_reactive_haptics_config(
+        false,
         false,
         AudioReactiveHapticsMix,
         100,
@@ -2718,10 +2722,15 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             const bool suppress_classic_rumble = protocol_minor >= 9
                 ? (mode_control & kAudioReactiveHapticsSuppressClassicRumbleFlag) != 0
                 : enabled && mode == AudioReactiveHapticsReplace;
+            const bool session_active = protocol_minor >= kAudioHapticsSessionProtocolMinor
+                ? buffer[17] == 1
+                : enabled;
             if (
                 value > 1
+                || (protocol_minor >= kAudioHapticsSessionProtocolMinor && buffer[17] > 1)
                 || !audio_set_reactive_haptics_config(
                     enabled,
+                    session_active,
                     mode,
                     read_u16(buffer + 11),
                     buffer[13],

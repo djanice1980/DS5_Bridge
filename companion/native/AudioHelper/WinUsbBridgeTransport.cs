@@ -7,9 +7,14 @@ sealed class WinUsbBridgeTransport : IDisposable
     private const byte ControlGetReport = 0x31;
     private const byte ControlSetReport = 0x32;
     private const ushort BridgeInterfaceNumber = 0x0005;
-    // Companion-only (PID 0x0CE7) presents the bridge as the sole interface, number 0.
-    private const ushort CompanionOnlyInterfaceNumber = 0x0000;
+    // Companion-only (PID 0x0CE7) is a small composite since fw 1.6.76 -- placeholder HID
+    // (0), bridge (1), wake keyboard (2) -- so the bridge is interface 1 there and its path
+    // carries mi_01. Older firmware presented it as a lone interface 0 with no mi_ segment.
+    private const ushort CompanionOnlyInterfaceNumber = 0x0001;
+    private const ushort LegacyCompanionOnlyInterfaceNumber = 0x0000;
     private const string BridgeInterfaceMarker = "mi_05";
+    private const string CompanionOnlyInterfaceMarker = "mi_01";
+    private const string CompanionOnlyProductMarker = "pid_0ce7";
     private const int ReportBytes = 64;
     private const uint BridgeOutTransferTimeoutMs = 35;
     private static readonly Guid DeviceInterfaceGuid = new("E4C8B2A9-87F5-4C4C-9E52-2B4C1B8B4F62");
@@ -263,33 +268,46 @@ sealed class WinUsbBridgeTransport : IDisposable
         return false;
     }
 
-    // The interface GUID already says "this is our bridge"; the mi_05 marker only
-    // disambiguates WHICH interface of a COMPOSITE device to use. The companion-only bridge
-    // (PID 0x0CE7, no controller attached) has a single interface, so Windows creates no
-    // usbccgp children and its path carries no mi_ segment at all -- e.g.
+    // The interface GUID already says "this is our bridge"; the mi_ marker only
+    // disambiguates WHICH interface of a COMPOSITE device to use: mi_05 on the full device,
+    // mi_01 on the companion-only one (PID 0x0CE7, no controller attached). Firmware before
+    // 1.6.76 presented companion-only as a SINGLE interface, so Windows created no usbccgp
+    // children and its path carried no mi_ segment at all -- e.g.
     //   \\?\usb#vid_054c&pid_0ce7#7&dd2a026&0&3#{e4c8b2a9-...}
-    // Requiring mi_05 filtered that device out entirely, which is why the app could not see
-    // the bridge with no controller attached even though Windows had bound WinUSB to it.
+    // That shape is still accepted so an older bridge stays reachable. (Requiring mi_05 once
+    // filtered the idle device out entirely, which is why the app could not see the bridge
+    // with no controller attached even though Windows had bound WinUSB to it.)
     public static bool IsBridgeInterfacePath(string path)
     {
         if (path.Contains(BridgeInterfaceMarker, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
-        // Non-composite: no interface segment to choose between.
+        if (path.Contains(CompanionOnlyProductMarker, StringComparison.OrdinalIgnoreCase)
+            && path.Contains(CompanionOnlyInterfaceMarker, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        // Non-composite (pre-1.6.76 companion-only): no interface segment to choose between.
         return !path.Contains("&mi_", StringComparison.OrdinalIgnoreCase);
     }
 
-    // wIndex for the vendor control requests. The bridge interface is number 5 on the
-    // composite device and renumbered to 0 when companion-only. The firmware accepts 5 in
-    // both shapes, but WinUSB is the one being asked to address an interface, so send the
-    // number the device is actually presenting rather than relying on a stale index passing
-    // through untouched.
+    // wIndex for the vendor control requests. The bridge interface is number 5 on the full
+    // device, 1 on the companion-only composite, and was 0 on the older single-interface
+    // companion-only shape. The firmware accepts 5 in every shape, but WinUSB is the one
+    // being asked to address an interface, so send the number the device is actually
+    // presenting rather than relying on a stale index passing through untouched.
     private static ushort BridgeInterfaceIndexFor(string path)
     {
-        return path.Contains(BridgeInterfaceMarker, StringComparison.OrdinalIgnoreCase)
-            ? BridgeInterfaceNumber
-            : CompanionOnlyInterfaceNumber;
+        if (path.Contains(BridgeInterfaceMarker, StringComparison.OrdinalIgnoreCase))
+        {
+            return BridgeInterfaceNumber;
+        }
+        if (path.Contains("&mi_", StringComparison.OrdinalIgnoreCase))
+        {
+            return CompanionOnlyInterfaceNumber;
+        }
+        return LegacyCompanionOnlyInterfaceNumber;
     }
 }
 

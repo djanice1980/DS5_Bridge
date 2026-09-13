@@ -305,8 +305,39 @@ void assert_ds4_persona_identity_is_ds4_facing(std::string const &source) {
         throw std::runtime_error("DS4 persona must expose the DS4-facing Wireless Controller product string");
     }
 
-    if (source.find("#define DS4_HID_EP_INTERVAL 0x04") == std::string::npos) {
-        throw std::runtime_error("DS4 persona must preserve the DS4-like HID endpoint interval");
+    // Every HID persona follows the selected polling interval; the DS4 persona no longer pins
+    // its own 4 ms value (upstream d1fecc7).
+    if (
+        source.find("#define DS4_HID_EP_INTERVAL") != std::string::npos
+        || source.find("const uint8_t gamepad_hid_interval = usb_hid_polling_interval_ms_value;") == std::string::npos
+    ) {
+        throw std::runtime_error("DualSense, DualSense Edge, and DS4 HID endpoints must all use the selected polling interval");
+    }
+
+    // The cached XUSB configuration must be re-patched to the selected interval before it is
+    // served, IN endpoint only.
+    const std::string xusb_runtime_configuration = extract_between(
+        source,
+        "static void apply_xusb_runtime_configuration(uint8_t *configuration, uint16_t len) {",
+        "\n}\n\nstatic bool find_gamepad_descriptor_block"
+    );
+    if (
+        xusb_runtime_configuration.find("const uint8_t input_interval = usb_hid_polling_interval_ms_value;") == std::string::npos
+        || xusb_runtime_configuration.find("configuration[offset + 2] == XUSB360_EP_IN") == std::string::npos
+        || xusb_runtime_configuration.find("configuration[offset + 6] = input_interval;") == std::string::npos
+        || xusb_runtime_configuration.find("configuration[offset + 2] == XUSB360_EP_OUT") != std::string::npos
+    ) {
+        throw std::runtime_error("Xbox 360 IN must use the selected polling interval without changing its OUT endpoint interval");
+    }
+    const std::string configuration_callback = extract_between(
+        source,
+        "uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {",
+        "\n}\n\n#ifdef ENABLE_COMPANION"
+    );
+    const auto xusb_refresh = configuration_callback.find("apply_xusb_runtime_configuration(");
+    const auto xusb_return = configuration_callback.find("return descriptor_configuration_xusb;");
+    if (xusb_refresh == std::string::npos || xusb_return == std::string::npos || xusb_refresh > xusb_return) {
+        throw std::runtime_error("Xbox 360 must refresh its cached IN endpoint interval before every enumeration");
     }
 
     if (source.find("TU_VERIFY_STATIC(sizeof(desc_hid_report_ds4) == DS4_HID_REPORT_DESC_LEN") == std::string::npos) {

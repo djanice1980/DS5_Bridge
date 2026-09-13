@@ -7,12 +7,19 @@
 #define HOST_BRIDGE_INTERFACE_NUMBER 0x05
 #define HOST_BRIDGE_EP_OUT 0x07
 
-// Companion-only ("idle") enumeration: with no controller attached the bridge presents just
-// this vendor interface -- no gamepad, no audio -- so the app can always reach it while the
-// host never sees a phantom controller. The interface is renumbered to 0 because a
-// configuration must number its interfaces from zero, and the MS OS 2.0 descriptor keys
-// WinUSB binding to that number.
-#define HOST_BRIDGE_IDLE_INTERFACE_NUMBER 0x00
+// Companion-only ("idle") enumeration: with no controller attached the bridge presents no
+// gamepad and no audio, so the app can always reach it while the host never sees a phantom
+// controller. The idle configuration is a small composite: an inert placeholder HID at
+// interface 0 (keeps TinyUSB HID instance 0 in the gamepad slot), this vendor interface at 1,
+// and the bridge keyboard at 2 -- the keyboard is the WAKE ANCHOR. Windows arms remote wake
+// for boot keyboards by default, so a controller connecting to a sleeping PC can resume it
+// without the user touching any power setting; a lone WinUSB interface never gets armed.
+// The MS OS 2.0 descriptor keys WinUSB binding to this interface number.
+#define HOST_BRIDGE_IDLE_INTERFACE_NUMBER 0x01
+// Distinct revision for the idle device: it changed from a single WinUSB interface to a
+// composite, and Windows keys its driver match on VID/PID/REV. Same PID would have served the
+// stale single-interface node (docs/windows-device-cleanup.md).
+#define HOST_BRIDGE_IDLE_USB_BCD_DEVICE 0x0157
 
 // A distinct product id, deliberately: the same VID/PID presenting two different interface
 // layouts is the descriptor-caching hazard that docs/windows-device-cleanup.md exists to

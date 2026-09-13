@@ -41,6 +41,7 @@ Items 10+ were added 2026-08-07 and are the substance of this revision.
 | 18 | **Protocol convergence: fork moved to 0x60–0x6F, adopted your 0x36/0x37** — proposal to reserve the range | Both | ✅ High (discussion) |
 | 19 | **HID feature-report cache serves a stale controller until manual refresh** | Companion | ⚠️ High (discussion) |
 | 20 | **Windows drops every output report Steam sends** — SET_REPORT control requests are ignored by the DualSense persona | Firmware | ✅ **High** |
+| 21 | **Wake from a sleeping PC with the controller off** — your wake receiver, adapted to the fork's idle device (see the 1.7.1 backports table) | Firmware | taken FROM you |
 | 9 | Linux audio-haptics, libusb transport, uinput, WirePlumber, packaging, KDE icon | Linux plumbing | ❌ |
 | 10 | **Never bump `PROTOCOL_MINOR` for an additive command id** — it is compared exactly, so every older firmware reads as "bridge not detected" | Both | ✅ **High** |
 | 11 | **A disconnect that never completes wedges the connection phase** until power-cycle | Firmware | ✅ **High** |
@@ -867,6 +868,23 @@ Adopted into the fork, so you know which of your inventions are now shared code:
 
 Deliberately NOT taken, with reasons: 0x39 audio carriers/batching (solves BT airtime contention we have not observed; will revisit on evidence of audio dropouts), ExactAudioQueue (sound, but nothing here is starved for the 5 KiB), key-journal-era `finish_hid_session_if_ready` gate (redundant once persistence failures disconnect, which our port does).
 
+## Backports taken from your v1.7.1 (at our 1.6.76)
+
+| Yours | Status in the fork |
+|---|---|
+| Defer remote wake to the USB poll (614968e) | Taken: the BT callback publishes `usb_remote_wakeup_pending`, `usb_pm_poll` issues it |
+| Retain the controller persona for wake (21b714b) / keep the companion wake receiver online (7a7eaa8) | Taken in spirit, not in code. The fork already had a companion-only idle device (PID `0x0CE7`); it now declares remote wakeup and is a small composite -- placeholder HID (0), bridge (1), bridge keyboard (2) -- with the keyboard as the wake anchor Windows arms by default, exactly your bridge-only topology. Kept our PID rather than your `1209:DB08`; revision bumped to `0x0157`. After a wake the idle->full re-enumeration is held until the host resumes (3 s cap) |
+| Restore audio haptics after game rumble (4e57396) | Taken: `SetAudioReactiveHaptics` byte 17 = "session active" at protocol **1.19** (our numbering; yours is 1.23), `controller_output_policy_normalize_classic_rumble_stop_payload` in `bt_write_classified_output` |
+| Honor polling interval across personas (d1fecc7) | Taken: DS4 no longer pins 4 ms; the cached XUSB configuration's IN interval is re-patched per enumeration |
+| Refresh DualSense Edge polling interval (74f7ff4) | Not needed: our Edge persona serves the base configuration through the same runtime patch on every call |
+| Clarify bridge status and speed persona swaps (da4d063) | Taken: default-render check is cached (5 s) and bounded (200 ms), the haptics helper stop is no longer awaited on a persona switch, Overview reads "Bridge online" / "Wake with controller enabled" when no controller is attached |
+| Stop repeated HID discovery polling (b48afab) | Taken: the disconnected scan runs once; explicit refresh and real transport loss force another |
+| Recover stale bridge selection (ece0c5e) | **Not taken.** Our selection is keyed on the board id and re-caches the path when it changes shape, which covers the stale-path symptom. Auto-adopting a lone replacement bridge would steal the pin every time the pinned board is unplugged for a moment -- see the test "leaves the preference alone when the pinned bridge is absent" |
+| Prevent rejected pairing key rollback (0bfbb26) | Already present (came with the key-journal deltas at 1.6.72) |
+| Correct persona microphone handling (8983c9b) | **Deferred.** It is your answer to the same stereo-mic breakage we hit at 1.6.72 (per-persona mic channel count, Edge stereo, base mono). Worth taking, but it changes the audio class allocation and needs an Edge in hand to verify |
+
+Also fixed while there, ours: SET_REPORT control-request output reports were dropped (item 20).
+
 ---
 
-*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72; section 20 added at 1.6.120 / 1.6.75.*
+*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72; section 20 added at 1.6.120 / 1.6.75; 1.7.1 backports at 1.6.121 / 1.6.76.*
