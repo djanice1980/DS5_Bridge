@@ -1,4 +1,4 @@
-// Diagnostic only -- no behaviour change.
+// Panic and C++ abort paths: stamp a breadcrumb, then reset immediately.
 //
 // A confirmed watchdog hang localises to tud_hid_report(), which cannot block: it claims an
 // endpoint, memcpy's, and queues a transfer. But its call chain reaches
@@ -22,7 +22,26 @@
 
 #include <cstdint>
 
+#include "hardware/watchdog.h"
 #include "pico.h"
+
+namespace {
+
+// Reset NOW through the watchdog rather than spinning until it fires. A zero-delay
+// watchdog_enable triggers the same immediate reset as a zero-delay reboot but also
+// writes the SDK's scratch[4] magic, so the next boot decodes the retained breadcrumb
+// as an abnormal reset (telemetry never touches scratch[4], so the breadcrumb itself
+// survives). Spinning was fatal before watchdog_enable() had armed -- a panic during
+// early boot or core 1 codec setup left the bridge dead until it was unplugged.
+// (Ported from upstream 2.0, 70dc3d6.)
+[[noreturn]] void reset_after_stamp() {
+    watchdog_enable(0, false);
+    while (true) {
+        tight_loop_contents();
+    }
+}
+
+} // namespace
 
 extern "C" {
 
@@ -44,12 +63,49 @@ void __attribute__((noreturn)) __wrap_panic(const char *fmt, ...) {
     );
 
     // Deliberately NOT forwarding to __real_panic: it calls puts(), which takes the stdout
-    // mutex and can itself deadlock when panicking from an ISR. Spin instead and let the
-    // watchdog reset us -- the same visible outcome as today, minus the extra failure mode.
+    // mutex and can itself deadlock when panicking from an ISR.
     (void)fmt;
-    while (true) {
-        tight_loop_contents();
-    }
+    reset_after_stamp();
 }
 
 } // extern "C"
+
+// Exceptions are disabled in the firmware, so an allocation or container contract
+// failure cannot be recovered from. Defining these locally resets through the same
+// stamped path and keeps libstdc++'s exception construction, demangling and verbose
+// termination machinery out of the link. (Ported from upstream 2.0, 70dc3d6.)
+namespace std {
+
+[[noreturn]] void __throw_bad_alloc() {
+    watchdog_telemetry_note_fault(
+        WatchdogMainLoopPhase::Panic,
+        reinterpret_cast<uint32_t>(__builtin_return_address(0)),
+        0, 0, 0);
+    reset_after_stamp();
+}
+
+[[noreturn]] void __throw_bad_array_new_length() {
+    watchdog_telemetry_note_fault(
+        WatchdogMainLoopPhase::Panic,
+        reinterpret_cast<uint32_t>(__builtin_return_address(0)),
+        0, 0, 0);
+    reset_after_stamp();
+}
+
+[[noreturn]] void __throw_length_error(char const *) {
+    watchdog_telemetry_note_fault(
+        WatchdogMainLoopPhase::Panic,
+        reinterpret_cast<uint32_t>(__builtin_return_address(0)),
+        0, 0, 0);
+    reset_after_stamp();
+}
+
+[[noreturn]] void __throw_out_of_range_fmt(char const *, ...) {
+    watchdog_telemetry_note_fault(
+        WatchdogMainLoopPhase::Panic,
+        reinterpret_cast<uint32_t>(__builtin_return_address(0)),
+        0, 0, 0);
+    reset_after_stamp();
+}
+
+} // namespace std

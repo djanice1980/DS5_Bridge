@@ -1,4 +1,4 @@
-// Diagnostic only -- no behaviour change.
+// Fault vectors: stamp a breadcrumb, then reset immediately.
 //
 // State of the investigation: a confirmed, reproducible watchdog reset localises to
 // tud_hid_report(), which does not return (interrupt/tail is never stamped). The panic()
@@ -23,6 +23,7 @@
 
 #include "watchdog_telemetry.h"
 
+#include "hardware/watchdog.h"
 #include "pico.h"
 
 #include <cstdint>
@@ -63,6 +64,12 @@ inline uint32_t read_reg(uintptr_t addr) {
     // frame[0] is R0 -- the first argument to the faulting function.
     const uint32_t arg0 = frame != nullptr ? frame[0] : 0;
     watchdog_telemetry_note_fault(phase, pc, status, fault_address, arg0);
+    // Reset immediately instead of spinning until the watchdog fires: before
+    // watchdog_enable() has armed, a fault would otherwise lock the core until the
+    // bridge is unplugged, and after it the bridge sits dead for the full timeout.
+    // The zero-delay watchdog_enable also writes the SDK's scratch[4] magic, so the
+    // next boot decodes the breadcrumb just stamped as an abnormal reset.
+    watchdog_enable(0, false);
     while (true) {
         tight_loop_contents();
     }

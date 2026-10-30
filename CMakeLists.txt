@@ -131,7 +131,18 @@ target_compile_definitions(ds5-bridge PRIVATE
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
+        # Core 0 previously ran on the SDK's unguarded 2 KiB scratch stack and could
+        # silently grow across both scratch banks toward whatever sat below. Give it the
+        # final 7 KiB of the contiguous scratch banks with the ARMv8-M MSPLIM guard, so
+        # an overflow faults (and resets through fault_hooks) instead of corrupting
+        # memory. Core 1 keeps its dedicated guarded audio stack in main RAM. The
+        # matching region layout lives in cmake/linker/memmap_ds5_core0_stack.ld.
+        # (Ported from upstream 2.0, 70dc3d6.)
+        PICO_STACK_SIZE=7168
+        PICO_CORE1_STACK_SIZE=0
+        PICO_USE_STACK_GUARDS=1
 )
+pico_set_linker_script(ds5-bridge ${CMAKE_CURRENT_SOURCE_DIR}/cmake/linker/memmap_ds5_core0_stack.ld)
 # Kitsune Input intentionally enumerates as a stock DualSense only. Never turn
 # this on: DualSense Edge USB identity/descriptors are not a supported persona.
 option(ENABLE_DSE "Unsupported: do not enable DualSense Edge USB enumeration" OFF)
