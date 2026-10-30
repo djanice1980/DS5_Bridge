@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { triggerEffectFromLegacyPercents } from '../shared/trigger-effect-migration';
 import { TRIGGER_EFFECT_TYPES, type TriggerEffect } from '../shared/trigger-effects';
 import { TriggerEffectEditor } from './TriggerEffectEditor';
+import { BootloaderConfirmationDialog } from './BootloaderConfirmationDialog';
 import {
   type TablerIcon,
   IconAdjustmentsSpark,
@@ -9723,6 +9724,11 @@ export function App() {
         </div>
       </section>
       </main>
+
+      <BootloaderConfirmationDialog
+        confirmation={snapshot?.bootloaderConfirmation}
+        onCancel={() => void window.bridge.cancelBootloaderConfirmation()}
+      />
 
       {startupTutorialStep !== 'done' && (
         <StartupTutorial

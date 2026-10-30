@@ -27,6 +27,8 @@
 // re-recognize individual bridges regardless of USB port. Same report id
 // upstream uses for its device-identity concept.
 #define COMPANION_REPORT_DEVICE_IDENTITY 0x0D
+// Authenticated bootloader entry status (id and wire format shared with upstream 2.0).
+#define COMPANION_REPORT_BOOTLOADER_AUTHORIZATION 0x12
 // Fork-lineage marker. 0x60+ is the Linux fork's reserved id space (reports AND commands);
 // upstream firmware answers this GET with nothing, which is exactly how the app tells the two
 // lineages apart -- shared STATUS bytes could be claimed by upstream at any release, but an

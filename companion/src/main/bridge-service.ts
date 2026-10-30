@@ -13,6 +13,8 @@ import {
   type DualSenseOutputUpdate
 } from '../shared/dualsense-output-report';
 import { defaultTriggerEffect, encodeTriggerEffect } from '../shared/trigger-effects';
+import type { BootloaderAuthorizationStorePort } from './bootloader-authorization-store';
+import { PicoBootloaderAuthorizationCoordinator } from './pico-bootloader-authorization-coordinator';
 import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -93,6 +95,7 @@ import type {
 import type {
   BridgeDiagnostics,
   BridgeSnapshot,
+  BootloaderConfirmationPresentation,
   CompanionSettings,
   ControllerHistoryEntry,
   AudioHapticsOutputDevice,
@@ -149,7 +152,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.76';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.77';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -1283,6 +1286,7 @@ export class BridgeService extends EventEmitter {
   // LNXF magic, upstream firmware answers nothing. Fork-only commands (0x60+) and the shared
   // radial-deadzone id are gated on this -- see forkCommandsAvailable / radialDeadzoneAvailable.
   private forkInfo: ForkInfo | null = null;
+  private bootloaderConfirmationCancelled = false;
   // Audio & haptics target: null = the active bridge (default); a direct controller's path
   // aims Test Speaker, Test Haptics, the Audio Haptics mirror and use-as-system-output at
   // that controller's own sink instead. Session state, same reasoning as the tester source.
@@ -1388,7 +1392,10 @@ export class BridgeService extends EventEmitter {
     [SHORTCUT_EVENT.MIC_MUTE_OFF]: () => this.applyControllerMicMuteEvent(false)
   };
 
-  constructor(private readonly settingsStore: SettingsStore) {
+  constructor(
+    private readonly settingsStore: SettingsStore,
+    private readonly bootloaderAuthorizationStore?: BootloaderAuthorizationStorePort
+  ) {
     super();
     this.snapshot = {
       state: 'no-bridge',
@@ -1397,7 +1404,8 @@ export class BridgeService extends EventEmitter {
       settings: this.settingsStore.get(),
       diagnostics: this.withAudioDebugDiagnostics(emptyDiagnostics([])),
       personaTransition: null,
-      bridgeDevices: null
+      bridgeDevices: null,
+      bootloaderConfirmation: null
     };
     this.systemAudioHapticsEngine.on('error', (error: Error) => {
       this.appendAudioDebugLines([`[SystemHaptics] error: ${error.message}`]);
@@ -3061,10 +3069,51 @@ export class BridgeService extends EventEmitter {
         FIRMWARE_FLASH_DEFAULT_RENDER_RESTORE_EXTRA_MS
       );
     }
-    await this.sendCommand(COMMAND_ID.ENTER_BOOTLOADER, 0, {
-      allowAckTransportLoss: true,
-      allowProtocolMismatch: true
+    // UF2 mode on firmware fork>=20 / upstream>=24 needs this computer's enrolled key and
+    // a face-button sequence entered on the controller; see the coordinator for the flow.
+    // Older firmware still gets the plain command so it can be updated.
+    this.bootloaderConfirmationCancelled = false;
+    const readFeatureReport = async (reportId: number, length: number): Promise<number[]> => {
+      await this.ensureCompanionDevice({ allowProtocolMismatch: true });
+      if (!this.device) {
+        throw new Error('No companion bridge is connected.');
+      }
+      return this.device.getFeatureReport(reportId, length);
+    };
+    const coordinator = new PicoBootloaderAuthorizationCoordinator({
+      store: this.bootloaderAuthorizationStore,
+      // Every firmware answers the ACK report, so its header gives the
+      // protocol even when the status report is incompatible.
+      firmwareProtocolVersion: async () => readReportProtocolVersion(
+        await readFeatureReport(REPORT_ID.ACK, REPORT_LENGTH),
+        REPORT_ID.ACK
+      ),
+      firmwareIsFork: async () => this.forkInfo !== null,
+      readFeatureReport: (reportId, length) => readFeatureReport(reportId, length),
+      sendCommand: (commandId, value, options = {}) => this.sendCommand(commandId, value, {
+        ...options,
+        allowProtocolMismatch: true
+      }),
+      showConfirmation: (presentation) => {
+        this.snapshot.bootloaderConfirmation = presentation;
+        this.emitSnapshot();
+      },
+      hideConfirmation: () => {
+        this.snapshot.bootloaderConfirmation = null;
+        this.emitSnapshot();
+      },
+      confirmationCancelled: () => this.bootloaderConfirmationCancelled,
+      delay: (milliseconds) => new Promise<void>((resolve) => {
+        setTimeout(resolve, milliseconds);
+      }),
+      now: () => Date.now()
     });
+    await coordinator.enter();
+  }
+
+  cancelBootloaderConfirmation(): BridgeSnapshot {
+    this.bootloaderConfirmationCancelled = true;
+    return this.getSnapshot();
   }
 
   async setNotifyControllerConnection(enabled: boolean): Promise<BridgeSnapshot> {

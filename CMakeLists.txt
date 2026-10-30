@@ -156,10 +156,15 @@ if(ENABLE_COMPANION)
             src/companion.cpp
             src/host_bridge.cpp
             src/usb_app_drivers.cpp
+            src/bootloader_maintenance.cpp
+            src/bootloader_authorization_flash.cpp
     )
     target_compile_definitions(ds5-bridge PRIVATE
             ENABLE_COMPANION
     )
+    # Bootloader authorization: HMAC-SHA256 on the RP2350 SHA block, hardware RNG for
+    # challenges/sequences, and a flash-backed enrollment record.
+    target_link_libraries(ds5-bridge pico_sha256 pico_rand pico_flash hardware_flash)
 endif()
 
 # Diagnostics live in one place. Quick presets:
@@ -249,7 +254,7 @@ pico_set_program_name(ds5-bridge "ds5-bridge")
 # tools/check-firmware-version-sync.mjs parses these set() lines and fails CI on drift.
 set(DS5_BRIDGE_VERSION_MAJOR 1)
 set(DS5_BRIDGE_VERSION_MINOR 6)
-set(DS5_BRIDGE_VERSION_PATCH 76)
+set(DS5_BRIDGE_VERSION_PATCH 77)
 set(DS5_BRIDGE_VERSION "${DS5_BRIDGE_VERSION_MAJOR}.${DS5_BRIDGE_VERSION_MINOR}.${DS5_BRIDGE_VERSION_PATCH}")
 pico_set_program_version(ds5-bridge "${DS5_BRIDGE_VERSION}")
 target_compile_definitions(ds5-bridge PRIVATE

@@ -1,5 +1,6 @@
 import { decodeDualSenseInputReport, type ControllerInputSnapshot } from './dualsense-input';
 import { encodeTriggerEffect, TRIGGER_EFFECT_SIZE, type TriggerEffect } from './trigger-effects';
+import type { BootloaderConfirmationFaceButton } from './types';
 
 export const COMPANION_USAGE_PAGE = 0xff5d;
 export const COMPANION_USAGE = 0x0001;
@@ -9,7 +10,14 @@ export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
 // 18 = the convergence release: shared command ids match upstream (radial deadzones on 0x37)
 // and fork-only commands live at 0x60+. See COMMAND_ID and the fork-info report.
-export const PROTOCOL_MINOR = 19;
+// 20 = authenticated bootloader entry, wire-identical to upstream 24 (commands 0x33/0x50-0x55,
+// status report 0x12), so either lineage's app can secure either firmware's UF2 entry.
+export const PROTOCOL_MINOR = 20;
+// Firmware from these minors authenticates bootloader entry; older firmware still takes the
+// plain ENTER_BOOTLOADER command so it can be updated. The threshold is per lineage: the fork
+// adopted the feature at 20, upstream shipped it at 24 (upstream 21-23 do not have it).
+export const BOOTLOADER_AUTHORIZATION_PROTOCOL_MINOR = 20;
+export const BOOTLOADER_AUTHORIZATION_UPSTREAM_MINOR = 24;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -27,6 +35,8 @@ export const REPORT_ID = {
   // window costs nothing.
   CONTROLLER_INPUT: 0x0b,
   CALIBRATION_STATUS: 0x0c,
+  // Authenticated bootloader entry status. Id and wire format shared with upstream.
+  BOOTLOADER_AUTHORIZATION: 0x12,
   // Fork lineage marker (0x60+, the fork-reserved id space). Upstream firmware answers this
   // GET with nothing; fork firmware answers "LNXF" + fork revision + protocol minor. The magic
   // is the guard: a reply without all four bytes is NOT fork firmware, whatever else it says.
@@ -143,6 +153,15 @@ export const COMMAND_ID = {
   // used this id for the input-forwarding hold, so sending blind is exactly the misfire this
   // convergence exists to end.
   SET_RADIAL_DEADZONES: 0x37,
+  // Authenticated bootloader entry (ids shared with upstream 2.0). ENTER_BOOTLOADER (0x33)
+  // on firmware fork>=20 / upstream>=24 requires the challenge/HMAC payload these set up;
+  // see pico-bootloader-authorization-coordinator.ts for the flow.
+  BOOTLOADER_AUTH_ENROLL_BEGIN: 0x50,
+  BOOTLOADER_AUTH_ENROLL_COMMIT: 0x51,
+  BOOTLOADER_AUTH_CHALLENGE: 0x52,
+  BOOTLOADER_AUTH_REVOKE: 0x53,
+  BOOTLOADER_AUTH_CONFIRMATION_CANCEL: 0x54,
+  BOOTLOADER_AUTH_PHYSICAL_BEGIN: 0x55,
   // ---- Fork-reserved command range: 0x60-0x6F. Never below. Upstream is asked not to
   // allocate here (docs/upstream-backport-notes.md). Requires fork firmware >= 18. ----
   // App-composed trigger effect bytes. The percent-based PREVIEW/APPLY commands quantize to
@@ -170,7 +189,9 @@ export const ACK_RESULT = {
   // A forget refused because its durable blacklist write did not verify, so no key was
   // deleted. Reported rather than swallowed: the user must not be told a controller was
   // cleared when it was not.
-  ERR_PERSISTENCE_FAILED: 0x08
+  ERR_PERSISTENCE_FAILED: 0x08,
+  // Bootloader maintenance refused: missing/expired grant, challenge or HMAC.
+  ERR_UNAUTHORIZED: 0x09
 } as const;
 
 export type AckResultCode = typeof ACK_RESULT[keyof typeof ACK_RESULT];
@@ -1450,6 +1471,77 @@ export function buildRawTriggerEffectReport(
     payload,
     options
   );
+}
+
+const BOOTLOADER_CONFIRMATION_FACE_BUTTONS = [
+  'triangle',
+  'circle',
+  'cross',
+  'square'
+] as const satisfies readonly BootloaderConfirmationFaceButton[];
+
+export interface BootloaderAuthorizationPayload {
+  schemaVersion: number;
+  authorized: boolean;
+  enrollmentPending: boolean;
+  enrollmentPhysicallyConfirmed: boolean;
+  challengeActive: boolean;
+  rateLimited: boolean;
+  bootloaderEntryConfirmationPending: boolean;
+  bootloaderEntryPhysicallyConfirmed: boolean;
+  keyId: number[];
+  challengeId: number;
+  nonce: number[];
+  challengeRemainingMs: number;
+  confirmationSequence: BootloaderConfirmationFaceButton[];
+  confirmationProgress: number;
+  confirmationMistakes: number;
+  confirmationRemainingMs: number;
+  protocolVersion: string;
+}
+
+// Upstream 2.0's bootloader authorization report, byte-identical in both lineages.
+// Version gate: the feature exists from fork minor 20, and this report is only read
+// after the coordinator has established support, so newer minors (the fork's future,
+// or upstream's 24+) parse additively like every other report here.
+export function parseBootloaderAuthorizationReport(
+  report: ArrayLike<number>
+): BootloaderAuthorizationPayload {
+  assertReport(report, REPORT_ID.BOOTLOADER_AUTHORIZATION);
+  if (report[5] !== PROTOCOL_MAJOR || report[6] < BOOTLOADER_AUTHORIZATION_PROTOCOL_MINOR) {
+    throw new ProtocolError(
+      `Firmware update required. Expected bootloader authorization protocol ${PROTOCOL_MAJOR}.${BOOTLOADER_AUTHORIZATION_PROTOCOL_MINOR}+, received ${report[5]}.${report[6]}.`,
+      'bad-version'
+    );
+  }
+  const flags = report[8];
+  const confirmationSequence = Array.from({ length: 8 }, (_, index) => {
+    const value = report[37 + index];
+    const button = BOOTLOADER_CONFIRMATION_FACE_BUTTONS[value];
+    if (!button) {
+      throw new ProtocolError(`Invalid bootloader confirmation face button ${value}.`, 'bad-confirmation-sequence');
+    }
+    return button;
+  });
+  return {
+    schemaVersion: report[7],
+    authorized: (flags & 0x01) !== 0,
+    enrollmentPending: (flags & 0x02) !== 0,
+    enrollmentPhysicallyConfirmed: (flags & 0x04) !== 0,
+    challengeActive: (flags & 0x08) !== 0,
+    rateLimited: (flags & 0x10) !== 0,
+    bootloaderEntryConfirmationPending: (flags & 0x20) !== 0,
+    bootloaderEntryPhysicallyConfirmed: (flags & 0x40) !== 0,
+    keyId: Array.from({ length: 4 }, (_, index) => report[9 + index]),
+    challengeId: readU32(report, 13),
+    nonce: Array.from({ length: 16 }, (_, index) => report[17 + index]),
+    challengeRemainingMs: readU32(report, 33),
+    confirmationSequence,
+    confirmationProgress: Math.min(report[45], confirmationSequence.length),
+    confirmationMistakes: report[46],
+    confirmationRemainingMs: readU32(report, 49),
+    protocolVersion: `${report[5]}.${report[6]}`
+  };
 }
 
 export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIdentityPayload {

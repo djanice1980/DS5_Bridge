@@ -42,3 +42,10 @@ endif()
 enable_testing()
 add_test(NAME firmware_logic_tests COMMAND firmware_logic_tests)
 add_test(NAME usb_descriptor_migration_test COMMAND usb_descriptor_migration_test)
+
+add_executable(bootloader_maintenance_test
+    bootloader_maintenance_test.cpp
+    ../../src/bootloader_maintenance.cpp
+)
+target_include_directories(bootloader_maintenance_test PRIVATE ../../src)
+add_test(NAME bootloader_maintenance_test COMMAND bootloader_maintenance_test)

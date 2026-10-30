@@ -7,6 +7,9 @@
 #include <cstring>
 
 #include "audio.h"
+#include "bootloader_authorization_flash.h"
+#include "bootloader_confirmation.h"
+#include "bootloader_maintenance.h"
 #include "bt.h"
 #include "watchdog_telemetry.h"
 
@@ -20,6 +23,8 @@
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
 #include "pico/bootrom.h"
+#include "pico/rand.h"
+#include "pico/sha256.h"
 #include "pico/unique_id.h"
 #include "pico/time.h"
 #include "usb.h"
@@ -34,7 +39,10 @@ constexpr uint8_t kProtocolMajor = 1;
 // 0x37; fork-only commands at 0x60+). An app must never send fork-only ids to firmware that
 // does not answer fork-info, and must not send 0x37 unless the firmware is fork>=18 or
 // upstream>=21.
-constexpr uint8_t kProtocolMinor = 19;
+// Minor 20 (fork) adopts upstream 24's authenticated bootloader entry verbatim: commands
+// 0x33/0x50-0x55 and status report 0x12 carry the same wire format on both lineages, so
+// either app can secure either firmware's UF2 entry.
+constexpr uint8_t kProtocolMinor = 20;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 // From CMake (DS5_BRIDGE_VERSION_* in CMakeLists.txt) -- deliberately no #ifdef fallback, so
 // a build that loses the defines fails to compile instead of reporting a stale version.
@@ -160,7 +168,8 @@ enum CommandId : uint8_t {
     CommandSetPlayerLedEnabled = 0x24,
     CommandSetClassicRumbleV1 = 0x25,
     CommandSetSpeakerGain = 0x32,
-    CommandEnterBootloader = 0x33,
+    // 0x33 and 0x50-0x55 are bootloader maintenance commands, handled by
+    // ds5::bootloader_maintenance before the main switch (ids shared with upstream).
     // Retired: the audio/controller interleave scheduler is gone (state always wins).
     // The id stays reserved so it is not reused, and so an older app sending it gets a
     // refusal instead of silently believing it configured something.
@@ -204,6 +213,9 @@ enum AckResult : uint8_t {
     // A forget refused because its durable blacklist write did not verify. Value matches
     // upstream so the protocols stay convergent.
     AckPersistenceFailed = 0x08,
+    // Bootloader maintenance refused for a missing/expired grant, challenge or HMAC.
+    // Value matches upstream.
+    AckUnauthorized = 0x09,
 };
 
 enum MuteButtonMode : uint8_t {
@@ -2145,6 +2157,205 @@ uint16_t build_feedback_trace(uint8_t *buffer, uint16_t reqlen) {
 }
 #endif
 
+// Bootloader authorization (upstream 2.0's port of Kitsune Input's authenticated
+// bootloader entry, taken verbatim at fork minor 20 / upstream minor 24). The companion
+// app enrolls a secret once; each BOOTSEL entry then needs an HMAC over a fresh
+// challenge plus a random face-button sequence entered on the controller. Without it,
+// any program on the PC could send ENTER_BOOTLOADER and flash its own UF2 onto a
+// device that also presents a USB keyboard.
+ds5::bootloader_authorization::State bootloader_auth_state;
+ds5::bootloader_confirmation::State bootloader_confirmation_state;
+
+bool bootloader_port_controller_connected() {
+    return bt_is_controller_connected();
+}
+
+uint64_t bootloader_port_now_ms() {
+    return time_us_64() / 1000u;
+}
+
+bool bootloader_port_random_bytes(uint8_t *output, uint16_t size) {
+    if (output == nullptr) {
+        return false;
+    }
+    uint16_t offset = 0;
+    while (offset < size) {
+        rng_128_t random{};
+        get_rand_128(&random);
+        const uint16_t count = std::min<uint16_t>(static_cast<uint16_t>(sizeof(random.r)), static_cast<uint16_t>(size - offset));
+        memcpy(output + offset, random.r, count);
+        offset = static_cast<uint16_t>(offset + count);
+    }
+    return true;
+}
+
+bool bootloader_sha256(
+    uint8_t const *first,
+    size_t first_size,
+    uint8_t const *second,
+    size_t second_size,
+    uint8_t output[32]
+) {
+    pico_sha256_state_t state{};
+    if (pico_sha256_start_blocking(&state, SHA256_BIG_ENDIAN, false) != PICO_OK) {
+        return false;
+    }
+    pico_sha256_update_blocking(&state, first, first_size);
+    if (second_size > 0) {
+        pico_sha256_update_blocking(&state, second, second_size);
+    }
+    sha256_result_t result{};
+    pico_sha256_finish(&state, &result);
+    memcpy(output, result.bytes, sizeof(result.bytes));
+    return true;
+}
+
+bool bootloader_port_hmac_sha256(
+    uint8_t const key[ds5::bootloader_authorization::kSecretSize],
+    uint8_t const *message,
+    uint16_t message_size,
+    uint8_t output[ds5::bootloader_authorization::kTagSize]
+) {
+    if (key == nullptr || message == nullptr || output == nullptr) {
+        return false;
+    }
+    uint8_t inner_pad[64]{};
+    uint8_t outer_pad[64]{};
+    for (uint8_t index = 0; index < sizeof(inner_pad); ++index) {
+        const uint8_t key_byte = index < ds5::bootloader_authorization::kSecretSize ? key[index] : 0;
+        inner_pad[index] = static_cast<uint8_t>(key_byte ^ 0x36u);
+        outer_pad[index] = static_cast<uint8_t>(key_byte ^ 0x5cu);
+    }
+    uint8_t inner_hash[32]{};
+    return bootloader_sha256(inner_pad, sizeof(inner_pad), message, message_size, inner_hash)
+        && bootloader_sha256(outer_pad, sizeof(outer_pad), inner_hash, sizeof(inner_hash), output);
+}
+
+bool bootloader_port_read_unique_id(uint8_t output[8]) {
+    pico_unique_board_id_t board_id{};
+    pico_get_unique_board_id(&board_id);
+    memcpy(output, board_id.id, sizeof(board_id.id));
+    return true;
+}
+
+ds5::bootloader_maintenance::Context bootloader_maintenance_context() {
+    return {
+        .state = &bootloader_auth_state,
+        .ports = {
+            .controller_connected = bootloader_port_controller_connected,
+            .now_ms = bootloader_port_now_ms,
+            .random_bytes = bootloader_port_random_bytes,
+            .hmac_sha256 = bootloader_port_hmac_sha256,
+            .read_unique_id = bootloader_port_read_unique_id,
+            .load_record = bootloader_authorization_flash_load,
+            .store_record = bootloader_authorization_flash_store,
+            .erase_record = bootloader_authorization_flash_erase,
+        },
+    };
+}
+
+uint16_t build_bootloader_authorization(uint8_t *buffer, uint16_t reqlen) {
+    using ds5::bootloader_authorization::PhysicalConfirmationPurpose;
+    using ds5::bootloader_authorization::before_deadline;
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    const auto &state = bootloader_auth_state;
+    const uint64_t now = bootloader_port_now_ms();
+    const bool challenge_active = state.challenge_active && before_deadline(now, state.challenge_expires_at_ms);
+    const bool enrollment_pending = state.enrollment_pending
+        && state.physical_confirmation_purpose == PhysicalConfirmationPurpose::Enrollment
+        && before_deadline(now, state.physical_confirmation_expires_at_ms);
+    const bool entry_confirmation = state.physical_confirmation_purpose == PhysicalConfirmationPurpose::BootloaderEntry
+        && before_deadline(now, state.physical_confirmation_expires_at_ms);
+    const bool confirmation_visible = enrollment_pending || entry_confirmation;
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+    buffer[6] = ds5::bootloader_authorization::kReportSchemaVersion;
+    buffer[7] = static_cast<uint8_t>(
+        (state.authorized ? 0x01 : 0)
+        | (enrollment_pending ? 0x02 : 0)
+        | (enrollment_pending && state.physical_confirmation_confirmed ? 0x04 : 0)
+        | (challenge_active ? 0x08 : 0)
+        | (before_deadline(now, state.cooldown_expires_at_ms) ? 0x10 : 0)
+        | (entry_confirmation && !state.physical_confirmation_confirmed ? 0x20 : 0)
+        | (entry_confirmation && state.physical_confirmation_confirmed ? 0x40 : 0)
+    );
+    if (state.authorized) {
+        memcpy(buffer + 8, state.active.key_id, sizeof(state.active.key_id));
+    }
+    if (challenge_active) {
+        write_u32(buffer + 12, state.challenge_id);
+        memcpy(buffer + 16, state.nonce, sizeof(state.nonce));
+        write_u32(buffer + 32, static_cast<uint32_t>(state.challenge_expires_at_ms - now));
+    }
+    if (confirmation_visible) {
+        memcpy(buffer + 36, state.physical_confirmation_sequence, sizeof(state.physical_confirmation_sequence));
+        buffer[44] = state.physical_confirmation_progress;
+        buffer[45] = state.physical_confirmation_mistakes;
+        write_u32(buffer + 48, static_cast<uint32_t>(state.physical_confirmation_expires_at_ms - now));
+    }
+    return COMPANION_PAYLOAD_SIZE;
+}
+
+// Rare path: a confirmation is open, or a press from one still has to be
+// released. Every face-button press is consumed so it never reaches a game.
+void process_bootloader_confirmation_buttons(uint8_t *report) {
+    using namespace ds5::bootloader_confirmation;
+    using ds5::bootloader_authorization::PhysicalConfirmationPurpose;
+    auto &auth = bootloader_auth_state;
+    const auto context = bootloader_maintenance_context();
+    const bool pending = ds5::bootloader_maintenance::physical_confirmation_pending(context);
+    if (!pending && auth.physical_confirmation_purpose != PhysicalConfirmationPurpose::None
+        && !auth.physical_confirmation_confirmed) {
+        // The confirmation window expired while waiting for presses.
+        ds5::bootloader_maintenance::cancel_physical_confirmation(context);
+    }
+    const uint8_t expected_value = auth.physical_confirmation_progress < ds5::bootloader_authorization::kSequenceLength
+        ? auth.physical_confirmation_sequence[auth.physical_confirmation_progress]
+        : 0;
+    const FaceButton expected = valid_face_button(expected_value)
+        ? static_cast<FaceButton>(expected_value)
+        : FaceButton::Triangle;
+    const Result result = update(bootloader_confirmation_state, report[7], pending, expected);
+    if (result == Result::Idle) {
+        return;
+    }
+
+    report[7] &= static_cast<uint8_t>(~kFaceButtonMask);
+    if (result == Result::Correct) {
+        if (auth.physical_confirmation_progress < ds5::bootloader_authorization::kSequenceLength) {
+            ++auth.physical_confirmation_progress;
+        }
+        if (auth.physical_confirmation_progress == ds5::bootloader_authorization::kSequenceLength) {
+            (void)ds5::bootloader_maintenance::confirm_physical(context);
+        }
+    } else if (result == Result::Incorrect) {
+        auth.physical_confirmation_progress = 0;
+        if (auth.physical_confirmation_mistakes < 0xff) {
+            ++auth.physical_confirmation_mistakes;
+        }
+    }
+}
+
+// Runs inline on every controller report; idle costs three loads.
+__force_inline void filter_bootloader_confirmation_buttons(uint8_t *report) {
+    const bool confirmation_open =
+        bootloader_auth_state.physical_confirmation_purpose
+            != ds5::bootloader_authorization::PhysicalConfirmationPurpose::None
+        && !bootloader_auth_state.physical_confirmation_confirmed;
+    if (
+        !confirmation_open
+        && !bootloader_confirmation_state.active
+        && !bootloader_confirmation_state.waiting_for_release
+    ) {
+        return;
+    }
+    process_bootloader_confirmation_buttons(report);
+}
+
 void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     uint8_t command_id = 0;
     uint8_t sequence = 0;
@@ -2170,6 +2381,22 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
 
     const uint16_t value = read_u16(buffer + 8);
     const uint8_t protocol_minor = buffer[5];
+    if (ds5::bootloader_maintenance::is_maintenance_command(command_id)) {
+        const auto result = ds5::bootloader_maintenance::execute(
+            bootloader_maintenance_context(),
+            {
+                .command_id = command_id,
+                .value = value,
+                .payload = buffer + 10,
+                .payload_size = static_cast<uint16_t>(COMPANION_PAYLOAD_SIZE - 10),
+            }
+        );
+        set_ack(command_id, sequence, static_cast<AckResult>(result.ack));
+        if (result.enter_bootloader_after_ack) {
+            reset_usb_boot(0, 0);
+        }
+        return;
+    }
     switch (command_id) {
         case CommandSetHapticsGain:
             if (value > kMaxFeedbackGainPercent) {
@@ -2803,15 +3030,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
-        case CommandEnterBootloader:
-            if (value != 0) {
-                set_ack(command_id, sequence, AckInvalidValue);
-                return;
-            }
-            set_ack(command_id, sequence, AckOk);
-            reset_usb_boot(0, 0);
-            return;
-
         default:
             set_ack(command_id, sequence, AckUnknownCommand);
             return;
@@ -3285,11 +3503,20 @@ void apply_button_remap(uint8_t *report, uint16_t len) {
 
 void companion_init() {
     critical_section_init(&companion_report_cs);
+    ds5::bootloader_maintenance::initialize(bootloader_maintenance_context());
     restore_defaults();
     set_ack(0, 0, AckOk);
 }
 
 void companion_loop() {
+    // A bootloader confirmation belongs to the controller that entered it.
+    static bool controller_was_connected = false;
+    const bool controller_connected = bt_is_controller_connected();
+    if (controller_was_connected && !controller_connected) {
+        ds5::bootloader_maintenance::cancel_physical_confirmation(bootloader_maintenance_context());
+        bootloader_confirmation_state = {};
+    }
+    controller_was_connected = controller_connected;
     audio_test_haptics_loop();
     classic_rumble_test_loop();
     mute_keyboard_chord_window_loop();
@@ -3326,6 +3553,9 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     // Before everything else, so any later consumer sees corrected sticks rather than raw ones.
     apply_stick_deadzone(&report[0], &report[1], stick_deadzone_left_percent);
     apply_stick_deadzone(&report[2], &report[3], stick_deadzone_right_percent);
+
+    // Before chords and remapping, so confirmation sequence presses trigger nothing else.
+    filter_bootloader_confirmation_buttons(report);
 
     const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
     const uint8_t dpad_direction = report[7] & kDpadMask;
@@ -3621,6 +3851,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_audio_status(buffer, reqlen);
         case COMPANION_REPORT_DEVICE_IDENTITY:
             return build_device_identity(buffer, reqlen);
+        case COMPANION_REPORT_BOOTLOADER_AUTHORIZATION:
+            return build_bootloader_authorization(buffer, reqlen);
         case COMPANION_REPORT_FORK_INFO:
             return build_fork_info(buffer, reqlen);
 #if DS5_TRIGGER_TRACE_ENABLED

@@ -37,6 +37,9 @@ const api = {
   listAudioHapticsOutputDevices: (): Promise<AudioHapticsOutputDevice[]> => (
     ipcRenderer.invoke('bridge:listAudioHapticsOutputDevices')
   ),
+  cancelBootloaderConfirmation: (): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:cancelBootloaderConfirmation')
+  ),
   applyPreset: (value: BridgePresetId): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:applyPreset', value),
   // profileId null clears the binding. mac need not be the attached controller.
   setControllerBinding: (mac: string, profileId: string | null): Promise<BridgeSnapshot> => (
