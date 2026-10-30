@@ -20,11 +20,31 @@ const childProcessMock = vi.hoisted(() => {
     stderr = new EventEmitter();
     stdin = new MockWritable();
     killed = false;
+    exitCode: number | null = null;
+    signalCode: string | null = null;
     kill = vi.fn((signal?: string) => {
       this.killed = true;
-      this.emit('exit', null, signal ?? 'SIGTERM');
+      if (this.exitCode === null && this.signalCode === null) {
+        this.signalCode = signal ?? 'SIGTERM';
+        this.emit('exit', null, this.signalCode);
+      }
       return true;
     });
+
+    constructor() {
+      super();
+      // The real helpers exit on their own shortly after stdin EOF; mirror
+      // that so graceful stops resolve without waiting out the signal grace.
+      this.stdin.end.mockImplementation(() => {
+        this.stdin.writable = false;
+        setImmediate(() => {
+          if (this.exitCode === null && this.signalCode === null && !this.killed) {
+            this.exitCode = 0;
+            this.emit('exit', 0, null);
+          }
+        });
+      });
+    }
   }
 
   const processes: MockChildProcess[] = [];
@@ -109,6 +129,67 @@ describe('SystemAudioHapticsEngine app source', () => {
     await engine.stop();
   });
 
+});
+
+// The Linux helper owns pw-record/pw-play children that only its own shutdown
+// path reaps. Signalling it in the same tick as the stdin EOF killed it before
+// that path ran and leaked the children as orphaned pw-cat streams (issue #3),
+// so stop() must stay EOF-first and only escalate after a real grace period.
+describe('helper stop ordering', () => {
+  const config = {
+    source: 'system-audio' as const,
+    gainPercent: 100,
+    bassFocus: 'balanced' as const,
+    response: 'balanced' as const,
+    attack: 'balanced' as const,
+    release: 'balanced' as const
+  };
+
+  async function startedEngine(): Promise<SystemAudioHapticsEngine> {
+    const engine = new SystemAudioHapticsEngine();
+    const start = engine.start(config);
+    const helper = childProcessMock.processes[0]!;
+    helper.stderr.emit('data', Buffer.from('status: recording-started\n'));
+    await start;
+    return engine;
+  }
+
+  it('lets the helper exit on stdin EOF without ever signalling it', async () => {
+    const engine = await startedEngine();
+    const helper = childProcessMock.processes[0]!;
+
+    await engine.stop();
+
+    expect(helper.stdin.end).toHaveBeenCalled();
+    expect(helper.kill).not.toHaveBeenCalled();
+  });
+
+  it('escalates to SIGTERM only after the exit grace expires', async () => {
+    const engine = await startedEngine();
+    const helper = childProcessMock.processes[0]!;
+    // This helper is wedged: it ignores the EOF and never exits on its own.
+    helper.stdin.end.mockImplementation(() => {
+      helper.stdin.writable = false;
+    });
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const stop = engine.stop();
+      await Promise.resolve();
+      expect(helper.kill).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(999);
+      expect(helper.kill).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1);
+      expect(helper.kill).toHaveBeenCalledTimes(1);
+      expect(helper.kill).toHaveBeenCalledWith();
+
+      await stop;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('bridge haptics test', () => {

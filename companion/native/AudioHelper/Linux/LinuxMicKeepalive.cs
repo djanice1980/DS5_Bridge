@@ -38,11 +38,7 @@ static class LinuxMicKeepalive
         Console.Error.WriteLine($"status: mic keepalive started device='{StatusText.Escape(source.Description)}'");
 
         using var stopRequested = new ManualResetEventSlim(false);
-        Console.CancelKeyPress += (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-            stopRequested.Set();
-        };
+        using var shutdownSignals = LinuxShutdownSignals.Register(stopRequested.Set);
         var stdinThread = new Thread(() =>
         {
             while (Console.In.ReadLine() is not null)

@@ -89,6 +89,11 @@ static class LinuxHapticsMirror
             options.HapticsAttack,
             options.HapticsRelease);
 
+        // Registered before the children exist so no signal can arrive in a
+        // window where they would be orphaned.
+        using var stopRequested = new ManualResetEventSlim(false);
+        using var shutdownSignals = LinuxShutdownSignals.Register(stopRequested.Set);
+
         Process? capture = null;
         Process? playback = null;
         try
@@ -110,13 +115,6 @@ static class LinuxHapticsMirror
         var transport = options.StdoutOnly ? "usb-frames" : "audio-mirror";
         Console.Error.WriteLine(
             $"status: audio-capture-format source=system-haptics-mirror device='{StatusText.Escape(captureNode.Description)}' target='{StatusText.Escape(targetNode?.Description ?? "usb-frames")}' sampleRate={AudioConstants.TargetSampleRate} channels={CaptureChannels} bits=16 encoding=Pcm bufferMs=10 transport={transport}");
-
-        using var stopRequested = new ManualResetEventSlim(false);
-        Console.CancelKeyPress += (_, eventArgs) =>
-        {
-            eventArgs.Cancel = true;
-            stopRequested.Set();
-        };
 
         // Live retune plus shutdown-on-EOF, mirroring ProcessControlLine.
         var controlThread = new Thread(() =>

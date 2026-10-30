@@ -58,7 +58,12 @@ const HELPER_COMMAND_TIMEOUT_MS = 2500;
 // every slow call fall through the fallback chain and silently give up.
 const HELPER_SPAWN_COMMAND_TIMEOUT_MS = 8000;
 const HELPER_SESSION_MONITOR_START_TIMEOUT_MS = 3000;
-const HELPER_SESSION_MONITOR_STOP_TIMEOUT_MS = 500;
+// How long a helper gets to exit on its own after its stdin closes before the
+// companion escalates to SIGTERM, and then from SIGTERM to SIGKILL. A healthy
+// helper notices the EOF within one 10ms capture chunk, so the full grace is
+// only ever paid for a wedged process.
+const HELPER_STOP_EXIT_GRACE_MS = 1000;
+const HELPER_STOP_SIGKILL_GRACE_MS = 500;
 const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_EXECUTABLE_NAME = process.platform === 'win32' ? 'AudioHelper.exe' : 'AudioHelper';
 const HELPER_PUBLISH_RID = process.platform === 'win32' ? 'win-x64' : 'linux-x64';
@@ -73,6 +78,50 @@ const DEV_HELPER_RELATIVE_PATH = path.join(
   HELPER_PUBLISH_RID,
   HELPER_EXECUTABLE_NAME
 );
+
+// Stop a long-running helper by closing its stdin and letting it exit on its
+// own, escalating to SIGTERM and then SIGKILL only if it lingers. Order
+// matters: the Linux helper owns pw-record/pw-play children that only its own
+// shutdown path reaps, so signalling it in the same tick as the EOF (as stop()
+// used to) killed it before that path ran and orphaned the children — the
+// lingering pw-cat streams of issue #3. The helper also handles SIGTERM
+// gracefully now, so the escalation itself no longer orphans anything; the
+// ordering keeps SIGKILL as the only dangerous step and makes it last.
+function stopHelperGracefully(helper: ChildProcess, stopLine?: string): Promise<void> {
+  if (helper.exitCode != null || helper.signalCode != null) {
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    const sigtermTimer = setTimeout(() => {
+      if (!helper.killed) {
+        helper.kill();
+      }
+    }, HELPER_STOP_EXIT_GRACE_MS);
+    const sigkillTimer = setTimeout(() => {
+      if (helper.exitCode == null && helper.signalCode == null) {
+        helper.kill('SIGKILL');
+      }
+      resolve();
+    }, HELPER_STOP_EXIT_GRACE_MS + HELPER_STOP_SIGKILL_GRACE_MS);
+    helper.once('exit', () => {
+      clearTimeout(sigtermTimer);
+      clearTimeout(sigkillTimer);
+      resolve();
+    });
+    if (stopLine !== undefined) {
+      try {
+        helper.stdin?.write(`${stopLine}\n`);
+      } catch {
+        // The pipe may already be gone; EOF below still applies.
+      }
+    }
+    try {
+      helper.stdin?.end();
+    } catch {
+      // Same: a torn-down pipe just means the helper is already exiting.
+    }
+  });
+}
 
 export type AudioHelperCommand = {
   command: string;
@@ -232,23 +281,7 @@ export class SystemAudioHapticsEngine extends EventEmitter {
     if (!helper) {
       return;
     }
-
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (!helper.killed) {
-          helper.kill('SIGKILL');
-        }
-        resolve();
-      }, 500);
-
-      helper.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-
-      helper.stdin?.end();
-      helper.kill();
-    });
+    await stopHelperGracefully(helper);
   }
 
   isActive(): boolean {
@@ -402,20 +435,7 @@ export class LinuxUsbHapticsEngine extends EventEmitter {
     if (!helper) {
       return;
     }
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (!helper.killed) {
-          helper.kill('SIGKILL');
-        }
-        resolve();
-      }, 500);
-      helper.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-      helper.stdin?.end();
-      helper.kill();
-    });
+    await stopHelperGracefully(helper);
   }
 
   isActive(): boolean {
@@ -586,25 +606,11 @@ export class AudioHapticsSessionMonitor extends EventEmitter {
       return;
     }
 
+    // The entry stays in stoppingHelpers until the exit listener consumes it,
+    // so a straggler exit after the SIGKILL grace still reads as a
+    // companion-initiated stop rather than an unexpected death.
     this.stoppingHelpers.add(helper);
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (!helper.killed) {
-          helper.kill('SIGKILL');
-        }
-        resolve();
-      }, HELPER_SESSION_MONITOR_STOP_TIMEOUT_MS);
-
-      helper.once('exit', () => {
-        clearTimeout(timeout);
-        this.stoppingHelpers.delete(helper);
-        resolve();
-      });
-
-      this.writeControlLine('stop', helper);
-      helper.stdin?.end();
-      helper.kill();
-    });
+    await stopHelperGracefully(helper, 'stop');
   }
 
   isActive(): boolean {
@@ -1238,23 +1244,7 @@ export class MicKeepaliveEngine extends EventEmitter {
     if (!helper) {
       return;
     }
-
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (!helper.killed) {
-          helper.kill('SIGKILL');
-        }
-        resolve();
-      }, 500);
-
-      helper.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-
-      helper.stdin?.end();
-      helper.kill();
-    });
+    await stopHelperGracefully(helper);
   }
 
   isActive(): boolean {
@@ -1311,23 +1301,7 @@ export class TouchpadInhibitEngine extends EventEmitter {
     if (!helper) {
       return;
     }
-
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (!helper.killed) {
-          helper.kill('SIGKILL');
-        }
-        resolve();
-      }, 500);
-
-      helper.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-
-      helper.stdin?.end();
-      helper.kill();
-    });
+    await stopHelperGracefully(helper);
   }
 
   isActive(): boolean {
@@ -1386,23 +1360,7 @@ export class VirtualKeyboardEngine extends EventEmitter {
     if (!helper) {
       return;
     }
-
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (!helper.killed) {
-          helper.kill('SIGKILL');
-        }
-        resolve();
-      }, 500);
-
-      helper.once('exit', () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-
-      helper.stdin?.end();
-      helper.kill();
-    });
+    await stopHelperGracefully(helper);
   }
 
   private async sendKeySequenceInternal(codes: number[]): Promise<void> {
