@@ -462,6 +462,30 @@ describe('SettingsStore', () => {
     expect(new SettingsStore(userDataPath).get().audioReactiveHapticsSource).toEqual(updated.audioReactiveHapticsSource);
   });
 
+  it('persists audio haptics output-device sources and rejects nameless ones', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.update({
+      audioReactiveHapticsSource: {
+        kind: 'output-device',
+        deviceName: ' alsa_output.goxlr_games ',
+        displayName: ' GoXLR Games '
+      }
+    });
+
+    expect(updated.audioReactiveHapticsSource).toEqual({
+      kind: 'output-device',
+      deviceName: 'alsa_output.goxlr_games',
+      displayName: 'GoXLR Games'
+    });
+    expect(new SettingsStore(userDataPath).get().audioReactiveHapticsSource).toEqual(updated.audioReactiveHapticsSource);
+
+    expect(store.update({
+      audioReactiveHapticsSource: { kind: 'output-device', deviceName: '   ' } as never
+    }).audioReactiveHapticsSource).toBe('system-audio');
+  });
+
   it('auto-forks default button remapping changes into a saved custom profile', () => {
     vi.spyOn(Date, 'now').mockReturnValue(0x23456);
     const store = new SettingsStore(tempUserDataPath());

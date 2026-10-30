@@ -135,6 +135,7 @@ sealed class LinuxHelperOptions
     public int? AppProcessId;
     public string? AppProcessPath;
     public string? AppExecutableName;
+    public string? HapticsCaptureDevice;
 
     public static LinuxHelperOptions Parse(string[] args)
     {
@@ -257,6 +258,9 @@ sealed class LinuxHelperOptions
                     break;
                 case "--haptics-app-executable":
                     options.AppExecutableName = NextValue(args, ref index);
+                    break;
+                case "--haptics-capture-device":
+                    options.HapticsCaptureDevice = NextValue(args, ref index);
                     break;
                 default:
                     // Tolerate Windows-only flags (frame dumps, hid paths...)

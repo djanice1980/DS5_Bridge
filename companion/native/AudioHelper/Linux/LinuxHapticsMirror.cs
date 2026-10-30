@@ -53,6 +53,22 @@ static class LinuxHapticsMirror
                 return 1;
             }
         }
+        else if (!string.IsNullOrEmpty(options.HapticsCaptureDevice))
+        {
+            // Pinned render device: capture that sink's monitor instead of the
+            // default output's. This is how a mix on a multi-channel device
+            // (e.g. a GoXLR's Games channel) becomes a haptics source.
+            captureNode = snapshot.Nodes.FirstOrDefault(node =>
+                node.MediaClass == "Audio/Sink"
+                && string.Equals(node.Name, options.HapticsCaptureDevice, StringComparison.Ordinal));
+            captureSinkMonitor = true;
+            if (captureNode is null)
+            {
+                Console.Error.WriteLine(
+                    $"status: capture-unavailable reason=device-invalidated device='{StatusText.Escape(options.HapticsCaptureDevice)}'");
+                return 1;
+            }
+        }
         else
         {
             captureNode = snapshot.DefaultSink;
@@ -158,6 +174,19 @@ static class LinuxHapticsMirror
                         if (captureNode.ProcessId > 0 && !Directory.Exists($"/proc/{captureNode.ProcessId}"))
                         {
                             routeChangeReason = "app-session-exited";
+                            stopRequested.Set();
+                            return;
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(options.HapticsCaptureDevice))
+                    {
+                        // A pinned device that vanishes (USB mixer unplugged,
+                        // profile switch) ends the session; the companion
+                        // retries and reports it as unavailable until it
+                        // comes back.
+                        if (PipeWireAudio.Query().FindByName(options.HapticsCaptureDevice) is null)
+                        {
+                            routeChangeReason = "capture-device-lost";
                             stopRequested.Set();
                             return;
                         }

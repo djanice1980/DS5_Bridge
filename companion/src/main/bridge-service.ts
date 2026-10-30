@@ -95,6 +95,7 @@ import type {
   BridgeSnapshot,
   CompanionSettings,
   ControllerHistoryEntry,
+  AudioHapticsOutputDevice,
   AudioHapticsSession,
   HostPersonaTransition,
   HidDeviceSummary,
@@ -558,6 +559,9 @@ function normalizeOptionalString(value: unknown): string | undefined {
 function audioReactiveHapticsSourceKey(source: AudioReactiveHapticsSource): string {
   if (source === 'controller-audio' || source === 'system-audio') {
     return source;
+  }
+  if (source.kind === 'output-device') {
+    return `output-device:${source.deviceName}`;
   }
   if (source.processPath) {
     return `app-path:${source.processPath.toLowerCase()}`;
@@ -1586,6 +1590,22 @@ export class BridgeService extends EventEmitter {
       return [];
     }
     return cloneAudioHapticsSessions(sessions);
+  }
+
+  // Render devices (PipeWire sinks on Linux) the haptics engine can pin as
+  // its capture source. Served by the same monitor helper as the app-session
+  // list; on Windows the monitor does not emit devices yet, so this is empty.
+  async listAudioHapticsOutputDevices(): Promise<AudioHapticsOutputDevice[]> {
+    if (!this.controllerAudioReady()) {
+      return [];
+    }
+    try {
+      return await this.audioHapticsSessionMonitor.listOutputDevices();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAudioDebugLines([`[AudioSessions] output device listing unavailable error=${message}`]);
+      return [];
+    }
   }
 
   async repairWindowsDeviceCache(): Promise<WindowsDeviceCleanupResult> {

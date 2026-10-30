@@ -277,6 +277,85 @@ describe('audio haptics session listing', () => {
 
     await monitor.stop();
   });
+
+  it('lists output devices from the snapshot and treats an absent field as empty', async () => {
+    const monitor = new AudioHapticsSessionMonitor();
+    const started = monitor.listSessions();
+    const helper = childProcessMock.processes[0]!;
+
+    helper.stdout.emit('data', Buffer.from(`${JSON.stringify({
+      type: 'snapshot',
+      sessions: [],
+      outputDevices: [
+        { name: 'alsa_output.goxlr_games', description: 'GoXLR Games', isDefault: false },
+        { name: 'alsa_output.goxlr_system', description: 'GoXLR System', isDefault: true },
+        { name: '', description: 'nameless is dropped' }
+      ]
+    })}\n`));
+    await started;
+
+    await expect(monitor.listOutputDevices()).resolves.toEqual([
+      { name: 'alsa_output.goxlr_games', description: 'GoXLR Games', isDefault: false },
+      { name: 'alsa_output.goxlr_system', description: 'GoXLR System', isDefault: true }
+    ]);
+
+    // The Windows monitor omits the field entirely.
+    helper.stdout.emit('data', Buffer.from(`${JSON.stringify({ type: 'snapshot', sessions: [] })}\n`));
+    await expect(monitor.listOutputDevices()).resolves.toEqual([]);
+
+    await monitor.stop();
+  });
+});
+
+describe('output device haptics source', () => {
+  it('pins the capture device for the helper and keys the source by device name', async () => {
+    const engine = new SystemAudioHapticsEngine();
+    const start = engine.start({
+      source: { kind: 'output-device', deviceName: 'alsa_output.goxlr_games', displayName: 'GoXLR Games' },
+      gainPercent: 100,
+      bassFocus: 'balanced',
+      response: 'balanced',
+      attack: 'balanced',
+      release: 'balanced'
+    });
+    const helper = childProcessMock.processes[0]!;
+    helper.stderr.emit('data', Buffer.from('status: recording-started\n'));
+    await start;
+
+    const args = childProcessMock.spawn.mock.calls[0]![1] as string[];
+    const flagIndex = args.indexOf('--haptics-capture-device');
+    expect(flagIndex).toBeGreaterThan(-1);
+    expect(args[flagIndex + 1]).toBe('alsa_output.goxlr_games');
+    expect(args).not.toContain('--haptics-app-process-id');
+
+    // Same device → config update, no restart; different device → restart.
+    await engine.start({
+      source: { kind: 'output-device', deviceName: 'alsa_output.goxlr_games' },
+      gainPercent: 150,
+      bassFocus: 'balanced',
+      response: 'balanced',
+      attack: 'balanced',
+      release: 'balanced'
+    });
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
+
+    const restart = engine.start({
+      source: { kind: 'output-device', deviceName: 'alsa_output.goxlr_chat' },
+      gainPercent: 150,
+      bassFocus: 'balanced',
+      response: 'balanced',
+      attack: 'balanced',
+      release: 'balanced'
+    });
+    await Promise.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    const second = childProcessMock.processes[1]!;
+    second.stderr.emit('data', Buffer.from('status: recording-started\n'));
+    await restart;
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(2);
+
+    await engine.stop();
+  });
 });
 
 // Keep last: this is the only suite here that drives runAudioHelperCommand, and

@@ -204,7 +204,20 @@ export interface AudioReactiveHapticsAppSource {
   sessionIdentifier?: string;
   sessionInstanceIdentifier?: string;
 }
-export type AudioReactiveHapticsSource = 'controller-audio' | 'system-audio' | AudioReactiveHapticsAppSource;
+// A specific render device (PipeWire sink) captured by monitor, rather than
+// whatever the system default is. This is how multi-channel mixers such as a
+// GoXLR expose their mixes: each channel is its own sink, and a game routed to
+// the "Games" sink never reaches the default sink's monitor.
+export interface AudioReactiveHapticsDeviceSource {
+  kind: 'output-device';
+  deviceName: string;
+  displayName?: string;
+}
+export type AudioReactiveHapticsSource =
+  | 'controller-audio'
+  | 'system-audio'
+  | AudioReactiveHapticsAppSource
+  | AudioReactiveHapticsDeviceSource;
 export type AudioReactiveHapticsMode = 'mix' | 'replace';
 export type AudioReactiveHapticsBassFocus = 'deep' | 'balanced' | 'punchy' | 'wide';
 export type AudioReactiveHapticsResponse = 'subtle' | 'balanced' | 'strong';

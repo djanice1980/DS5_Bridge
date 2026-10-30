@@ -12,6 +12,11 @@ static class LinuxAudioSessionMonitor
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    private sealed record OutputDeviceRecord(
+        string Name,
+        string Description,
+        bool IsDefault);
+
     private sealed record SessionRecord(
         int ProcessId,
         string? DisplayName,
@@ -96,7 +101,28 @@ static class LinuxAudioSessionMonitor
     {
         var snapshot = PipeWireAudio.Query();
         var sessions = ListSessions(snapshot);
-        return JsonSerializer.Serialize(new { type = "snapshot", sessions }, SerializerOptions);
+        var outputDevices = ListOutputDevices(snapshot);
+        return JsonSerializer.Serialize(new { type = "snapshot", sessions, outputDevices }, SerializerOptions);
+    }
+
+    // Every render sink a haptics session could pin as its capture source. A
+    // multi-channel mixer (GoXLR and friends) presents each mix as a sink, so
+    // this is what makes "capture the Games channel" selectable. The bridge's
+    // own sink is excluded: haptics from controller audio is the firmware
+    // path, not a mirror source.
+    private static List<OutputDeviceRecord> ListOutputDevices(PipeWireSnapshot snapshot)
+    {
+        return snapshot.Nodes
+            .Where(node => node.MediaClass == "Audio/Sink"
+                && !LinuxEndpointManager.IsBridgeNode(node)
+                && node.Name.Length > 0)
+            .Select(node => new OutputDeviceRecord(
+                Name: node.Name,
+                Description: node.Description.Length > 0 ? node.Description : node.Name,
+                IsDefault: string.Equals(node.Name, snapshot.DefaultSinkName, StringComparison.Ordinal)))
+            .OrderByDescending(device => device.IsDefault)
+            .ThenBy(device => device.Description, StringComparer.OrdinalIgnoreCase)
+            .ToList();
     }
 
     private static List<SessionRecord> ListSessions(PipeWireSnapshot snapshot)

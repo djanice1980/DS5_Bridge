@@ -17,6 +17,7 @@ import type {
   TriggerTestTarget
 } from './shared/protocol';
 import type {
+  AudioHapticsOutputDevice,
   AudioHapticsSession,
   BridgeDiagnostics,
   BridgeSnapshot,
@@ -32,6 +33,9 @@ const api = {
   listDevices: () => ipcRenderer.invoke('bridge:listDevices'),
   listAudioHapticsSessions: (): Promise<AudioHapticsSession[]> => (
     ipcRenderer.invoke('bridge:listAudioHapticsSessions')
+  ),
+  listAudioHapticsOutputDevices: (): Promise<AudioHapticsOutputDevice[]> => (
+    ipcRenderer.invoke('bridge:listAudioHapticsOutputDevices')
   ),
   applyPreset: (value: BridgePresetId): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:applyPreset', value),
   // profileId null clears the binding. mac need not be the attached controller.

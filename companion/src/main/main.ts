@@ -1130,6 +1130,7 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:listAudioHapticsSessions', async () => (
     addAudioHapticsSessionIcons(await service.listAudioHapticsSessions())
   ));
+  ipcMain.handle('bridge:listAudioHapticsOutputDevices', () => service.listAudioHapticsOutputDevices());
   ipcMain.handle('bridge:applyPreset', (_event, value: BridgePresetId) => service.applyPreset(value));
   ipcMain.handle('bridge:selectControllerProfile', (_event, profileId: string) => (
     service.selectControllerProfile(profileId)

@@ -129,6 +129,16 @@ export interface HidDeviceSummary {
   interface?: number;
 }
 
+// A render device the haptics engine can capture instead of the default
+// output: Linux lists every non-bridge PipeWire sink (a GoXLR's channels each
+// appear as one). Windows does not emit these yet, so the list stays empty
+// there and the picker shows no device group.
+export interface AudioHapticsOutputDevice {
+  name: string;
+  description: string;
+  isDefault: boolean;
+}
+
 export interface AudioHapticsSession {
   processId: number;
   displayName: string;

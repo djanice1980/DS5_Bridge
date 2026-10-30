@@ -11,7 +11,7 @@ import type {
   AudioReactiveHapticsResponse,
   HostPersonaMode
 } from '../shared/protocol';
-import type { AudioHapticsSession } from '../shared/types';
+import type { AudioHapticsOutputDevice, AudioHapticsSession } from '../shared/types';
 
 export type SystemAudioHapticsConfig = {
   source: AudioReactiveHapticsSource;
@@ -321,6 +321,10 @@ export class SystemAudioHapticsEngine extends EventEmitter {
         args.push('--haptics-app-executable', appSource.executableName);
       }
     }
+    const deviceSource = audioReactiveHapticsDeviceSource(config.source);
+    if (deviceSource) {
+      args.push('--haptics-capture-device', deviceSource.deviceName);
+    }
 
     const helper = spawn(helperPath, args, {
       env: buildSystemAudioHapticsHelperEnv(),
@@ -477,6 +481,10 @@ export class LinuxUsbHapticsEngine extends EventEmitter {
         args.push('--haptics-app-executable', appSource.executableName);
       }
     }
+    const deviceSource = audioReactiveHapticsDeviceSource(config.source);
+    if (deviceSource) {
+      args.push('--haptics-capture-device', deviceSource.deviceName);
+    }
 
     const helper = spawn(helperPath, args, {
       env: buildSystemAudioHapticsHelperEnv(),
@@ -569,6 +577,7 @@ export class AudioHapticsSessionMonitor extends EventEmitter {
   private stdoutBuffer = '';
   private stderrBuffer = '';
   private sessions: AudioHapticsSession[] = [];
+  private outputDevices: AudioHapticsOutputDevice[] = [];
   private haveSnapshot = false;
 
   async start(): Promise<void> {
@@ -588,6 +597,11 @@ export class AudioHapticsSessionMonitor extends EventEmitter {
   async listSessions(): Promise<AudioHapticsSession[]> {
     await this.start();
     return cloneAudioHapticsSessions(this.sessions);
+  }
+
+  async listOutputDevices(): Promise<AudioHapticsOutputDevice[]> {
+    await this.start();
+    return this.outputDevices.map((device) => ({ ...device }));
   }
 
   async refresh(): Promise<AudioHapticsSession[]> {
@@ -709,13 +723,14 @@ export class AudioHapticsSessionMonitor extends EventEmitter {
     const lines = this.stdoutBuffer.split(/\r?\n/);
     this.stdoutBuffer = lines.pop() ?? '';
     for (const line of lines) {
-      const sessions = parseAudioHapticsSessionMonitorLine(line);
-      if (!sessions) {
+      const snapshot = parseAudioHapticsSessionMonitorLine(line);
+      if (!snapshot) {
         continue;
       }
-      this.sessions = sessions;
+      this.sessions = snapshot.sessions;
+      this.outputDevices = snapshot.outputDevices;
       this.haveSnapshot = true;
-      this.emit('sessions', cloneAudioHapticsSessions(sessions));
+      this.emit('sessions', cloneAudioHapticsSessions(snapshot.sessions));
       onSnapshot?.();
     }
   }
@@ -760,7 +775,12 @@ function normalizeSystemAudioHapticsConfig(config: SystemAudioHapticsConfig): Sy
   };
 }
 
-function parseAudioHapticsSessionMonitorLine(raw: string): AudioHapticsSession[] | null {
+interface AudioHapticsMonitorSnapshot {
+  sessions: AudioHapticsSession[];
+  outputDevices: AudioHapticsOutputDevice[];
+}
+
+function parseAudioHapticsSessionMonitorLine(raw: string): AudioHapticsMonitorSnapshot | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -770,11 +790,39 @@ function parseAudioHapticsSessionMonitorLine(raw: string): AudioHapticsSession[]
   if (!parsed || typeof parsed !== 'object') {
     return null;
   }
-  const message = parsed as { type?: unknown; sessions?: unknown };
+  const message = parsed as { type?: unknown; sessions?: unknown; outputDevices?: unknown };
   if (message.type !== 'snapshot') {
     return null;
   }
-  return normalizeAudioHapticsSessionArray(message.sessions);
+  return {
+    sessions: normalizeAudioHapticsSessionArray(message.sessions),
+    // The Windows monitor does not emit outputDevices yet; an absent field is
+    // an empty device list, not an error.
+    outputDevices: normalizeAudioHapticsOutputDeviceArray(message.outputDevices)
+  };
+}
+
+function normalizeAudioHapticsOutputDeviceArray(parsed: unknown): AudioHapticsOutputDevice[] {
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const devices: AudioHapticsOutputDevice[] = [];
+  for (const value of parsed) {
+    if (!value || typeof value !== 'object') {
+      continue;
+    }
+    const candidate = value as Partial<AudioHapticsOutputDevice>;
+    const name = normalizeOptionalText(candidate.name);
+    if (!name) {
+      continue;
+    }
+    devices.push({
+      name,
+      description: normalizeOptionalText(candidate.description) ?? name,
+      isDefault: Boolean(candidate.isDefault)
+    });
+  }
+  return devices;
 }
 
 function normalizeAudioHapticsSessionArray(parsed: unknown): AudioHapticsSession[] {
@@ -819,6 +867,18 @@ function normalizeAudioReactiveHapticsSource(source: AudioReactiveHapticsSource 
   if (source === 'controller-audio' || source === 'system-audio') {
     return source;
   }
+  const deviceSource = audioReactiveHapticsDeviceSource(source);
+  if (deviceSource) {
+    const deviceName = normalizeOptionalText(deviceSource.deviceName);
+    if (!deviceName) {
+      return 'system-audio';
+    }
+    return {
+      kind: 'output-device',
+      deviceName,
+      displayName: normalizeOptionalText(deviceSource.displayName)
+    };
+  }
   const appSource = audioReactiveHapticsAppSource(source);
   if (!appSource) {
     return 'system-audio';
@@ -841,7 +901,17 @@ function audioReactiveHapticsAppSource(source: AudioReactiveHapticsSource | unde
     : null;
 }
 
+function audioReactiveHapticsDeviceSource(source: AudioReactiveHapticsSource | undefined) {
+  return source && typeof source === 'object' && source.kind === 'output-device'
+    ? source
+    : null;
+}
+
 function audioReactiveHapticsSourceKey(source: AudioReactiveHapticsSource): string {
+  const deviceSource = audioReactiveHapticsDeviceSource(source);
+  if (deviceSource) {
+    return `output-device:${deviceSource.deviceName}`;
+  }
   const appSource = audioReactiveHapticsAppSource(source);
   if (!appSource) {
     return source === 'controller-audio' ? 'controller-audio' : 'system-audio';

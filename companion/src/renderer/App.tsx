@@ -132,7 +132,7 @@ import type {
   TriggerTestMode,
   TriggerTestTarget
 } from '../shared/protocol';
-import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
+import type { AudioHapticsOutputDevice, AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
 
 const IS_WINDOWS_HOST = window.bridge?.platform === 'win32';
 const IS_LINUX = window.bridge?.platform === 'linux';
@@ -859,6 +859,22 @@ function audioHapticsAppSource(source: AudioReactiveHapticsSource | null | undef
   return source && typeof source === 'object' && source.kind === 'app-session' ? source : null;
 }
 
+function audioHapticsDeviceSource(source: AudioReactiveHapticsSource | null | undefined) {
+  return source && typeof source === 'object' && source.kind === 'output-device' ? source : null;
+}
+
+function audioHapticsDeviceKey(device: AudioHapticsOutputDevice): string {
+  return `output-device:${device.name}`;
+}
+
+function audioHapticsSourceFromDevice(device: AudioHapticsOutputDevice): AudioReactiveHapticsSource {
+  return {
+    kind: 'output-device',
+    deviceName: device.name,
+    displayName: device.description
+  };
+}
+
 function audioHapticsSessionKey(session: AudioHapticsSession): string {
   if (session.processPath) {
     return `app-path:${session.processPath.toLowerCase()}`;
@@ -870,6 +886,10 @@ function audioHapticsSessionKey(session: AudioHapticsSession): string {
 }
 
 function audioHapticsSourceKey(source: AudioReactiveHapticsSource | null | undefined): string {
+  const deviceSource = audioHapticsDeviceSource(source);
+  if (deviceSource) {
+    return `output-device:${deviceSource.deviceName}`;
+  }
   const appSource = audioHapticsAppSource(source);
   if (!appSource) {
     return 'system-audio';
@@ -896,6 +916,10 @@ function audioHapticsSourceFromSession(session: AudioHapticsSession): AudioReact
 }
 
 function audioHapticsSourceDisplayName(source: AudioReactiveHapticsSource | null | undefined): string {
+  const deviceSource = audioHapticsDeviceSource(source);
+  if (deviceSource) {
+    return deviceSource.displayName || deviceSource.deviceName;
+  }
   const appSource = audioHapticsAppSource(source);
   if (!appSource) {
     return 'System';
@@ -2705,18 +2729,22 @@ function AudioHapticsSourceOption({
   label,
   value,
   session,
+  device,
   loading
 }: {
   label: string;
   value: string;
   session?: AudioHapticsSession;
+  device?: AudioHapticsOutputDevice;
   loading?: boolean;
 }) {
   const system = value === 'system-audio';
-  const unavailable = !system && !session;
+  const unavailable = !system && !session && !device;
   let sublabel = 'System mix';
   if (!system) {
-    if (!session) {
+    if (device) {
+      sublabel = 'Output mix';
+    } else if (!session) {
       sublabel = loading ? 'Scanning' : 'Unavailable';
     } else {
       sublabel = session.state === 'active'
@@ -2729,6 +2757,8 @@ function AudioHapticsSourceOption({
       <span className="audio-haptics-source-icon" aria-hidden="true">
         {system ? (
           <IconDeviceAudioTape size={17} />
+        ) : device ? (
+          <IconVolume size={17} />
         ) : session?.iconDataUrl ? (
           <img src={session.iconDataUrl} alt="" />
         ) : (
@@ -3005,6 +3035,7 @@ export function App() {
   const [triggerLabOpen, setTriggerLabOpen] = useState(false);
   const [audioHapticsOpen, setAudioHapticsOpen] = useState(false);
   const [audioHapticsSessions, setAudioHapticsSessions] = useState<AudioHapticsSession[]>([]);
+  const [audioHapticsOutputDevices, setAudioHapticsOutputDevices] = useState<AudioHapticsOutputDevice[]>([]);
   const [audioHapticsSessionsLoading, setAudioHapticsSessionsLoading] = useState(false);
   const [triggerLabLinked, setTriggerLabLinked] = useState(triggerLabInitialState.linked);
   const [triggerLabDrafts, setTriggerLabDrafts] = useState<Record<TriggerLabSide, TriggerLabDraft>>(triggerLabInitialState.drafts);
@@ -3479,13 +3510,18 @@ export function App() {
       refreshInFlight = true;
       setAudioHapticsSessionsLoading(true);
       try {
-        const sessions = await window.bridge.listAudioHapticsSessions();
+        const [sessions, outputDevices] = await Promise.all([
+          window.bridge.listAudioHapticsSessions(),
+          window.bridge.listAudioHapticsOutputDevices()
+        ]);
         if (!cancelled) {
           setAudioHapticsSessions(sessions);
+          setAudioHapticsOutputDevices(outputDevices);
         }
       } catch {
         if (!cancelled) {
           setAudioHapticsSessions([]);
+          setAudioHapticsOutputDevices([]);
         }
       } finally {
         refreshInFlight = false;
@@ -3794,21 +3830,41 @@ export function App() {
     }
     return sessions;
   }, [audioHapticsSessions]);
+  const audioHapticsDeviceByKey = useMemo(() => {
+    const devices = new Map<string, AudioHapticsOutputDevice>();
+    for (const device of audioHapticsOutputDevices) {
+      devices.set(audioHapticsDeviceKey(device), device);
+    }
+    return devices;
+  }, [audioHapticsOutputDevices]);
   const selectedAudioHapticsSourceDisplayName = audioHapticsSessionByKey.get(audioReactiveHapticsSourceKey)?.displayName
+    ?? audioHapticsDeviceByKey.get(audioReactiveHapticsSourceKey)?.description
     ?? audioHapticsSourceDisplayName(audioReactiveHapticsSource);
   const audioHapticsSourceOptions = useMemo<Array<[string, string]>>(() => {
     const options: Array<[string, string]> = [['System', 'system-audio']];
+    // Non-default render sinks are selectable mixes (a GoXLR's channels, a
+    // second sound card). The default sink is what 'System' already captures,
+    // so it is not repeated here — unless it is the pinned selection, which
+    // must stay listed to keep the picker honest about what is in effect.
+    for (const device of audioHapticsOutputDevices) {
+      if (!device.isDefault || audioHapticsDeviceKey(device) === audioReactiveHapticsSourceKey) {
+        options.push([device.description, audioHapticsDeviceKey(device)]);
+      }
+    }
     for (const session of audioHapticsSessions) {
       options.push([session.displayName, audioHapticsSessionKey(session)]);
     }
     if (
       audioReactiveHapticsSourceKey !== 'system-audio'
       && !audioHapticsSessionByKey.has(audioReactiveHapticsSourceKey)
+      && !options.some(([, value]) => value === audioReactiveHapticsSourceKey)
     ) {
       options.push([`${audioHapticsSourceDisplayName(audioReactiveHapticsSource)} unavailable`, audioReactiveHapticsSourceKey]);
     }
     return options;
   }, [
+    audioHapticsDeviceByKey,
+    audioHapticsOutputDevices,
     audioHapticsSessionByKey,
     audioHapticsSessions,
     audioReactiveHapticsSource,
@@ -4885,6 +4941,11 @@ export function App() {
     if (!snapshot || value === audioReactiveHapticsSourceKey) return;
     if (value === 'system-audio') {
       void commitAudioReactiveHapticsConfig({ source: 'system-audio' });
+      return;
+    }
+    const device = audioHapticsDeviceByKey.get(value);
+    if (device) {
+      void commitAudioReactiveHapticsConfig({ source: audioHapticsSourceFromDevice(device) });
       return;
     }
     const session = audioHapticsSessionByKey.get(value);
@@ -7381,6 +7442,7 @@ export function App() {
                               label={label}
                               value={value}
                               session={audioHapticsSessionByKey.get(value)}
+                              device={audioHapticsDeviceByKey.get(value)}
                               loading={audioHapticsSessionsLoading}
                             />
                           )}
@@ -7389,6 +7451,7 @@ export function App() {
                               label={label}
                               value={value}
                               session={audioHapticsSessionByKey.get(value)}
+                              device={audioHapticsDeviceByKey.get(value)}
                               loading={audioHapticsSessionsLoading}
                             />
                           )}
@@ -7491,7 +7554,7 @@ export function App() {
                         <span className={`dot ${audioReactiveHapticsStatusTone}`} />
                         <strong>{audioReactiveHapticsStatusLabel}</strong>
                       </span>
-                      <span className={`status-badge ${audioReactiveHapticsStatusTone}`} title={audioReactiveHapticsSourceKey === 'system-audio' ? (IS_WINDOWS_HOST ? 'Using the mixed Windows output.' : 'Using the mixed system output.') : 'Using the selected app audio session.'}>
+                      <span className={`status-badge ${audioReactiveHapticsStatusTone}`} title={audioReactiveHapticsSourceKey === 'system-audio' ? (IS_WINDOWS_HOST ? 'Using the mixed Windows output.' : 'Using the mixed system output.') : audioReactiveHapticsSourceKey.startsWith('output-device:') ? 'Using the selected output mix.' : 'Using the selected app audio session.'}>
                         <span className={`dot ${audioReactiveHapticsEnabled ? audioReactiveHapticsStatusTone : 'idle'}`} />
                         <strong>{selectedAudioHapticsSourceDisplayName}</strong>
                       </span>
