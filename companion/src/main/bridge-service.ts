@@ -883,6 +883,7 @@ function controllerBatteryText(batteryPercent: number, rawPowerState: number): s
 }
 
 function hostPersonaModeLabel(mode: HostPersonaMode): string {
+  if (mode === 'dualsense-edge') return 'DualSense Edge';
   if (mode === 'ds4') return 'DualShock 4';
   return mode === 'xbox' ? 'Xbox Controller' : 'DualSense';
 }
@@ -3185,6 +3186,12 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setNotifyPersonaChange(enabled: boolean): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.update({ notifyPersonaChange: enabled });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   async setNotifyMicMute(enabled: boolean): Promise<BridgeSnapshot> {
     this.snapshot.settings = this.settingsStore.update({ notifyMicMute: enabled });
     this.emitSnapshot();
@@ -4168,6 +4175,12 @@ export class BridgeService extends EventEmitter {
 
     const transition = this.advanceHostPersonaTransition(status, now);
     const completedHostPersonaMode = this.consumeCompletedHostPersonaMode();
+    if (completedHostPersonaMode && this.settingsStore.get().notifyPersonaChange) {
+      this.emit('toast', {
+        title: 'DS5 Bridge',
+        body: `Switched to ${hostPersonaModeLabel(completedHostPersonaMode)} mode`
+      } satisfies BridgeToast);
+    }
     const controllerAudioReady = this.controllerAudioReady(status);
 
     if (!controllerAudioReady) {

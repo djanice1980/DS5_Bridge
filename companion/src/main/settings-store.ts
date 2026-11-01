@@ -215,6 +215,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   notifyControllerConnection: false,
   notifyLowBattery: false,
   notifyMicMute: false,
+  notifyPersonaChange: true,
   duplexMicEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.duplexMicEnabled,
   controllerPowerSavingEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.controllerPowerSavingEnabled,
   touchpadMouseEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.touchpadMouseEnabled,
@@ -1067,6 +1068,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     notifyMicMute: typeof value?.notifyMicMute === 'boolean'
       ? value.notifyMicMute
       : DEFAULT_SETTINGS.notifyMicMute,
+    notifyPersonaChange: typeof value?.notifyPersonaChange === 'boolean'
+      ? value.notifyPersonaChange
+      : DEFAULT_SETTINGS.notifyPersonaChange,
     duplexMicEnabled: typeof value?.duplexMicEnabled === 'boolean'
       ? value.duplexMicEnabled
       : DEFAULT_SETTINGS.duplexMicEnabled,

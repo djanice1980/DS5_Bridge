@@ -263,7 +263,7 @@ type FeatureTipsPanelProps = {
   triggerLabOpen?: boolean;
 };
 type SettingsFocusTarget = 'controller-power-saving' | 'sleep-shortcut' | 'volume-shortcut';
-type NotificationFocusTarget = 'controller-status' | 'low-battery' | 'mic-mute' | 'all';
+type NotificationFocusTarget = 'controller-status' | 'low-battery' | 'mic-mute' | 'host-switch' | 'all';
 
 const HAPTICS_STEP = 20;
 const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
@@ -3889,7 +3889,8 @@ export function App() {
   const controllerToastEnabled = Boolean(snapshot?.settings.notifyControllerConnection);
   const lowBatteryToastEnabled = Boolean(snapshot?.settings.notifyLowBattery);
   const micMuteToastEnabled = Boolean(snapshot?.settings.notifyMicMute);
-  const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled || micMuteToastEnabled;
+  const personaToastEnabled = Boolean(snapshot?.settings.notifyPersonaChange);
+  const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled || micMuteToastEnabled || personaToastEnabled;
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const adaptiveTriggerOutputActive = Boolean(snapshot?.status?.adaptiveTriggerOutputRecent);
   const audioStatus = snapshot?.diagnostics.audioStatus;
@@ -4258,7 +4259,8 @@ export function App() {
   const overviewNotificationItems = [
     controllerToastEnabled ? { id: 'controller-status', label: 'Controller Status' } : null,
     lowBatteryToastEnabled ? { id: 'low-battery', label: 'Low Battery' } : null,
-    micMuteToastEnabled ? { id: 'mic-mute', label: 'Mic Mute' } : null
+    micMuteToastEnabled ? { id: 'mic-mute', label: 'Mic Mute' } : null,
+    personaToastEnabled ? { id: 'host-switch', label: 'Host Controller Switch' } : null
   ].filter((item): item is { id: NotificationFocusTarget; label: string } => Boolean(item));
   const overviewPowerSavingLabel = snapshot?.settings.controllerPowerSavingEnabled
     ? controllerPowerSavingActive
@@ -6435,6 +6437,13 @@ export function App() {
     ));
   }
 
+  function togglePersonaNotifications() {
+    if (!snapshot) return;
+    void runAction('notify-persona', () => (
+      window.bridge.setNotifyPersonaChange(!snapshot.settings.notifyPersonaChange)
+    ));
+  }
+
   function setPollingRateMode(mode: PollingRateMode) {
     void runAction('polling-rate', () => window.bridge.setPollingRateMode(mode));
   }
@@ -6694,6 +6703,22 @@ export function App() {
                       className={`switch ${micMuteToastEnabled ? 'on' : ''}`}
                       disabled={pendingAction !== null}
                       onClick={toggleMicMuteNotifications}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'host-switch' || notificationFocusTarget === 'all' ? 'settings-menu-row-highlight' : ''}`}>
+                    <div>
+                      <strong>Host Controller Switch</strong>
+                      <span>Toast when the bridge finishes switching to another host controller</span>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={personaToastEnabled}
+                      className={`switch ${personaToastEnabled ? 'on' : ''}`}
+                      disabled={pendingAction !== null}
+                      onClick={togglePersonaNotifications}
                     >
                       <span />
                     </button>

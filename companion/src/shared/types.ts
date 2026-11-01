@@ -106,6 +106,7 @@ export interface CompanionSettings {
   notifyControllerConnection: boolean;
   notifyLowBattery: boolean;
   notifyMicMute: boolean;
+  notifyPersonaChange: boolean;
   duplexMicEnabled: boolean;
   controllerPowerSavingEnabled: boolean;
   /** Linux only: when false, the DualSense touchpad is grabbed so it stops acting as a mouse. */

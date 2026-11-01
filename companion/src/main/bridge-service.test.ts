@@ -2187,6 +2187,62 @@ describe('BridgeService', () => {
     expect(snapshot.personaTransition?.to).toBe('ds4');
   });
 
+  it('notifies once when a host persona switch completes, unless turned off', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    const toasts: Array<{ title: string; body: string }> = [];
+    service.on('toast', (toast) => toasts.push(toast));
+    (service as unknown as { getDefaultRenderEndpointStatus(): Promise<unknown> }).getDefaultRenderEndpointStatus = vi.fn(
+      async () => ({ deviceName: 'Speakers', isBridgeEndpoint: false })
+    );
+    await poll(service);
+    expect(service.getSnapshot().settings.notifyPersonaChange).toBe(true);
+
+    await service.setHostPersonaMode('ds4');
+    expect(toasts).toEqual([]);
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'ds4',
+      supportedHostPersonaModesMask: 0x07
+    });
+    await poll(service);
+    await poll(service);
+    expect(toasts).toEqual([{ title: 'DS5 Bridge', body: 'Switched to DualShock 4 mode' }]);
+
+    await service.setNotifyPersonaChange(false);
+    await service.setHostPersonaMode('dualsense');
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    await poll(service);
+    await poll(service);
+    expect(toasts).toHaveLength(1);
+  });
+
+  it('names the DualSense Edge persona in switch messages', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, supportedHostPersonaModesMask: 0x87 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    (service as unknown as { getDefaultRenderEndpointStatus(): Promise<unknown> }).getDefaultRenderEndpointStatus = vi.fn(
+      async () => ({ deviceName: 'Speakers', isBridgeEndpoint: false })
+    );
+    await poll(service);
+
+    const snapshot = await service.setHostPersonaMode('dualsense-edge');
+    expect(snapshot.message).toBe('Switching to DualSense Edge mode');
+  });
+
   it('restores controller default output after a host persona transition reconnects', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
@@ -2572,6 +2628,9 @@ describe('BridgeService', () => {
 
     snapshot = await service.setNotifyMicMute(true);
     expect(snapshot.settings.notifyMicMute).toBe(true);
+
+    snapshot = await service.setNotifyPersonaChange(false);
+    expect(snapshot.settings.notifyPersonaChange).toBe(false);
   });
 
   describe('bridge restart reporting', () => {
