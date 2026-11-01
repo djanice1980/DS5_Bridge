@@ -806,7 +806,16 @@ we resolved it unilaterally on our side:
 - Our app now gates by lineage: fork commands require the LNXF answer; SetRadialDeadzones is
   sent to fork ≥ 1.18 **or upstream ≥ 1.21**, so the app works against your firmware.
 
-## 19. Your HID feature-report cache can serve a stale controller — ⚠️ with our planned fix
+## 19. Your HID feature-report cache can serve a stale controller — ❌ Withdrawn (our bug, not yours)
+
+**Correction (1.6.125 / fw 1.6.78).** This section was wrong and is kept only for the trail.
+Your companion has no app-side controller feature-report cache. The stale controller we saw
+was our own: the Linux app cached each USB controller's Bluetooth address by `/dev/hidrawN`
+path, and Linux hands a freed node to the next device plugged in, so a swapped controller
+inherited the previous one's address. Fixed in our app 1.6.125 by keying the cache on the HID
+instance (`0003:054C:0CE6.NNNN`, never reused within a boot). Nothing to take from here.
+
+Original text, as written at 1.6.111:
 
 Observation from the v1.7.0 review, for discussion. Your companion caches controller HID
 feature reports (pairing info, calibration blocks) keyed on the device handle and reuses
@@ -885,6 +894,20 @@ Deliberately NOT taken, with reasons: 0x39 audio carriers/batching (solves BT ai
 
 Also fixed while there, ours: SET_REPORT control-request output reports were dropped (item 20).
 
+## Backports taken from your 2.0 (at our 1.6.78 and 1.6.79)
+
+| Yours | Status in the fork |
+|---|---|
+| Transition-preserving input queue (ee0da45) | Taken at 1.6.78: motion coalesces, every button/touch edge keeps a slot, a rejected submission is retried first, finished IN transfers chain the next report. **Not taken:** the receive batch and the two-packet HCI cap -- the cap also paces our mic audio, and the queue alone closes the lost-tap hole. Fork-specific: the tester's input hold discards queued edges so a held PS press is not replayed |
+| CELT-only Opus (75cc3d6) | Taken at 1.6.79, files verbatim (`cmake/opus_*`, `relocate_opus_sections.cmake`, the placement test). Same encoder config as yours (CELT, 10 ms, complexity 0), so the same SILK/tonality wraps apply; ours reset via the fork's fault breadcrumb instead of a plain panic |
+| Steady-state firmware in SRAM (51de2da, 17fbaba) | Taken at 1.6.79: both relocation scripts, `ram_mem.c` and its test, the pico_double per-function lists, USB fast IRQ, the CRC table in SRAM with force-inlined helpers (3d72d58), CYW43 logging compiled out of release builds. Object lists are our own (different module set), plus fork hot paths found with a new `tools/sram-flash-calls.py` that lists every direct SRAM->flash call: `pico_util/queue.c` (our audio queues are the SDK's), `hci_dump.c`, `usbd_control.c`, two `usb_descriptors.c` helpers, and `memcmp`/`__memcpy_chk`/`__memset_chk` in `ram_mem.c`. Our guard is `cmake/verify_sram_runtime.cmake` (your `verify_core1_sram` structure, our symbol list, heap headroom from your 54,872 B startup figure) |
+| Heap-free Bluetooth output (a171103) | Taken at 1.6.79: `bounded_containers.h` verbatim and the container tests. Adapted to our queues: urgent slots sized for the 78-byte report, audio slots and the in-flight packet for our 398-byte local audio report, depths unchanged, report sizes `static_assert`ed at the producers. The classic-rumble mirror rewrites queued packets in place. Your feature-cache part did not apply (ours was already fixed-slot) |
+
+Noted while porting, for your awareness: every flash write goes through `flash_safe_execute`
+(core 1 parked, core 0 interrupts masked), so SRAM placement does not keep audio running
+during a write on either build; the gain is the steady state. BOOTSEL sampling every 100 ms
+pauses core 1 for roughly 10-20 us, the same on both.
+
 ---
 
-*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72; section 20 added at 1.6.120 / 1.6.75; 1.7.1 backports at 1.6.121 / 1.6.76.*
+*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72; section 20 added at 1.6.120 / 1.6.75; 1.7.1 backports at 1.6.121 / 1.6.76; §19 withdrawn and 2.0 backports at 1.6.126 / 1.6.79.*
