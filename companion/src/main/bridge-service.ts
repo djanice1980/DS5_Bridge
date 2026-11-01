@@ -170,6 +170,9 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
+// The battery level arrives a moment after the controller connects; the
+// connect toast waits this long for it before going out without it.
+const CONNECT_TOAST_BATTERY_WAIT_MS = 3000;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
 export const BUNDLED_FIRMWARE_VERSION = '1.6.80';
@@ -874,6 +877,11 @@ function normalizeHostPersonaMode(mode: HostPersonaMode): HostPersonaMode {
   return 'dualsense';
 }
 
+/** "80%", or "80% (charging)" while the controller charges. */
+function controllerBatteryText(batteryPercent: number, rawPowerState: number): string {
+  return rawPowerState === 0x01 ? `${batteryPercent}% (charging)` : `${batteryPercent}%`;
+}
+
 function hostPersonaModeLabel(mode: HostPersonaMode): string {
   if (mode === 'ds4') return 'DualShock 4';
   return mode === 'xbox' ? 'Xbox Controller' : 'DualSense';
@@ -1407,6 +1415,8 @@ export class BridgeService extends EventEmitter {
   private defaultRenderWasBridgeAtLastCheck = false;
   private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
+  /** Set while the connect toast waits for the first battery level. */
+  private connectToastDeadline: number | null = null;
   private lowBatteryToastActive = false;
   private shortcutFeaturePollRetryAt = 0;
   private shortcutActionQueue: Promise<void> = Promise.resolve();
@@ -4381,18 +4391,43 @@ export class BridgeService extends EventEmitter {
   private maybeEmitStatusToasts(status: BridgeStatusPayload): void {
     const settings = this.settingsStore.get();
     const controllerConnected = status.controllerConnected;
+    // The bridge keeps the last controller report across a disconnect, so the
+    // poll that first sees a reconnect can still carry the old battery level.
+    let connectedThisPoll = false;
 
     if (
       settings.notifyControllerConnection
       && this.previousControllerConnected !== null
       && this.previousControllerConnected !== controllerConnected
     ) {
-      this.emit('toast', {
-        title: 'DS5 Bridge',
-        body: controllerConnected ? 'Controller connected' : 'Controller disconnected'
-      } satisfies BridgeToast);
+      if (controllerConnected) {
+        this.connectToastDeadline = Date.now() + CONNECT_TOAST_BATTERY_WAIT_MS;
+        connectedThisPoll = true;
+      } else {
+        this.connectToastDeadline = null;
+        this.emit('toast', {
+          title: 'DS5 Bridge',
+          body: 'Controller disconnected'
+        } satisfies BridgeToast);
+      }
     }
     this.previousControllerConnected = controllerConnected;
+
+    if (
+      this.connectToastDeadline !== null
+      && !connectedThisPoll
+      && (status.batteryPercent !== null || Date.now() >= this.connectToastDeadline)
+    ) {
+      this.connectToastDeadline = null;
+      if (settings.notifyControllerConnection && controllerConnected) {
+        this.emit('toast', {
+          title: 'DS5 Bridge',
+          body: status.batteryPercent === null
+            ? 'Controller connected'
+            : `Controller connected — battery ${controllerBatteryText(status.batteryPercent, status.rawPowerState)}`
+        } satisfies BridgeToast);
+      }
+    }
 
     const lowBattery = controllerConnected
       && status.batteryPercent !== null
@@ -4415,6 +4450,7 @@ export class BridgeService extends EventEmitter {
       } satisfies BridgeToast);
     }
     this.previousControllerConnected = false;
+    this.connectToastDeadline = null;
     this.lowBatteryToastActive = false;
   }
 
