@@ -9,6 +9,8 @@
 
 #include "debug_config.h"
 #include "hci_cmd.h"
+#include "pico/platform/compiler.h"
+#include "pico/platform/sections.h"
 
 #if DS5_DEBUG_LOGS_ENABLED
 #include <cstdio>
@@ -115,9 +117,14 @@ inline constexpr auto make_crc32_table() {
     return table;
 }
 
-inline constexpr auto crc32_lookup_table = make_crc32_table();
+// Read for every byte of every Bluetooth output and audio packet, from SRAM send paths, so the
+// table lives in SRAM too. (Ported from upstream 2.0, 3d72d58.)
+inline constexpr std::array<uint32_t, 256> __not_in_flash("crc32_lookup_table")
+crc32_lookup_table = make_crc32_table();
 
-inline uint32_t crc32_seeded(const uint8_t *data, size_t size, const uint32_t seed) {
+// The checksum helpers run for every Bluetooth output report from SRAM send paths.
+// Force-inline them so GCC cannot outline a .part clone into flash.
+__force_inline uint32_t crc32_seeded(const uint8_t *data, size_t size, const uint32_t seed) {
     uint32_t crc = ~seed;
 
     while (size--) {
@@ -127,11 +134,11 @@ inline uint32_t crc32_seeded(const uint8_t *data, size_t size, const uint32_t se
     return ~crc;
 }
 
-inline uint32_t crc32(const uint8_t* data, size_t size) {
+__force_inline uint32_t crc32(const uint8_t* data, size_t size) {
     return crc32_seeded(data, size, 0xEADA2D49); // 0xA2 seed
 }
 
-inline bool fill_output_report_checksum(uint8_t* outputData, size_t len)
+__force_inline bool fill_output_report_checksum(uint8_t* outputData, size_t len)
 {
     if (outputData == nullptr || len < 4) {
         return false;

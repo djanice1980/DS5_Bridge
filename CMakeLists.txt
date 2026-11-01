@@ -67,6 +67,7 @@ add_executable(ds5-bridge
         src/watchdog_telemetry.cpp
         src/panic_hook.cpp
         src/fault_hooks.cpp
+        src/ram_mem.c
         src/audio.cpp
         src/bt.cpp
 )
@@ -163,6 +164,10 @@ target_compile_definitions(ds5-bridge PRIVATE
         # BOOTSEL polling floats QSPI CSn briefly; flash_safe_execute() must
         # park core 1 while that happens.
         PICO_FLASH_ASSUME_CORE1_SAFE=0
+        # Put TinyUSB's RP2 IRQ path (handler, buffer start and completion) in
+        # SRAM; every input-report completion otherwise ran from flash.
+        # (Ported from upstream 2.0, 51de2da.)
+        PICO_RP2040_USB_FAST_IRQ=1
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
@@ -201,6 +206,126 @@ if(ENABLE_COMPANION)
     # challenges/sequences, and a flash-backed enrollment record.
     target_link_libraries(ds5-bridge pico_sha256 pico_rand pico_flash hardware_flash)
 endif()
+
+# Run the firmware's steady-state work from SRAM, not through the 16 KB XIP cache. Code in
+# flash stalls on every cache miss, and stops entirely while the firmware writes flash
+# (settings, pairing keys). (Ported from upstream 2.0, 51de2da and 17fbaba, adapted to the
+# fork's object set.)
+#
+# Per-function relocations first: they cover the few routines whose objects stay in flash,
+# and they expect the original section names.
+function(relocate_to_ram _suffix _renames _comment)
+    add_custom_command(TARGET ds5-bridge PRE_LINK
+            COMMAND ${CMAKE_COMMAND}
+                    "-DOBJROOT=${CMAKE_BINARY_DIR}/CMakeFiles/ds5-bridge.dir"
+                    "-DOBJCOPY=${CMAKE_OBJCOPY}"
+                    "-DOBJDUMP=${CMAKE_OBJDUMP}"
+                    "-DSUFFIX=${_suffix}"
+                    "-DRENAMES=${_renames}"
+                    -P "${CMAKE_SOURCE_DIR}/cmake/relocate_to_ram.cmake"
+            COMMENT "${_comment}"
+            VERBATIM
+    )
+endfunction()
+
+relocate_to_ram(
+        src/rp2_common/hardware_irq/irq.c.o
+        ".text.irq_set_enabled=.time_critical.irq_set_enabled"
+        "Relocating the IRQ enable helper to SRAM"
+)
+# usb_descriptors.c stays in flash (enumeration only), but these are asked on every input
+# report. Found by tools/sram-flash-calls.py.
+relocate_to_ram(
+        src/usb_descriptors.c.o
+        ".text.host_persona_descriptors_verified=.time_critical.host_persona_descriptors_verified"
+        "Relocating host-persona verification to SRAM"
+)
+if(ENABLE_COMPANION)
+    relocate_to_ram(
+            src/usb_descriptors.c.o
+            ".text.host_bridge_companion_only=.time_critical.host_bridge_companion_only@.text.host_bridge_set_companion_only=.time_critical.host_bridge_set_companion_only"
+            "Relocating the companion-only USB mode flag to SRAM"
+    )
+endif()
+relocate_to_ram(
+        src/rp2_common/hardware_clocks/clocks.c.o
+        ".text.clock_get_hz=.time_critical.clock_get_hz"
+        "Relocating CYW43 bus clock query to SRAM"
+)
+# Core 1's double-precision math. The SRAM-resident Opus encoder calls cos per quantized band,
+# exp/log/acos/atan2 and double arithmetic per frame, and floor/sqrt per sample or band in both
+# codec directions. pico_double links these in flash by default, so every speaker frame left SRAM.
+relocate_to_ram(
+        src/rp2_common/pico_double/double_sci_m33.S.o
+        ".text.__wrap_sin_cos=.time_critical.double_sin_cos@.text.drrcore=.time_critical.double_range_reduce_core@.text.rtwopi=.time_critical.double_two_over_pi@.text.dpack=.time_critical.double_pack@.text.dreduce=.time_critical.double_reduce@.text.exptab=.time_critical.double_exptab@.text.__wrap_exp=.time_critical.double_exp@.text.__wrap_log=.time_critical.double_log@.text.trigtab=.time_critical.double_trigtab@.text.__wrap_atan2=.time_critical.double_atan2"
+        "Relocating Opus double sin/cos, exp, log and atan2 to SRAM"
+)
+relocate_to_ram(
+        src/rp2_common/pico_double/double_aeabi_dcp.S.o
+        ".text.__rp2350_dcp_engaged_state_save_restore=.time_critical.double_dcp_state@.text.__wrap___aeabi_dadd=.time_critical.double_add@.text.__wrap___aeabi_dsub=.time_critical.double_sub@.text.__wrap___aeabi_drsub=.time_critical.double_rsub@.text.__wrap___aeabi_dmul=.time_critical.double_mul@.text.ddiv_fast=.time_critical.double_div_fast@.text.__wrap___aeabi_ddiv=.time_critical.double_div@.text.sqrt_fast=.time_critical.double_sqrt_fast@.text.__wrap_sqrt=.time_critical.double_sqrt@.text.dclassify=.time_critical.double_classify@.text.__wrap___aeabi_d2f=.time_critical.double_to_float@.text.__wrap___aeabi_i2d=.time_critical.int_to_double@.text.double2int=.time_critical.double_to_int_impl@.text.__wrap___aeabi_d2iz=.time_critical.double_to_int@.text.__wrap___aeabi_dcmp=.time_critical.double_compare@.text.__wrap___aeabi_dcmpun=.time_critical.double_compare_unordered@.text.__wrap___aeabi_dcmpeq=.time_critical.double_compare_eq@.text.__wrap___aeabi_dcmplt=.time_critical.double_compare_lt@.text.__wrap___aeabi_dcmple=.time_critical.double_compare_le@.text.__wrap___aeabi_dcmpge=.time_critical.double_compare_ge@.text.__wrap___aeabi_dcmpgt=.time_critical.double_compare_gt"
+        "Relocating Opus double arithmetic and sqrt to SRAM"
+)
+relocate_to_ram(
+        src/rp2_common/pico_double/double_math.c.o
+        ".text.__wrap_floor=.time_critical.double_floor@.text.__wrap_acos=.time_critical.double_acos"
+        "Relocating Opus double floor and acos to SRAM"
+)
+
+# Whole objects whose code runs during play: the main loop and its phases, Bluetooth and USB
+# glue, game output, the companion runtime, the BTstack HCI/L2CAP/run loop, the CYW43 radio
+# driver, the TinyUSB device stack and the SDK timing, GPIO, PIO, watchdog and sync helpers.
+# Boot, pairing (SDP), flash storage, bootloader maintenance, USB descriptors and the failure
+# paths stay in flash. The script fails the build if an object is missing or keeps flash code.
+function(relocate_objects_to_ram _suffixes _comment)
+    add_custom_command(TARGET ds5-bridge PRE_LINK
+            COMMAND ${CMAKE_COMMAND}
+                    "-DOBJROOT=${CMAKE_BINARY_DIR}/CMakeFiles/ds5-bridge.dir"
+                    "-DOBJCOPY=${CMAKE_OBJCOPY}"
+                    "-DOBJDUMP=${CMAKE_OBJDUMP}"
+                    "-DSUFFIXES=${_suffixes}"
+                    -P "${CMAKE_SOURCE_DIR}/cmake/relocate_objects_to_ram.cmake"
+            COMMENT "${_comment}"
+            VERBATIM
+    )
+endfunction()
+
+relocate_objects_to_ram(
+        "src/main.cpp.o@src/bt.cpp.o@src/usb.cpp.o@src/audio.cpp.o@src/watchdog_telemetry.cpp.o@src/button_functions.cpp.o@src/dualsense_input_decoder.cpp.o@src/persona/host_persona.cpp.o@src/persona/dualsense_persona.cpp.o@src/persona/ds4_persona.cpp.o@src/persona/xusb360_persona.cpp.o@src/persona/xusb360_usb.cpp.o@src/controller_packet_compositor.cpp.o@src/controller_output_policy.cpp.o@src/controller_output_rumble_state.cpp.o@src/controller_output_state.cpp.o@src/haptics_test_signal.cpp.o"
+        "Relocating the firmware's runtime objects to SRAM"
+)
+if(ENABLE_COMPANION)
+    relocate_objects_to_ram(
+            "src/companion.cpp.o@src/host_bridge.cpp.o"
+            "Relocating the companion runtime objects to SRAM"
+    )
+endif()
+# Fork additions beyond upstream's lists, all found by tools/sram-flash-calls.py on the
+# per-packet path: hci_dump.c (every HCI packet), pico_util/queue.c (every audio packet, both
+# cores -- the fork's audio queues are the SDK's), and usbd_control.c (control transfers,
+# including the output reports Windows Steam sends as SET_REPORT).
+relocate_objects_to_ram(
+        "lib/btstack/src/hci.c.o@lib/btstack/src/hci_cmd.c.o@lib/btstack/src/hci_dump.c.o@lib/btstack/src/l2cap.c.o@lib/btstack/src/l2cap_signaling.c.o@lib/btstack/src/btstack_util.c.o@lib/btstack/src/btstack_run_loop.c.o@lib/btstack/src/btstack_linked_list.c.o@lib/btstack/src/btstack_memory.c.o@lib/btstack/src/btstack_memory_pool.c.o@src/rp2_common/pico_btstack/btstack_run_loop_async_context.c.o"
+        "Relocating the BTstack HCI, L2CAP and run loop to SRAM"
+)
+relocate_objects_to_ram(
+        "lib/cyw43-driver/src/cyw43_ll.c.o@lib/cyw43-driver/src/cyw43_ctrl.c.o@src/rp2_common/pico_cyw43_driver/cybt_shared_bus/cybt_shared_bus_driver.c.o@src/rp2_common/pico_cyw43_driver/cybt_shared_bus/cybt_shared_bus.c.o@src/rp2_common/pico_cyw43_driver/cyw43_bus_pio_spi.c.o@src/rp2_common/pico_cyw43_driver/btstack_hci_transport_cyw43.c.o@src/rp2_common/pico_cyw43_driver/cyw43_driver.c.o@src/rp2_common/pico_cyw43_arch/cyw43_arch.c.o@src/rp2_common/pico_cyw43_arch/cyw43_arch_poll.c.o"
+        "Relocating the CYW43 radio driver to SRAM"
+)
+relocate_objects_to_ram(
+        "lib/tinyusb/src/tusb.c.o@lib/tinyusb/src/common/tusb_fifo.c.o@lib/tinyusb/src/device/usbd.c.o@lib/tinyusb/src/device/usbd_control.c.o@lib/tinyusb/src/class/audio/audio_device.c.o@lib/tinyusb/src/class/hid/hid_device.c.o@lib/tinyusb/src/class/vendor/vendor_device.c.o@lib/tinyusb/src/portable/raspberrypi/rp2040/dcd_rp2040.c.o@lib/tinyusb/src/portable/raspberrypi/rp2040/rp2040_usb.c.o"
+        "Relocating the TinyUSB device stack to SRAM"
+)
+relocate_objects_to_ram(
+        "src/common/pico_time/time.c.o@src/common/pico_util/queue.c.o@src/rp2_common/hardware_timer/timer.c.o@src/rp2_common/hardware_gpio/gpio.c.o@src/rp2_common/hardware_pio/pio.c.o@src/rp2_common/hardware_watchdog/watchdog.c.o@src/rp2_common/pico_async_context/async_context_base.c.o@src/rp2_common/pico_async_context/async_context_poll.c.o@src/common/pico_sync/mutex.c.o@src/common/pico_sync/sem.c.o@src/common/pico_sync/critical_section.c.o@src/common/pico_sync/lock_core.c.o"
+        "Relocating SDK timing, GPIO, PIO, watchdog and sync helpers to SRAM"
+)
+
+# These strong RAM-resident definitions replace newlib's flash-backed memory operations.
+# Prevent the compiler from lowering their loops back into recursive calls to the functions
+# being defined.
+set_source_files_properties(src/ram_mem.c PROPERTIES COMPILE_OPTIONS
+        "-fno-builtin;-fno-tree-loop-distribute-patterns"
+)
 
 # Diagnostics live in one place. Quick presets:
 #   -DDS5_DIAGNOSTICS_PRESET=off    release default
@@ -251,6 +376,11 @@ if(DS5_ENABLE_FIRMWARE_LOGS)
             DS5_ENABLE_DEBUG_LOGS
             DS5_DEBUG_LOGS_ENABLED=1
     )
+else()
+    # Release builds have no stdio sink. The CYW43 driver's CYW43_PRINTF sites were the only
+    # printf callers, several of them inside the now SRAM-resident radio driver; compiling them
+    # out drops the SDK printf implementation from flash. (Ported from upstream 2.0, 75cc3d6.)
+    target_compile_definitions(ds5-bridge PRIVATE PICO_CYW43_LOGGING_ENABLED=0)
 endif()
 
 if(DS5_ENABLE_AUDIO_DEBUG_REPORTS)
@@ -333,8 +463,18 @@ target_link_options(ds5-bridge PRIVATE
         -Wl,--wrap=panic
 )
 
-# Check the final map after every link: Opus code, tables and state in SRAM,
-# diagnostic strings (if any survive) in flash.
+# Codec and resampler startup allocate 54,872 bytes: the restricted-CELT stereo encoder, the
+# mono mic decoder and both resamplers' preallocation. This is upstream 2.0's measured figure
+# (75cc3d6) for the identical configuration -- same Opus build, same create/Prealloc calls in
+# audio.cpp. Keep another 8 KiB after them so a successful link cannot become an OOM boot.
+set(DS5_KNOWN_STARTUP_HEAP_BYTES 54872)
+set(DS5_MIN_POST_STARTUP_HEAP_BYTES 8192)
+math(EXPR DS5_MIN_RUNTIME_HEAP_BYTES
+        "${DS5_KNOWN_STARTUP_HEAP_BYTES} + ${DS5_MIN_POST_STARTUP_HEAP_BYTES}"
+)
+
+# Check the final image after every link: Opus code, tables and state in SRAM, diagnostic
+# strings (if any survive) in flash, the steady-state paths in SRAM, and heap headroom.
 add_custom_command(TARGET ds5-bridge POST_BUILD
         COMMAND ${CMAKE_COMMAND}
                 "-DMAP=$<TARGET_FILE:ds5-bridge>.map"
@@ -342,13 +482,21 @@ add_custom_command(TARGET ds5-bridge POST_BUILD
         COMMAND ${CMAKE_COMMAND}
                 "-DMAP=$<TARGET_FILE:ds5-bridge>.map"
                 -P "${CMAKE_SOURCE_DIR}/cmake/verify_opus_strings.cmake"
-        COMMENT "Verifying Opus SRAM placement"
+        COMMAND ${CMAKE_COMMAND}
+                "-DNM=${CMAKE_NM}"
+                "-DELF=$<TARGET_FILE:ds5-bridge>"
+                "-DCOMPANION_ENABLED=${ENABLE_COMPANION}"
+                "-DMIN_HEAP_BYTES=${DS5_MIN_RUNTIME_HEAP_BYTES}"
+                "-DKNOWN_STARTUP_HEAP_BYTES=${DS5_KNOWN_STARTUP_HEAP_BYTES}"
+                -P "${CMAKE_SOURCE_DIR}/cmake/verify_sram_runtime.cmake"
+        COMMENT "Verifying Opus placement, SRAM hot paths and runtime heap headroom"
         VERBATIM
 )
 set_property(TARGET ds5-bridge APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_SOURCE_DIR}/cmake/verify_opus_sections.cmake"
         "${CMAKE_SOURCE_DIR}/cmake/opus_sections.cmake"
         "${CMAKE_SOURCE_DIR}/cmake/verify_opus_strings.cmake"
+        "${CMAKE_SOURCE_DIR}/cmake/verify_sram_runtime.cmake"
 )
 
 pico_add_extra_outputs(ds5-bridge)
