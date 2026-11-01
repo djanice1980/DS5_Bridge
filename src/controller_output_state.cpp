@@ -30,6 +30,9 @@ bool cached_trigger_power_valid = false;
 bool player_led_enabled = true;
 uint8_t cached_player_leds = 0;
 bool cached_player_leds_valid = false;
+// The host released the player LEDs on purpose; no fallback until it sets
+// a pattern again or the controller reconnects (upstream 9ab5491).
+bool host_released_player_leds = false;
 
 uint8_t normalize_speaker_gain(uint8_t gain) {
     return std::min<uint8_t>(7, std::max<uint8_t>(1, gain));
@@ -89,14 +92,33 @@ void cache_player_leds_from_payload(uint8_t const *payload, uint8_t len) {
     if ((flag1 & kFlag1ReleaseLeds) != 0) {
         cached_player_leds = 0;
         cached_player_leds_valid = false;
+        host_released_player_leds = true;
         return;
     }
-    if (len <= kPlayerLedsOffset || (flag1 & kFlag1PlayerIndicatorControlEnable) == 0) {
+    if ((flag1 & kFlag1PlayerIndicatorControlEnable) == 0) {
         return;
     }
 
-    cached_player_leds = payload[kPlayerLedsOffset];
+    // A short report reaches the controller zero-padded, so a pattern byte
+    // past its end is 0 there too (upstream d2b7323).
+    cached_player_leds = len > kPlayerLedsOffset ? payload[kPlayerLedsOffset] : 0;
     cached_player_leds_valid = true;
+    host_released_player_leds = false;
+}
+
+// With Player LEDs on, the host's pattern always wins. Until a game or Steam
+// sets one, show player 1 so the LEDs aren't dark (upstream 9ab5491). Forcing
+// player 1 over the host's pattern instead made the two alternate.
+bool enabled_player_led_pattern(uint8_t &pattern) {
+    if (cached_player_leds_valid) {
+        pattern = cached_player_leds;
+        return true;
+    }
+    if (host_released_player_leds) {
+        return false;
+    }
+    pattern = kPlayerLed1Instant;
+    return true;
 }
 
 void release_player_led_policy(uint8_t *payload) {
@@ -113,7 +135,8 @@ void restore_player_led_policy(uint8_t *payload) {
     if (payload == nullptr) {
         return;
     }
-    if (!cached_player_leds_valid) {
+    uint8_t pattern = 0;
+    if (!enabled_player_led_pattern(pattern)) {
         release_player_led_policy(payload);
         return;
     }
@@ -122,7 +145,7 @@ void restore_player_led_policy(uint8_t *payload) {
         (payload[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1ReleaseLeds))
         | kFlag1PlayerIndicatorControlEnable
     );
-    payload[kPlayerLedsOffset] = cached_player_leds;
+    payload[kPlayerLedsOffset] = pattern;
 }
 
 void apply_current_player_led_policy(uint8_t *payload) {
@@ -196,6 +219,7 @@ void controller_output_state_reset_cached_triggers() {
 void controller_output_state_reset_cached_player_leds() {
     cached_player_leds = 0;
     cached_player_leds_valid = false;
+    host_released_player_leds = false;
 }
 
 void controller_output_state_reset() {
@@ -261,7 +285,15 @@ void controller_output_state_strip_zero_classic_rumble(uint8_t *payload, uint16_
 }
 
 void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len) {
-    if (data == nullptr || len < kCommonPayloadSize) {
+    if (data == nullptr) {
+        return;
+    }
+    // Cache from the host's own report, short or not: hidapi hosts on Linux
+    // and macOS send short reports, which still set the controller's player
+    // LEDs. state_data also holds the bridge's player 1 fallback, which must
+    // never count as a host pattern (upstream 9ab5491, d2b7323).
+    cache_player_leds_from_payload(data, len);
+    if (len < kCommonPayloadSize) {
         return;
     }
 
@@ -303,8 +335,6 @@ void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len
             & static_cast<uint8_t>(~kFlag1PlayerIndicatorControlEnable)
         );
         state_data[kPlayerLedsOffset] = 0;
-        cached_player_leds = 0;
-        cached_player_leds_valid = false;
     }
 
     copy_payload_range_if_allowed(
@@ -416,7 +446,6 @@ void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len
         3
     );
 
-    cache_player_leds_from_payload(state_data, sizeof(state_data));
     clear_mic_control(state_data);
     clamp_speaker_volume();
     apply_current_player_led_policy(state_data);
@@ -497,7 +526,8 @@ bool controller_output_state_copy_player_led_report(uint8_t *destination, uint16
         return true;
     }
 
-    if (!cached_player_leds_valid) {
+    uint8_t pattern = 0;
+    if (!enabled_player_led_pattern(pattern)) {
         return false;
     }
 
@@ -505,7 +535,7 @@ bool controller_output_state_copy_player_led_report(uint8_t *destination, uint16
         (destination[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1ReleaseLeds))
         | kFlag1PlayerIndicatorControlEnable
     );
-    destination[kPlayerLedsOffset] = cached_player_leds;
+    destination[kPlayerLedsOffset] = pattern;
     return true;
 }
 
