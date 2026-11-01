@@ -34,6 +34,11 @@ bool bt_disconnect();
 bool bt_power_off_controller();
 bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes);
 uint16_t bt_idle_disconnect_timeout_minutes();
+// Largest reports the Bluetooth output queues accept, excluding the 0xA2 frame byte. Queue
+// storage is fixed at these sizes, so nothing on the send path allocates; a longer report is
+// refused, never truncated.
+#define BT_OUTPUT_REPORT_MAX_SIZE 78
+#define BT_AUDIO_REPORT_MAX_SIZE 398
 void bt_write(uint8_t* data,uint16_t len);
 bool bt_write_classified_output(uint8_t* data,uint16_t len);
 bool bt_sanitize_host_speaker_amp_ownership(uint8_t* data,uint16_t len);

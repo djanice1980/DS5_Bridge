@@ -9,11 +9,10 @@
 
 #include "bt.h"
 
-#include <queue>
 #include <utility>
-#include <vector>
 
 #include "audio.h"
+#include "bounded_containers.h"
 #include "controller_packet_compositor.h"
 #include "feature_report_cache.h"
 #include "controller_output_policy.h"
@@ -158,9 +157,6 @@
     } \
 } while (0)
 
-using std::vector;
-using std::queue;
-
 enum OutputPacketClass : uint8_t {
     OutputPacketUrgent = 1,
     OutputPacketAudio = 2,
@@ -207,8 +203,19 @@ enum OutputTraceTransform : uint8_t {
     OutputTraceTransformState = 0x20,
 };
 
-struct output_packet {
-    vector<uint8_t> data;
+// Packet storage is inline and the queues are fixed rings (structure from upstream a171103),
+// so no enqueue, send or rumble mirror runs the allocator -- several of those run with
+// queue_lock held. Slots hold the framed report (0xA2 + report); state and urgent reports are
+// 78 bytes, the local audio report 398, and the single in-flight send packet takes either.
+#define OUTPUT_PACKET_MAX_SIZE (BT_OUTPUT_REPORT_MAX_SIZE + 1)
+#define AUDIO_PACKET_MAX_SIZE (BT_AUDIO_REPORT_MAX_SIZE + 1)
+#define CONTROL_PACKET_MAX_SIZE 64
+static_assert(DS_OUTPUT_REPORT_BT_SIZE <= BT_OUTPUT_REPORT_MAX_SIZE);
+static_assert(OUTPUT_PACKET_MAX_SIZE <= AUDIO_PACKET_MAX_SIZE);
+
+template <std::size_t Capacity>
+struct basic_output_packet {
+    ds5::InlineBytes<Capacity> data;
     uint32_t enqueue_time_us;
     uint8_t packet_class;
     uint8_t report_id;
@@ -217,10 +224,31 @@ struct output_packet {
     uint8_t trace_detail1;
     uint8_t trace_detail2;
     uint8_t trace_detail3;
+
+    template <std::size_t OtherCapacity>
+    [[nodiscard]] bool copy_from(basic_output_packet<OtherCapacity> const &other) {
+        if (!data.assign(other.data.data(), other.data.size())) {
+            return false;
+        }
+        enqueue_time_us = other.enqueue_time_us;
+        packet_class = other.packet_class;
+        report_id = other.report_id;
+        reason = other.reason;
+        trace_detail0 = other.trace_detail0;
+        trace_detail1 = other.trace_detail1;
+        trace_detail2 = other.trace_detail2;
+        trace_detail3 = other.trace_detail3;
+        return true;
+    }
 };
 
+using output_packet = basic_output_packet<OUTPUT_PACKET_MAX_SIZE>;
+// Audio slots and the in-flight send packet share one type, so dequeuing audio is a copy
+// between equal capacities.
+using output_send_packet = basic_output_packet<AUDIO_PACKET_MAX_SIZE>;
+
 struct control_packet {
-    vector<uint8_t> data;
+    ds5::InlineBytes<CONTROL_PACKET_MAX_SIZE> data;
     uint32_t enqueue_time_us;
     uint8_t report_id;
     bool coalescible;
@@ -249,7 +277,13 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void l2cap_packet_handler_cold(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void handle_l2cap_can_send_now(uint8_t *packet);
-static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet);
+// Always inlined: the scheduler frames coalesced state reports from SRAM.
+template <std::size_t Capacity>
+static inline __attribute__((always_inline)) bool build_interrupt_output_packet(
+    uint8_t *data,
+    uint16_t len,
+    ds5::InlineBytes<Capacity> &packet
+);
 static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t reason);
@@ -260,7 +294,7 @@ static void request_control_can_send_if_needed(bool should_request_send);
 static bool headset_audio_send_window_closed_locked(uint32_t now);
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control);
 static void init_state_report(uint8_t *report);
-static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
+static bool select_next_output_packet_locked(output_send_packet &packet, uint32_t now);
 static bool audio_output_route_protected();
 static bool output_report_payload(
     uint8_t const *data,
@@ -348,9 +382,12 @@ static bool bt_rssi_request_pending = false;
 static uint32_t bt_rssi_last_request_us = 0;
 // Feature reports live in the fixed-slot cache (feature_report_cache.cpp) -- the map that
 // used to sit here was the only varying-size heap user on a callback path.
-static queue<output_packet> urgent_queue;
-static queue<output_packet> audio_queue;
-static vector<control_packet> control_queue;
+static ds5::BoundedDeque<output_packet, URGENT_SEND_QUEUE_MAX_DEPTH> urgent_queue;
+static ds5::BoundedDeque<output_send_packet, AUDIO_SEND_QUEUE_MAX_DEPTH> audio_queue;
+static ds5::BoundedDeque<control_packet, CONTROL_SEND_QUEUE_MAX_DEPTH> control_queue;
+// The packet being handed to l2cap_send. Static rather than a stack local in the
+// CAN_SEND_NOW handler: it is the size of the largest audio report.
+static output_send_packet interrupt_send_packet;
 static uint8_t state_pending_report[DS_OUTPUT_REPORT_BT_SIZE];
 static bool state_pending = false;
 static uint32_t state_pending_since_us = 0;
@@ -391,10 +428,9 @@ static void update_max_u32(uint32_t &current, uint32_t candidate) {
     }
 }
 
-static void clear_packet_queue(queue<output_packet> &packets) {
-    while (!packets.empty()) {
-        packets.pop();
-    }
+template <typename Queue>
+static void clear_packet_queue(Queue &packets) {
+    packets.clear();
 }
 
 static bool control_pending_locked() {
@@ -571,7 +607,7 @@ static uint8_t output_trace_selected_flag(uint8_t packet_class) {
 }
 
 static void set_output_trace_details_locked(
-    output_packet &packet,
+    output_send_packet &packet,
     uint32_t now,
     uint8_t critical_depth,
     uint8_t audio_depth,
@@ -2955,7 +2991,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
     }
 }
 
-static __attribute__((noinline, noclone, optimize("O2"))) void __not_in_flash_func(note_output_packet_sent)(const output_packet &packet, uint32_t now) {
+static __attribute__((noinline, noclone, optimize("O2"))) void __not_in_flash_func(note_output_packet_sent)(const output_send_packet &packet, uint32_t now) {
     const uint32_t age_us = packet_age_us(now, packet.enqueue_time_us);
     if (last_bt_send_us != 0) {
         update_max_u32(output_counters.bt_send_gap_max_us, packet_age_us(now, last_bt_send_us));
@@ -3016,7 +3052,7 @@ static __attribute__((noinline, noclone, optimize("O2"))) void __not_in_flash_fu
     consecutive_audio_sends = 0;
 }
 
-static __attribute__((noinline, noclone, optimize("O2"))) bool __not_in_flash_func(select_next_output_packet_locked)(output_packet &packet, uint32_t now) {
+static __attribute__((noinline, noclone, optimize("O2"))) bool __not_in_flash_func(select_next_output_packet_locked)(output_send_packet &packet, uint32_t now) {
     if (!output_pending_locked()) {
         return false;
     }
@@ -3027,8 +3063,9 @@ static __attribute__((noinline, noclone, optimize("O2"))) bool __not_in_flash_fu
     output_trace_queue_details_locked(trace_critical_depth, trace_audio_depth, trace_route_flags);
 
     if (!urgent_queue.empty()) {
-        packet = std::move(urgent_queue.front());
-        urgent_queue.pop();
+        // Queued reports always fit the larger in-flight send buffer.
+        (void)packet.copy_from(urgent_queue.front());
+        urgent_queue.pop_front();
     } else {
         // Controller state first, audio otherwise.
         //
@@ -3047,8 +3084,8 @@ static __attribute__((noinline, noclone, optimize("O2"))) bool __not_in_flash_fu
             if (audio_queue.empty()) {
                 return false;
             }
-            packet = std::move(audio_queue.front());
-            audio_queue.pop();
+            (void)packet.copy_from(audio_queue.front());
+            audio_queue.pop_front();
         } else {
             // No legacy state_send_blocked_by_audio veto here either. During continuous audio
             // that window is effectively always "recent", so honouring it would block every
@@ -3089,8 +3126,8 @@ static bool select_next_control_packet_locked(control_packet &packet, uint32_t n
         return false;
     }
 
-    packet = std::move(control_queue.front());
-    control_queue.erase(control_queue.begin());
+    packet = control_queue.front();
+    control_queue.pop_front();
     audio_debug_note_bt_event(
         BtAudioDebugControlSend,
         packet.data.empty() ? 0 : packet.data[0],
@@ -3341,7 +3378,11 @@ static __attribute__((optimize("O2"))) void __not_in_flash_func(handle_l2cap_can
         return;
     }
 
-    output_packet next_packet{};
+    // l2cap_send can re-enter BTstack (the CYW43 transport reports PACKET_SENT synchronously),
+    // but only a channel already waiting for CAN_SEND_NOW gets an event, and this channel's
+    // request was consumed to call us. Every BTstack caller is on core 0, so nothing re-arms
+    // it before the trace below has read the packet.
+    output_send_packet &next_packet = interrupt_send_packet;
     const uint32_t now = time_us_32();
     critical_section_enter_blocking(&queue_lock);
     if (!select_next_output_packet_locked(next_packet, now)) {
@@ -3399,8 +3440,18 @@ static __attribute__((optimize("O2"))) void __not_in_flash_func(handle_l2cap_can
     request_control_can_send_if_needed(should_request_control);
 }
 
-static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet) {
-    packet.assign(len + 1, 0);
+template <std::size_t Capacity>
+static inline __attribute__((always_inline)) bool build_interrupt_output_packet(
+    uint8_t *data,
+    uint16_t len,
+    ds5::InlineBytes<Capacity> &packet
+) {
+    if (data == nullptr || !packet.assign_fill(len + 1u, 0)) {
+        DS5_LOG("[L2CAP bt_write] Refusing output report of length %u\n",
+            static_cast<unsigned>(len));
+        packet.clear();
+        return false;
+    }
     packet[0] = 0xA2;
     memcpy(packet.data() + 1, data, len);
     if (!fill_output_report_checksum(packet.data() + 1, len)) {
@@ -3454,12 +3505,13 @@ static void request_control_if_audio_window_open_locked(uint32_t now, bool &shou
     should_request_control = control_pending_locked() && !headset_audio_send_window_closed_locked(now);
 }
 
+template <typename Packet>
 static bool make_output_packet(
     uint8_t *data,
     uint16_t len,
     uint8_t packet_class,
     uint8_t reason,
-    output_packet &packet
+    Packet &packet
 ) {
     if (hid_interrupt_cid == 0) {
         return false;
@@ -3487,9 +3539,9 @@ static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason) {
         mirror_pending_classic_rumble_locked(data, len);
     }
     while (urgent_queue.size() >= URGENT_SEND_QUEUE_MAX_DEPTH) {
-        urgent_queue.pop();
+        urgent_queue.pop_front();
     }
-    urgent_queue.push(std::move(packet));
+    (void)urgent_queue.push_back(packet);
     critical_section_exit(&queue_lock);
     request_can_send_if_needed(should_request_send);
     return true;
@@ -3500,7 +3552,10 @@ static bool make_control_packet(uint8_t const *data, uint16_t len, bool coalesci
         return false;
     }
 
-    packet.data.assign(data, data + len);
+    if (!packet.data.assign(data, len)) {
+        DS5_LOG("[L2CAP] Refusing control packet of length %u\n", static_cast<unsigned>(len));
+        return false;
+    }
     packet.enqueue_time_us = time_us_32();
     packet.report_id = len > 1 ? data[1] : 0;
     packet.coalescible = coalescible && len > 1;
@@ -3529,7 +3584,7 @@ static bool enqueue_control_packet(uint8_t const *data, uint16_t len, bool coale
     if (packet.coalescible) {
         for (control_packet &queued : control_queue) {
             if (same_control_report_target(queued, packet)) {
-                queued = std::move(packet);
+                queued = packet;
                 request_control_if_audio_window_open_locked(now, should_request_send);
                 critical_section_exit(&queue_lock);
                 request_control_can_send_if_needed(should_request_send);
@@ -3538,9 +3593,9 @@ static bool enqueue_control_packet(uint8_t const *data, uint16_t len, bool coale
         }
     }
     while (control_queue.size() >= CONTROL_SEND_QUEUE_MAX_DEPTH) {
-        control_queue.erase(control_queue.begin());
+        control_queue.pop_front();
     }
-    control_queue.push_back(std::move(packet));
+    (void)control_queue.push_back(packet);
     request_control_if_audio_window_open_locked(now, should_request_send);
     critical_section_exit(&queue_lock);
     request_control_can_send_if_needed(should_request_send);
@@ -3700,8 +3755,9 @@ static bool mirror_classic_rumble_in_report(
     return true;
 }
 
+template <typename Packet>
 static bool mirror_classic_rumble_in_packet(
-    output_packet &packet,
+    Packet &packet,
     uint8_t const *source,
     uint16_t source_len
 ) {
@@ -3717,19 +3773,16 @@ static bool mirror_classic_rumble_in_packet(
     return fill_output_report_checksum(report, report_len);
 }
 
+// Rewrites every queued packet in place; order and depth are unchanged.
+template <typename Queue>
 static void mirror_packet_queue_classic_rumble_locked(
-    queue<output_packet> &packets,
+    Queue &packets,
     uint8_t const *source,
     uint16_t source_len
 ) {
-    queue<output_packet> scrubbed;
-    while (!packets.empty()) {
-        output_packet packet = std::move(packets.front());
-        packets.pop();
+    for (auto &packet : packets) {
         (void)mirror_classic_rumble_in_packet(packet, source, source_len);
-        scrubbed.push(std::move(packet));
     }
-    packets = std::move(scrubbed);
 }
 
 static void mirror_pending_classic_rumble_locked(uint8_t const *data, uint16_t len) {
@@ -4376,7 +4429,7 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
 }
 
 bool __not_in_flash_func(bt_write_audio_stream)(uint8_t *data, uint16_t len) {
-    output_packet packet{};
+    output_send_packet packet{};
     if (!make_output_packet(data, len, OutputPacketAudio, OutputReasonAudioStream, packet)) {
         return false;
     }
@@ -4411,10 +4464,10 @@ bool __not_in_flash_func(bt_write_audio_stream)(uint8_t *data, uint16_t len) {
             );
         }
 #endif
-        audio_queue.pop();
+        audio_queue.pop_front();
         output_counters.audio_drop_oldest_count++;
     }
-    audio_queue.push(std::move(packet));
+    (void)audio_queue.push_back(packet);
     output_counters.audio_0x36_enqueued_count++;
     update_queue_depth_counters_locked();
     output_trace_queue_details_locked(trace_critical_depth, trace_audio_depth, trace_route_flags);

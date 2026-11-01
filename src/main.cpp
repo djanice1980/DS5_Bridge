@@ -106,6 +106,7 @@ static bool companion_lightbar_override_active() {
 
 void controller_output_submit_usb_payload(uint8_t const *payload, uint16_t payload_len) {
     uint8_t outputData[78]{};
+    static_assert(sizeof(outputData) <= BT_OUTPUT_REPORT_MAX_SIZE, "output report exceeds the Bluetooth queue slot");
     controller_packet_init_bt_output_report(outputData, reportSeqCounter);
     uint16_t payloadLen = payload_len;
     if (payloadLen > sizeof(outputData) - 3) {

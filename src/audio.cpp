@@ -34,6 +34,7 @@
 #define OUTPUT_CHANNELS   2
 #define SAMPLE_SIZE       64
 #define REPORT_SIZE       398
+static_assert(REPORT_SIZE <= BT_AUDIO_REPORT_MAX_SIZE, "audio report exceeds the Bluetooth audio queue slot");
 #define REPORT_ID         0x36
 #define AUDIO_SECTION_ENABLE_MASK 0b11111111
 #define DEFAULT_HAPTICS_BUFFER_LENGTH 64

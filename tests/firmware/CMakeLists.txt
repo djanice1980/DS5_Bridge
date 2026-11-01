@@ -79,3 +79,7 @@ target_compile_definitions(ds5_ram_mem PRIVATE
 add_executable(ram_mem_test ram_mem_test.cpp)
 target_link_libraries(ram_mem_test PRIVATE ds5_ram_mem)
 add_test(NAME ram_mem_test COMMAND ram_mem_test)
+
+add_executable(bounded_containers_test bounded_containers_test.cpp)
+target_include_directories(bounded_containers_test PRIVATE ../../src)
+add_test(NAME bounded_containers_test COMMAND bounded_containers_test)
