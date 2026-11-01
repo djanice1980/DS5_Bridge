@@ -10534,6 +10534,13 @@ export function App() {
                 <div className="settings-menu-link-copy" style={{ padding: '2px 4px 12px' }}>
                   <strong>DS5 Bridge</strong>
                   <span>Version {appVersion || '—'}</span>
+                  <span>
+                    {snapshot.status?.firmwareVersion
+                      ? `Firmware ${snapshot.status.firmwareVersion}`
+                      : snapshot.state === 'incompatible'
+                        ? 'Firmware update required'
+                        : 'Firmware not connected'}
+                  </span>
                 </div>
                 <button
                   type="button"
