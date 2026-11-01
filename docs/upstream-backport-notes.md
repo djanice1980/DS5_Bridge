@@ -903,6 +903,16 @@ Also fixed while there, ours: SET_REPORT control-request output reports were dro
 | Steady-state firmware in SRAM (51de2da, 17fbaba) | Taken at 1.6.79: both relocation scripts, `ram_mem.c` and its test, the pico_double per-function lists, USB fast IRQ, the CRC table in SRAM with force-inlined helpers (3d72d58), CYW43 logging compiled out of release builds. Object lists are our own (different module set), plus fork hot paths found with a new `tools/sram-flash-calls.py` that lists every direct SRAM->flash call: `pico_util/queue.c` (our audio queues are the SDK's), `hci_dump.c`, `usbd_control.c`, two `usb_descriptors.c` helpers, and `memcmp`/`__memcpy_chk`/`__memset_chk` in `ram_mem.c`. Our guard is `cmake/verify_sram_runtime.cmake` (your `verify_core1_sram` structure, our symbol list, heap headroom from your 54,872 B startup figure) |
 | Heap-free Bluetooth output (a171103) | Taken at 1.6.79: `bounded_containers.h` verbatim and the container tests. Adapted to our queues: urgent slots sized for the 78-byte report, audio slots and the in-flight packet for our 398-byte local audio report, depths unchanged, report sizes `static_assert`ed at the producers. The classic-rumble mirror rewrites queued packets in place. Your feature-cache part did not apply (ours was already fixed-slot) |
 
+## Backports taken from your 2.0.1 (at our 1.6.80)
+
+| Yours | Status in the fork |
+|---|---|
+| Mute button reaches the host in Normal mode (1c8c00f) | Taken, with your guard |
+| Held PS stays held (c1906b4) + gate reset on disconnect (d2b7323) | Taken: `home_chord_gate.h` and its test verbatim. **One addition, which applies to yours too:** `step()` decides the host's PS bit from the physical button, but a dynamic chord can use PS as its *target* button (Fn + PS). `process_dynamic_chord_bindings` clears the bit for that without reporting `home_chord_consumed` (the starter isn't PS), so the gate puts PS back -- at once with the gate off, after 250 ms with it on. Our `apply_home_chord_gate` passes `home_chord_consumed \|\| (physical_home_pressed && bit already cleared)` as the consumed flag |
+| DS4 motion time in DS4 ticks (6f29f38) + 16-bit resync gap (d2b7323) | Taken with the test; our encoder had the same raw copy |
+| Player 1 fallback (9ab5491) + short-report caching (d2b7323) | Taken with the tests. Our BT state path only forwards host patterns, so the fallback reaches the controller through the audio snapshot and the lightbar report, as on yours |
+| Control SET_REPORT output (cef1797) | Already ours since 1.6.75 (item 20); took your guard idea (40f08f6) against our code |
+
 Noted while porting, for your awareness: every flash write goes through `flash_safe_execute`
 (core 1 parked, core 0 interrupts masked), so SRAM placement does not keep audio running
 during a write on either build; the gain is the steady state. BOOTSEL sampling every 100 ms
@@ -910,4 +920,4 @@ pauses core 1 for roughly 10-20 us, the same on both.
 
 ---
 
-*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72; section 20 added at 1.6.120 / 1.6.75; 1.7.1 backports at 1.6.121 / 1.6.76; §19 withdrawn and 2.0 backports at 1.6.126 / 1.6.79.*
+*Generated at companion 1.6.104 / firmware 1.6.68; sections 18–19 added at 1.6.111 / 1.6.71; backports section at 1.6.112 / 1.6.72; section 20 added at 1.6.120 / 1.6.75; 1.7.1 backports at 1.6.121 / 1.6.76; §19 withdrawn and 2.0 backports at 1.6.126 / 1.6.79; 2.0.1 backports at 1.6.80.*
