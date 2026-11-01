@@ -458,6 +458,16 @@ void assert_persona_switch_quiets_input_only(std::filesystem::path const &root) 
     ) {
         throw std::runtime_error("DS4 native probes must be able to GET_REPORT the current input report");
     }
+
+    // TinyUSB strips the ID from a control SET_REPORT(Output), which is how Steam on Windows
+    // writes output (backport note 20, fw 1.6.75; upstream 40f08f6 guards their port of it).
+    if (
+        set_report_callback.find("if (report_id == 0x02 && report_type == HID_REPORT_TYPE_OUTPUT) {") == std::string::npos
+        || set_report_callback.find("output_report[0] = 0x02;") == std::string::npos
+        || set_report_callback.find("controller_output_submit_usb_payload(output_report + 1, copy_len);") == std::string::npos
+    ) {
+        throw std::runtime_error("DualSense personas must submit output report 0x02 sent as a control SET_REPORT");
+    }
 }
 
 void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root) {
