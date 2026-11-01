@@ -34,6 +34,8 @@
 // lineages apart -- shared STATUS bytes could be claimed by upstream at any release, but an
 // id they never answer cannot false-positive: the reply must also carry the "LNXF" magic.
 #define COMPANION_REPORT_FORK_INFO 0x60
+// Restart history beyond the identity report's breadcrumb (crash count, previous uptime).
+#define COMPANION_REPORT_RESET_RECORD 0x61
 #define COMPANION_PAYLOAD_SIZE 63
 
 enum CompanionTriggerTraceStage : uint8_t {

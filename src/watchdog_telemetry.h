@@ -69,6 +69,12 @@ struct WatchdogTelemetrySnapshot {
     // First argument register at the fault. For the mutex crash this is the mutex pointer,
     // which is what separates "the pointer is garbage" from "its contents are".
     uint32_t prior_fault_arg0;
+    // Uptime of the previous boot at its last breadcrumb, in seconds. A watchdog reset lands
+    // within a second of that, so it is the uptime the bridge reached before it went down.
+    uint32_t prior_uptime_s;
+    // Abnormal resets in a row, counting the one that started this boot. Zero after a power-on
+    // or a flash update; a bridge stuck in a crash loop climbs instead of reading "1" each time.
+    uint8_t consecutive_abnormal_resets;
 };
 
 // Capture must happen before watchdog_enable() overwrites the SDK reset marker.

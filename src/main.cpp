@@ -9,6 +9,7 @@
 #include "bsp/board_api.h"
 #include "button_functions.h"
 #include "bt.h"
+#include "controller_input_delivery_queue.h"
 #include "controller_packet_compositor.h"
 #include "controller_output_policy.h"
 #include "controller_output_submit.h"
@@ -214,10 +215,29 @@ std::array<uint8_t, kNeutralDualSenseUsbInputReport.size()> interrupt_in_data =
     kNeutralDualSenseUsbInputReport;
 
 critical_section_t report_cs;
+// Only used while the persona re-enumerates: no endpoint exists then, so the first mounted
+// report is the latest state rather than a backlog. Otherwise input travels by the queue.
 volatile bool report_dirty = false;
 BridgeControllerState interrupt_in_state{};
 static volatile bool host_input_waiting_for_mount = false;
 static volatile uint32_t host_input_fallback_until_us = 0;
+
+// One radio poll can deliver several controller reports back to back. With a single "latest
+// state" slot, a press and its release arriving in the same burst left only the release for
+// USB, and the press never reached the host. Distinct button/contact transitions each take a
+// slot here; continuous motion shares one, and every queued edge goes out with the newest
+// stick positions.
+static constexpr std::size_t HOST_INPUT_QUEUE_CAPACITY = 8;
+static ds5::ControllerInputDeliveryQueue<HOST_INPUT_QUEUE_CAPACITY> host_input_queue{};
+// A report the USB class rejected. It goes out before anything queued.
+static bool host_input_retry_pending = false;
+static BridgeControllerState host_input_retry_state{};
+
+// Caller holds report_cs.
+static void clear_host_input_delivery() {
+    host_input_queue.clear();
+    host_input_retry_pending = false;
+}
 
 static bool time_reached_u32(uint32_t now, uint32_t target) {
     return static_cast<int32_t>(now - target) >= 0;
@@ -351,6 +371,7 @@ void host_input_prepare_persona_switch() {
     critical_section_enter_blocking(&report_cs);
     interrupt_in_data = kNeutralDualSenseUsbInputReport;
     interrupt_in_state = neutral_state;
+    clear_host_input_delivery();
     report_dirty = false;
     host_input_waiting_for_mount = true;
     host_input_fallback_until_us = now + HOST_PERSONA_SWITCH_INPUT_FALLBACK_US;
@@ -386,6 +407,7 @@ void reset_controller_input_report_cache() {
     critical_section_enter_blocking(&report_cs);
     interrupt_in_data = kNeutralDualSenseUsbInputReport;
     interrupt_in_state = default_state;
+    clear_host_input_delivery();
     report_dirty = false;
     critical_section_exit(&report_cs);
 }
@@ -404,6 +426,11 @@ void interrupt_loop() {
     // the host latched on whatever was pressed at the moment the hold started -- a held trigger
     // or stick would stay stuck down for the whole session.
     if (host_input_hold_active(now)) {
+        // Discard what arrives while held. Queued edges would otherwise be replayed to the host
+        // the moment the hold lapses -- the PS press the hold exists to swallow included.
+        critical_section_enter_blocking(&report_cs);
+        clear_host_input_delivery();
+        critical_section_exit(&report_cs);
         if (!host_input_hold_neutral_sent) {
             host_input_hold_neutral_sent = true;
             (void)host_input_send_report_for_persona(host_persona_active(), neutral_controller_state());
@@ -422,40 +449,59 @@ void interrupt_loop() {
     bool should_send = false;
     BridgeControllerState safe_state{};
 
-
     watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptLockAcquire);
     critical_section_enter_blocking(&report_cs);
-    if (report_dirty) {
+    if (host_input_retry_pending) {
+        safe_state = host_input_retry_state;
+        host_input_retry_pending = false;
+        should_send = true;
+    } else if (host_input_queue.pop_front(safe_state)) {
+        should_send = true;
+    } else if (report_dirty) {
         safe_state = interrupt_in_state;
         report_dirty = false;
         should_send = true;
     }
+    if (should_send) {
+        ds5::controller_input_refresh_analog_sticks(safe_state, interrupt_in_state);
+    }
     critical_section_exit(&report_cs);
 
-    // Only send to TinyUSB if we actually grabbed fresh data
-    if (should_send) {
-        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptEncode);
-        HostPersonaInputReport safe_report{};
-        if (!host_persona_encode_input(persona, safe_state, safe_report)) {
-            return;
-        }
-        note_usb_input_report(safe_report.bytes, safe_report.len);
-        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptSend);
-        const bool queued = xusb
-            ? xusb360_usb_send_report(safe_report.bytes, safe_report.len)
-            : tud_hid_report(safe_report.report_id, safe_report.bytes, safe_report.len);
-        if (!queued) {
-            DS5_LOG("[USBHID] tud_hid_report error\n");
+    if (!should_send) {
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptTail);
+        return;
+    }
 
-            // If the report failed to queue, restore the dirty flag
-            // so we try again on the next loop iteration.
-            watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptRelock);
-            critical_section_enter_blocking(&report_cs);
-            report_dirty = true;
-            critical_section_exit(&report_cs);
-        }
+    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptEncode);
+    HostPersonaInputReport safe_report{};
+    if (!host_persona_encode_input(persona, safe_state, safe_report)) {
+        // Not retried: a state this persona cannot encode never will be, and holding it would
+        // block every report queued behind it.
+        return;
+    }
+    note_usb_input_report(safe_report.bytes, safe_report.len);
+    watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptSend);
+    const bool queued = xusb
+        ? xusb360_usb_send_report(safe_report.bytes, safe_report.len)
+        : tud_hid_report(safe_report.report_id, safe_report.bytes, safe_report.len);
+
+    if (!queued) {
+        DS5_LOG("[USBHID] tud_hid_report error\n");
+        // Keep the unsent report. Equivalent newer input may refresh it, but the transitions
+        // queued behind it are never skipped.
+        watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptRelock);
+        critical_section_enter_blocking(&report_cs);
+        host_input_retry_state = safe_state;
+        host_input_retry_pending = true;
+        critical_section_exit(&report_cs);
     }
     watchdog_telemetry_note_phase(WatchdogMainLoopPhase::InterruptTail);
+}
+
+// The controller's IN endpoint finished a transfer. Chain the next pending report now instead
+// of waiting for the main loop's next submission point; with nothing new, nothing is sent.
+void host_input_report_complete() {
+    interrupt_loop();
 }
 
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
@@ -490,16 +536,23 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         return;
     }
 
-    // We add the critical section here to avoid any race conditions when writing to the interrupt_in_data buffer,
-    // which is shared between the main loop and this callback.
-    // The critical section ensures that only one thread can access the buffer at a time,
-    // preventing data corruption and ensuring thread safety.
-    // We also set the report_dirty flag to true to indicate that new data is available
-    //  and needs to be sent in the next interrupt report.
+    // The critical section guards the input state shared with the main loop and the USB
+    // completion path. While the persona re-enumerates only the latest state is kept; otherwise
+    // the report joins the delivery queue, or refreshes a rejected report it is equivalent to.
     critical_section_enter_blocking(&report_cs);
     memcpy(interrupt_in_data.data(), controller_report, sizeof(controller_report));
     interrupt_in_state = controller_state;
-    report_dirty = true;
+    if (host_input_waiting_for_mount) {
+        report_dirty = true;
+    } else {
+        report_dirty = false;
+        if (
+            !host_input_retry_pending
+            || !host_input_queue.refresh_retry(host_input_retry_state, controller_state)
+        ) {
+            (void)host_input_queue.push(controller_state);
+        }
+    }
     critical_section_exit(&report_cs);
 #ifdef ENABLE_COMPANION
     companion_update_controller_report(controller_report, sizeof(controller_report));

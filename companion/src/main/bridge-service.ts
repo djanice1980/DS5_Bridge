@@ -62,7 +62,16 @@ import {
 } from '../shared/protocol';
 import { TRIGGER_EFFECT_SIZE, type TriggerEffect } from '../shared/trigger-effects';
 import { decodeDualSenseInputReport, type ControllerInputSnapshot } from '../shared/dualsense-input';
-import { parseForkInfoReport, type ForkInfo } from '../shared/protocol';
+import {
+  FORK_FEATURE,
+  parseForkInfoReport,
+  parseForkResetRecordReport,
+  parseUpstreamResetEvidenceReport,
+  type ForkInfo,
+  type ForkResetRecordPayload,
+  type WatchdogTelemetryPayload
+} from '../shared/protocol';
+import { describeForkRestart, describeUpstreamRestart } from '../shared/bridge-restart';
 import type {
   AdaptiveTriggerPreviewEffect,
   AudioReactiveHapticsAttack,
@@ -94,6 +103,7 @@ import type {
 } from '../shared/protocol';
 import type {
   BridgeDiagnostics,
+  BridgeRestart,
   BridgeSnapshot,
   BootloaderConfirmationPresentation,
   CompanionSettings,
@@ -123,7 +133,8 @@ import {
   type SystemAudioHapticsConfig,
   listBridges,
   setAudioHelperBridgeTarget,
-  type BridgeCensus
+  type BridgeCensus,
+  type BridgeCensusHidDevice
 } from './audio-helper';
 import { CompanionDebugConfig } from './debug-config';
 import { HidDiscoveryClient } from './hid-discovery-client';
@@ -135,6 +146,15 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 const POLL_INTERVAL_MS = 500;
+const ANNOUNCED_BRIDGE_RESTARTS_MAX = 20;
+// Census ticks a controller's MAC read is retried after failing; the ticks are 10 s apart.
+const DIRECT_CONTROLLER_MAC_ATTEMPTS = 3;
+
+interface DirectControllerMacEntry {
+  instanceId: string | null;
+  mac: string | null;
+  attempts: number;
+}
 const SHORTCUT_POLL_INTERVAL_MS = 50;
 const SHORTCUT_POLL_ERROR_RETRY_MS = 250;
 const AUDIO_STATUS_READ_INTERVAL_MS = 500;
@@ -152,7 +172,7 @@ const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 // Exported so the update-surfacing tests assert against "the bundled version" rather than
 // against a literal that has to be chased down and re-typed on every firmware bump.
-export const BUNDLED_FIRMWARE_VERSION = '1.6.77';
+export const BUNDLED_FIRMWARE_VERSION = '1.6.78';
 const CONTROLLER_IDENTITY_RETRIES = 8;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -1286,6 +1306,8 @@ export class BridgeService extends EventEmitter {
   // LNXF magic, upstream firmware answers nothing. Fork-only commands (0x60+) and the shared
   // radial-deadzone id are gated on this -- see forkCommandsAvailable / radialDeadzoneAvailable.
   private forkInfo: ForkInfo | null = null;
+  // Why the open bridge last restarted on its own; null after a clean boot.
+  private lastRestart: BridgeRestart | null = null;
   private bootloaderConfirmationCancelled = false;
   // Audio & haptics target: null = the active bridge (default); a direct controller's path
   // aims Test Speaker, Test Haptics, the Audio Haptics mirror and use-as-system-output at
@@ -1295,9 +1317,13 @@ export class BridgeService extends EventEmitter {
   // bridge selection there is no reconnect story to remember -- if the controller is unplugged
   // the selection is meaningless, and on restart the tester defaults back to the bridge.
   private directTesterSource: DirectControllerSource | null = null;
-  // BT MAC per direct-controller path, read once over USB (pairing-info report) and cached:
-  // it feeds the charging-via-bridge guard and never changes for a given controller.
-  private readonly directControllerMacCache = new Map<string, string | null>();
+  // BT MAC per direct-controller path, read over USB (pairing-info report) and cached: it feeds
+  // the charging-via-bridge guard and never changes for a given controller. The path alone is
+  // not the controller -- Linux hands a freed /dev/hidrawN to the next device plugged in -- so
+  // each entry remembers the census's HID instance and is re-read when that changes, dropped
+  // when its path leaves the bus, and retried a few times when the read failed (udev may not
+  // have granted access yet when a controller is first seen).
+  private readonly directControllerMacCache = new Map<string, DirectControllerMacEntry>();
   // Injectable for tests; production uses node-hid.
   directHidOpenForTests: DirectHidOpen | undefined;
   private lastBridgeCensusAt = 0;
@@ -1701,7 +1727,8 @@ export class BridgeService extends EventEmitter {
       triggerTraceDroppedCount: this.triggerTraceDroppedCount,
       feedbackTraceLines: [...this.feedbackTraceLines],
       feedbackTraceDroppedCount: this.feedbackTraceDroppedCount,
-      audioStatus: this.audioStatus ? { ...this.audioStatus } : null
+      audioStatus: this.audioStatus ? { ...this.audioStatus } : null,
+      lastRestart: this.lastRestart
     };
   }
 
@@ -4640,14 +4667,42 @@ export class BridgeService extends EventEmitter {
 
   private directControllerMacFor(path: string): string | null {
     if (!this.directControllerMacCache.has(path)) {
-      // One open/read/close per path per session; a failure (permissions, exclusive open)
-      // caches null, which only weakens the charging guard -- the entry stays selectable.
-      this.directControllerMacCache.set(
-        path,
-        readDirectControllerMac(path, this.directHidOpenForTests)
-      );
+      // A failed read (permissions, exclusive open) caches null, which only weakens the
+      // charging guard -- the entry stays selectable -- and the census retries it.
+      this.directControllerMacCache.set(path, {
+        instanceId: this.censusInstanceIdFor(path),
+        mac: readDirectControllerMac(path, this.directHidOpenForTests),
+        attempts: 1
+      });
     }
-    return this.directControllerMacCache.get(path) ?? null;
+    return this.directControllerMacCache.get(path)?.mac ?? null;
+  }
+
+  private censusInstanceIdFor(path: string): string | null {
+    return this.bridgeCensus?.hidDevices.find((device) =>
+      BridgeService.bridgePathsEqual(device.path, path))?.instanceId ?? null;
+  }
+
+  // Which present controllers need their MAC (re)read, after dropping entries whose path left
+  // the bus. A changed instance at the same path is a different controller.
+  private directControllerPathsToProbe(devices: BridgeCensusHidDevice[]): BridgeCensusHidDevice[] {
+    const present = devices.filter((device) => !device.isBridge && device.hidUnavailable !== true);
+    for (const path of [...this.directControllerMacCache.keys()]) {
+      if (!present.some((device) => BridgeService.bridgePathsEqual(device.path, path))) {
+        this.directControllerMacCache.delete(path);
+      }
+    }
+    return present.filter((device) => {
+      const entry = this.directControllerMacCache.get(device.path);
+      if (!entry) {
+        return true;
+      }
+      if (entry.instanceId !== (device.instanceId ?? null)) {
+        this.directControllerMacCache.delete(device.path);
+        return true;
+      }
+      return entry.mac === null && entry.attempts < DIRECT_CONTROLLER_MAC_ATTEMPTS;
+    });
   }
 
   private async refreshBridgeCensus(): Promise<void> {
@@ -4668,17 +4723,16 @@ export class BridgeService extends EventEmitter {
       this.bridgeCensus = await listBridges();
       // A controller freshly seen over USB updates its history entry -- otherwise the
       // Devices page claims "1h ago" about a controller that is plugged in right now. Probing
-      // happens once per path per session (the MAC cache), so this writes settings once per
-      // plug, not once per census tick.
-      for (const device of this.bridgeCensus.hidDevices) {
-        if (device.isBridge || device.hidUnavailable === true) {
-          continue;
-        }
-        if (this.directControllerMacCache.has(device.path)) {
-          continue;
-        }
+      // happens once per controller (the MAC cache), so this writes settings once per plug,
+      // not once per census tick.
+      for (const device of this.directControllerPathsToProbe(this.bridgeCensus.hidDevices)) {
+        const previous = this.directControllerMacCache.get(device.path);
         const probe = probeDirectController(device.path, this.directHidOpenForTests);
-        this.directControllerMacCache.set(device.path, probe.mac);
+        this.directControllerMacCache.set(device.path, {
+          instanceId: device.instanceId ?? null,
+          mac: probe.mac,
+          attempts: (previous?.attempts ?? 0) + 1
+        });
         if (probe.mac !== null) {
           this.recordDirectControllerSeen(probe.mac, device.productId, probe.batteryPercent);
           this.applyBoundProfileToUsbController(probe.mac, device.path);
@@ -4834,6 +4888,8 @@ export class BridgeService extends EventEmitter {
       return;
     }
     this.forkInfo = null;
+    this.lastRestart = null;
+    let identityWatchdog: WatchdogTelemetryPayload | null = null;
     try {
       // Lineage first: everything below is common to both, but command gating needs to know
       // which firmware this is before any fork-only id could be sent. Upstream firmware throws
@@ -4860,6 +4916,7 @@ export class BridgeService extends EventEmitter {
         ? null
         : identity.pairingEvents.map((event) => `${event.stage}/${event.status}`).join(' ');
       const wdt = identity.watchdog;
+      identityWatchdog = wdt;
       this.snapshot.diagnostics.lastWatchdogHang = wdt === null
         ? null
         : wdt.priorTimeout
@@ -4899,6 +4956,71 @@ export class BridgeService extends EventEmitter {
       // Firmware predates the identity report; the bridge stays unnamed.
     }
     this.recordBridgeIdentityAssociation();
+    this.lastRestart = await this.readLastRestart(identityWatchdog);
+    this.announceLastRestart();
+  }
+
+  // Why the bridge last restarted, from whichever record its lineage keeps. Read once per
+  // open: the record describes the current boot, so it cannot change while the bridge is up.
+  private async readLastRestart(watchdog: WatchdogTelemetryPayload | null): Promise<BridgeRestart | null> {
+    const device = this.device;
+    if (!device) {
+      return null;
+    }
+    const nowMs = Date.now();
+    // A watchdog record only parses out of a fork-layout identity report, so it marks fork
+    // firmware even where the fork-info handshake predates it.
+    if (this.forkInfo !== null || watchdog !== null) {
+      let record: ForkResetRecordPayload | null = null;
+      if (this.forkInfo !== null && (this.forkInfo.featureBits & FORK_FEATURE.RESET_RECORD) !== 0) {
+        try {
+          record = parseForkResetRecordReport(
+            await device.getFeatureReport(REPORT_ID.RESET_RECORD, REPORT_LENGTH)
+          );
+        } catch {
+          record = null;
+        }
+      }
+      return describeForkRestart({
+        watchdog,
+        record,
+        technical: this.snapshot.diagnostics.lastWatchdogHang ?? 'no record',
+        nowMs
+      });
+    }
+    try {
+      return describeUpstreamRestart(
+        parseUpstreamResetEvidenceReport(
+          await device.getFeatureReport(REPORT_ID.UPSTREAM_RESET_EVIDENCE, REPORT_LENGTH)
+        ),
+        nowMs
+      );
+    } catch {
+      // Upstream firmware before 2.0 has no reset report.
+      return null;
+    }
+  }
+
+  // A crash restart looks like a random controller disconnect from the outside, so say so --
+  // once per restart. The key persists, otherwise every app launch would re-announce a crash
+  // the bridge still carries until its next power cycle.
+  private announceLastRestart(): void {
+    const restart = this.lastRestart;
+    if (restart === null) {
+      return;
+    }
+    const key = `${this.connectedBridgeUniqueId ?? this.device?.path ?? 'unknown'}:${restart.key}`;
+    const announced = this.settingsStore.get().announcedBridgeRestarts;
+    if (announced.includes(key)) {
+      return;
+    }
+    this.snapshot.settings = this.settingsStore.update({
+      announcedBridgeRestarts: [key, ...announced].slice(0, ANNOUNCED_BRIDGE_RESTARTS_MAX)
+    });
+    this.emit('toast', {
+      title: 'DS5 Bridge restarted',
+      body: `${restart.summary} Details are on the System page.`
+    } satisfies BridgeToast);
   }
 
   // Profile-follows-controller: re-read the controller identity when the
@@ -5566,6 +5688,7 @@ export class BridgeService extends EventEmitter {
   private closeDevice(): void {
     const device = this.device;
     this.device = null;
+    this.lastRestart = null;
     this.connectedBridgeUniqueId = null;
     this.connectedControllerMac = null;
     this.bindingAppliedForMac = null;

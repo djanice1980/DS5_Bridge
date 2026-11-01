@@ -4,6 +4,7 @@ import { triggerEffectFromLegacyPercents } from '../shared/trigger-effect-migrat
 import { TRIGGER_EFFECT_TYPES, type TriggerEffect } from '../shared/trigger-effects';
 import { TriggerEffectEditor } from './TriggerEffectEditor';
 import { BootloaderConfirmationDialog } from './BootloaderConfirmationDialog';
+import { LastRestartRow } from './LastRestartRow';
 import {
   type TablerIcon,
   IconAdjustmentsSpark,
@@ -9493,6 +9494,13 @@ export function App() {
                           onChange={setHostPersonaMode}
                         />
                       </div>
+                      {snapshot.diagnostics.lastRestart ? (
+                        <LastRestartRow
+                          restart={snapshot.diagnostics.lastRestart}
+                          firmwareVersion={snapshot.status?.firmwareVersion ?? null}
+                          appVersion={appVersion || null}
+                        />
+                      ) : null}
                       <div className="device-row device-status-row">
                         <span>Status</span>
                         <strong className={`health-label ${systemHealthTone}`}>

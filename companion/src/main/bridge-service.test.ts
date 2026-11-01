@@ -183,6 +183,10 @@ class MockHidDevice extends EventEmitter {
   uniqueId: string | null = null;
   controllerMac: string | null = null;
   forkInfoReport: number[] | null = forkInfoReport();
+  // Patches applied to the identity report, e.g. a retained watchdog breadcrumb.
+  identityPatch: ((report: number[]) => void) | null = null;
+  // Fork report 0x61; null = firmware without it.
+  resetRecordReport: number[] | null = null;
 
   constructor() {
     super();
@@ -232,7 +236,12 @@ class MockHidDevice extends EventEmitter {
       if (!this.uniqueId) {
         throw new Error('Device identity unsupported');
       }
-      return deviceIdentityReport(this.uniqueId, this.controllerMac ?? undefined);
+      const identity = deviceIdentityReport(this.uniqueId, this.controllerMac ?? undefined);
+      this.identityPatch?.(identity);
+      return identity;
+    }
+    if (reportId === REPORT_ID.RESET_RECORD && this.resetRecordReport !== null) {
+      return [...this.resetRecordReport];
     }
     if (reportId === REPORT_ID.INPUT) {
       if (this.shortcutReadError) {
@@ -2499,6 +2508,87 @@ describe('BridgeService', () => {
     expect(snapshot.settings.notifyLowBattery).toBe(true);
   });
 
+  describe('bridge restart reporting', () => {
+    function crashedBridge(): MockHidDevice {
+      const device = new MockHidDevice();
+      device.uniqueId = 'e6e7e8e9eaebeced';
+      device.forkInfoReport = forkInfoReport(1, PROTOCOL_MINOR, 0x03);
+      device.identityPatch = (report) => {
+        report[44] = 0x03; // abnormal reset, breadcrumb valid
+        report[45] = 26; // bus fault
+        report[61] = 20; // during interrupt/send
+      };
+      const record = new Array<number>(REPORT_LENGTH).fill(0);
+      record[0] = REPORT_ID.RESET_RECORD;
+      writeMagic(record);
+      record[5] = PROTOCOL_MAJOR;
+      record[6] = PROTOCOL_MINOR;
+      record[7] = 1;
+      record[8] = 0x03;
+      record[9] = 2;
+      record[10] = 0x10; // 0x0e10 = 3600 s
+      record[11] = 0x0e;
+      record[14] = 30;
+      device.resetRecordReport = record;
+      return device;
+    }
+
+    it('announces a crash restart once and shows it on the device card', async () => {
+      const service = serviceFixture();
+      const toasts: Array<{ title: string; body: string }> = [];
+      service.on('toast', (toast) => toasts.push(toast));
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', crashedBridge());
+
+      await poll(service);
+      await poll(service);
+
+      expect(service.getSnapshot().diagnostics.lastRestart).toMatchObject({
+        kind: 'crash',
+        area: 'sending controller input to the PC',
+        consecutive: 2,
+        uptimeBeforeSeconds: 3600
+      });
+      expect(toasts).toEqual([{
+        title: 'DS5 Bridge restarted',
+        body: "The bridge's firmware crashed and the bridge restarted itself. Details are on the System page."
+      }]);
+      expect(service.getSnapshot().settings.announcedBridgeRestarts).toHaveLength(1);
+    });
+
+    it('does not announce a restart again after the app restarts', async () => {
+      const first = serviceFixture();
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', crashedBridge());
+      await poll(first);
+      const announced = first.getSnapshot().settings.announcedBridgeRestarts;
+
+      const second = serviceFixture({ announcedBridgeRestarts: announced });
+      const toasts: unknown[] = [];
+      second.on('toast', (toast) => toasts.push(toast));
+      hidMock.state.openDevices.set('companion-path', crashedBridge());
+      await poll(second);
+
+      expect(second.getSnapshot().diagnostics.lastRestart?.kind).toBe('crash');
+      expect(toasts).toEqual([]);
+    });
+
+    it('stays quiet after a clean boot', async () => {
+      const service = serviceFixture();
+      const toasts: unknown[] = [];
+      service.on('toast', (toast) => toasts.push(toast));
+      const device = new MockHidDevice();
+      device.uniqueId = 'e6e7e8e9eaebeced';
+      hidMock.state.devicesList = [companionDeviceInfo()];
+      hidMock.state.openDevices.set('companion-path', device);
+
+      await poll(service);
+
+      expect(service.getSnapshot().diagnostics.lastRestart).toBeNull();
+      expect(toasts).toEqual([]);
+    });
+  });
+
   it('emits controller connect and disconnect toasts on status transitions', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
@@ -3443,6 +3533,76 @@ describe('BridgeService', () => {
 
       const entry = snapshot.bridgeDevices?.directControllers[0];
       expect(entry?.chargingViaBridge).toBe(true);
+    });
+
+    it('re-reads the MAC when a different controller inherits the same hidraw path', async () => {
+      // Linux hands a freed /dev/hidrawN to the next device plugged in. Keyed on the path
+      // alone, the second controller was reported with the first one's address.
+      const service = serviceFixture();
+      let mac = 'aabbccddeeff';
+      service.directHidOpenForTests = () => new FakeDirectDevice(mac);
+      audioHelperMock.listBridges.mockResolvedValue({
+        bridges: [],
+        hidDevices: [{ ...directCensus('/dev/hidraw9').hidDevices[0], instanceId: '0003:054C:0CE6.0018' }]
+      });
+      let snapshot = await service.refreshBridgeDevices();
+      expect(snapshot.bridgeDevices?.directControllers[0]?.mac).toBe('aabbccddeeff');
+
+      mac = '112233445566';
+      audioHelperMock.listBridges.mockResolvedValue({
+        bridges: [],
+        hidDevices: [{ ...directCensus('/dev/hidraw9').hidDevices[0], instanceId: '0003:054C:0CE6.0019' }]
+      });
+      snapshot = await service.refreshBridgeDevices();
+      expect(snapshot.bridgeDevices?.directControllers[0]?.mac).toBe('112233445566');
+    });
+
+    it('forgets a controller whose path left the bus', async () => {
+      // Without an instance id (the Windows census) a re-plug is only visible as the path
+      // disappearing for a census tick, which must drop the cached address.
+      const service = serviceFixture();
+      let mac = 'aabbccddeeff';
+      service.directHidOpenForTests = () => new FakeDirectDevice(mac);
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+      await service.refreshBridgeDevices();
+
+      audioHelperMock.listBridges.mockResolvedValue({ bridges: [], hidDevices: [] });
+      await service.refreshBridgeDevices();
+
+      mac = '112233445566';
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+      const snapshot = await service.refreshBridgeDevices();
+      expect(snapshot.bridgeDevices?.directControllers[0]?.mac).toBe('112233445566');
+    });
+
+    it('retries a failed MAC read a bounded number of times', async () => {
+      const service = serviceFixture();
+      let opens = 0;
+      let mac: string | null = null;
+      service.directHidOpenForTests = () => {
+        opens += 1;
+        return new FakeDirectDevice(mac);
+      };
+      audioHelperMock.listBridges.mockResolvedValue(directCensus('/dev/hidraw9'));
+
+      await service.refreshBridgeDevices();
+      mac = 'aabbccddeeff';
+      const snapshot = await service.refreshBridgeDevices();
+      expect(snapshot.bridgeDevices?.directControllers[0]?.mac).toBe('aabbccddeeff');
+      const opensWhenRead = opens;
+      await service.refreshBridgeDevices();
+      expect(opens).toBe(opensWhenRead);
+
+      const stubborn = serviceFixture();
+      let stubbornOpens = 0;
+      stubborn.directHidOpenForTests = () => {
+        stubbornOpens += 1;
+        return new FakeDirectDevice(null);
+      };
+      for (let tick = 0; tick < 6; tick += 1) {
+        await stubborn.refreshBridgeDevices();
+      }
+      expect(stubbornOpens).toBe(3);
     });
 
     it('returns to the bridge when a bridge is selected', async () => {

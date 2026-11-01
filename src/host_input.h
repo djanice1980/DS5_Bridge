@@ -5,6 +5,8 @@
 
 void host_input_prepare_persona_switch();
 void host_input_note_usb_mounted();
+// The controller's IN endpoint is free again; chains any pending report.
+void host_input_report_complete();
 
 // Stop forwarding controller input to the host for duration_us, reporting neutral instead.
 // Pass 0 to release immediately.

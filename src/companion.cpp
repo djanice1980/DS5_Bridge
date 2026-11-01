@@ -3819,10 +3819,34 @@ static uint16_t build_fork_info(uint8_t *buffer, uint16_t reqlen) {
     // Fork protocol revision: bumped when fork-only wire semantics change.
     buffer[4] = 1;
     buffer[5] = kProtocolMinor;
-    // Feature bits, reserved. Bit 0 = fork command range 0x60+ live.
-    buffer[6] = 0x01;
+    // Feature bits. Bit 0 = fork command range 0x60+ live, bit 1 = reset report 0x61.
+    buffer[6] = 0x03;
     buffer[7] = 0;
     return 8;
+}
+
+// How the bridge's last restart looked from the inside, beyond what the identity report's
+// breadcrumb carries: how many abnormal resets in a row, and how long the previous boot ran.
+// [6] schema, [7] flags (bit0 = last reset was abnormal, bit1 = breadcrumb survived),
+// [8] consecutive abnormal resets, [9..12] previous boot's uptime (s), [13..16] uptime now (s).
+static uint16_t build_reset_record(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+    buffer[6] = 1;
+    WatchdogTelemetrySnapshot wdt{};
+    watchdog_telemetry_snapshot(&wdt);
+    buffer[7] = static_cast<uint8_t>(
+        (wdt.prior_watchdog_timeout ? 0x01 : 0x00)
+        | (wdt.prior_snapshot_valid ? 0x02 : 0x00)
+    );
+    buffer[8] = wdt.consecutive_abnormal_resets;
+    write_u32(buffer + 9, wdt.prior_snapshot_valid ? wdt.prior_uptime_s : 0);
+    write_u32(buffer + 13, uptime_seconds());
+    return COMPANION_PAYLOAD_SIZE;
 }
 
 uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
@@ -3853,6 +3877,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_device_identity(buffer, reqlen);
         case COMPANION_REPORT_BOOTLOADER_AUTHORIZATION:
             return build_bootloader_authorization(buffer, reqlen);
+        case COMPANION_REPORT_RESET_RECORD:
+            return build_reset_record(buffer, reqlen);
         case COMPANION_REPORT_FORK_INFO:
             return build_fork_info(buffer, reqlen);
 #if DS5_TRIGGER_TRACE_ENABLED

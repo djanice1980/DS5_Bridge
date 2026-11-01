@@ -37,10 +37,15 @@ export const REPORT_ID = {
   CALIBRATION_STATUS: 0x0c,
   // Authenticated bootloader entry status. Id and wire format shared with upstream.
   BOOTLOADER_AUTHORIZATION: 0x12,
+  // Upstream 2.0's reset evidence. Read only from upstream firmware; the fork reports the same
+  // story through the identity report's breadcrumb plus RESET_RECORD.
+  UPSTREAM_RESET_EVIDENCE: 0x13,
   // Fork lineage marker (0x60+, the fork-reserved id space). Upstream firmware answers this
   // GET with nothing; fork firmware answers "LNXF" + fork revision + protocol minor. The magic
   // is the guard: a reply without all four bytes is NOT fork firmware, whatever else it says.
-  FORK_INFO: 0x60
+  FORK_INFO: 0x60,
+  // Fork restart history: consecutive abnormal resets and the previous boot's uptime.
+  RESET_RECORD: 0x61
 } as const;
 
 export interface ForkInfo {
@@ -48,6 +53,12 @@ export interface ForkInfo {
   protocolMinor: number;
   featureBits: number;
 }
+
+/** ForkInfo.featureBits. */
+export const FORK_FEATURE = {
+  COMMAND_RANGE: 0x01,
+  RESET_RECORD: 0x02
+} as const;
 
 /** Null when the reply is absent or does not carry the fork magic. */
 export function parseForkInfoReport(report: ArrayLike<number> | null | undefined): ForkInfo | null {
@@ -1284,6 +1295,108 @@ export interface DeviceIdentityPayload {
   pairingEvents: PairingBreadcrumb[];
 }
 
+const UPSTREAM_DEVICE_IDENTITY_SCHEMA = 2;
+const FORK_BOARD_ID_LENGTH = 8;
+
+// Upstream's identity layout (schema 2): [8] flags (bit0 address known, bit2 controller
+// connected), [10..27] the controller address as "AA:BB:CC:DD:EE:FF", [56..63] the board id.
+// Upstream carries no watchdog record or pairing breadcrumbs here; its reset evidence is
+// report 0x13 (parseUpstreamResetEvidenceReport).
+function parseUpstreamDeviceIdentity(report: ArrayLike<number>): DeviceIdentityPayload {
+  const boardId = Array.from({ length: 8 }, (_, index) => (report[56 + index] ?? 0).toString(16).padStart(2, '0')).join('');
+  const flags = report[8] ?? 0;
+  let controllerMac: string | null = null;
+  if ((flags & 0x01) !== 0 && (flags & 0x04) !== 0) {
+    let text = '';
+    for (let index = 10; index < 28 && report[index]; index += 1) {
+      text += String.fromCharCode(report[index]);
+    }
+    const hex = text.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+    controllerMac = hex.length === 12 && !/^0+$/.test(hex) ? hex : null;
+  }
+  return {
+    uniqueId: /^0+$/.test(boardId) ? null : boardId,
+    controllerMac,
+    watchdog: null,
+    pairingEvents: []
+  };
+}
+
+/** Fork report 0x61: restart history beyond the identity report's breadcrumb. */
+export interface ForkResetRecordPayload {
+  /** The current boot followed an abnormal reset (crash or hang), not a power-on or flash. */
+  abnormalReset: boolean;
+  /** The previous boot's breadcrumb survived, so its uptime is meaningful. */
+  breadcrumbValid: boolean;
+  /** Abnormal resets in a row, counting the one that started this boot. */
+  consecutiveAbnormalResets: number;
+  /** How long the previous boot ran before going down; null without a breadcrumb. */
+  priorUptimeSeconds: number | null;
+  /** The bridge's uptime when this was read. */
+  uptimeSeconds: number;
+}
+
+export function parseForkResetRecordReport(report: ArrayLike<number>): ForkResetRecordPayload {
+  assertReport(report, REPORT_ID.RESET_RECORD);
+  assertCurrentOrOlderVersion(report);
+  if (report[7] !== 1) {
+    throw new ProtocolError(`Unsupported reset record schema ${report[7]}.`, 'bad-reset-record');
+  }
+  const flags = report[8];
+  const breadcrumbValid = (flags & 0x02) !== 0;
+  return {
+    abnormalReset: (flags & 0x01) !== 0,
+    breadcrumbValid,
+    consecutiveAbnormalResets: report[9],
+    priorUptimeSeconds: breadcrumbValid ? readU32(report, 10) : null,
+    uptimeSeconds: readU32(report, 14)
+  };
+}
+
+// Upstream 2.0's reset evidence tables, indexed by its firmware enums.
+export const UPSTREAM_RESET_EVIDENCE_PHASES = [
+  'boot', 'cyw43', 'tinyusb', 'interrupt-before-audio', 'usb-power', 'audio', 'button',
+  'lightbar', 'rssi', 'inquiry', 'connection-recovery', 'feature-prefetch', 'output-retry',
+  'companion', 'interrupt-after-companion', 'firmware-log-flush', 'cyw43-second',
+  'interrupt-after-cyw43', 'wake-on-lan'
+] as const;
+export const UPSTREAM_RESET_EVIDENCE_REASONS = [
+  'watchdog-timeout', 'panic', 'out-of-memory', 'codec-fatal', 'audio-stack-overflow',
+  'container-contract', 'cyw43-rx-overflow'
+] as const;
+
+/** Upstream report 0x13: why the bridge last reset, in upstream's own terms. */
+export interface UpstreamResetEvidencePayload {
+  watchdogReset: boolean;
+  evidenceValid: boolean;
+  phase: string;
+  reason: string;
+  consecutiveAbnormalResets: number;
+  uptimeBeforeResetMs: number;
+  detail: number;
+  uptimeMs: number;
+}
+
+export function parseUpstreamResetEvidenceReport(report: ArrayLike<number>): UpstreamResetEvidencePayload {
+  assertReport(report, REPORT_ID.UPSTREAM_RESET_EVIDENCE);
+  assertCurrentOrOlderVersion(report);
+  if (report[7] !== 1) {
+    throw new ProtocolError(`Unsupported reset evidence schema ${report[7]}.`, 'bad-reset-evidence');
+  }
+  const flags = report[8];
+  const evidenceValid = (flags & 0x02) !== 0;
+  return {
+    watchdogReset: (flags & 0x01) !== 0,
+    evidenceValid,
+    phase: evidenceValid ? UPSTREAM_RESET_EVIDENCE_PHASES[report[9]] ?? 'unknown' : 'unknown',
+    reason: evidenceValid ? UPSTREAM_RESET_EVIDENCE_REASONS[report[10]] ?? 'unknown' : 'unknown',
+    consecutiveAbnormalResets: report[11],
+    uptimeBeforeResetMs: evidenceValid ? readU32(report, 12) : 0,
+    detail: evidenceValid ? readU32(report, 16) : 0,
+    uptimeMs: readU32(report, 20)
+  };
+}
+
 // Firmware 1.6.19+: stable physical identity (RP2350 unique board ID);
 // 1.6.20+ adds the connected controller's BT address.
 /**
@@ -1547,6 +1660,13 @@ export function parseBootloaderAuthorizationReport(
 export function parseDeviceIdentityReport(report: ArrayLike<number>): DeviceIdentityPayload {
   assertReport(report, REPORT_ID.DEVICE_IDENTITY);
   assertCurrentOrOlderVersion(report);
+  // The two lineages lay this report out differently. The fork writes the board id's length
+  // (always 8) at [7]; upstream writes its schema (2 since v1.7.0) there. Read through the
+  // fork layout, upstream's ASCII name and address bytes decode as a bogus board id and a
+  // bogus watchdog record, so the layout is chosen by that byte before anything else.
+  if (report[7] >= UPSTREAM_DEVICE_IDENTITY_SCHEMA && report[7] !== FORK_BOARD_ID_LENGTH) {
+    return parseUpstreamDeviceIdentity(report);
+  }
   const length = report[7];
   let uniqueId: string | null = null;
   if (length && length <= 16) {

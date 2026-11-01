@@ -12,6 +12,7 @@
 #include "audio.h"
 #include "bt.h"
 #include "host_input.h"
+#include "persona/host_persona.h"
 #ifdef ENABLE_COMPANION
 #include "host_bridge.h"
 #endif
@@ -765,6 +766,12 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 }
 
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
-    (void) instance;
+    // Instance 0 is the controller only in a native HID topology. With the Xbox 360 persona
+    // the controller is the vendor interface (chained from its own driver), and in the
+    // companion-only device instance 0 is an inert placeholder that interrupt_loop refuses.
+    if (instance == 0 && host_persona_is_native_hid()) {
+        host_input_report_complete();
+    }
+    (void) report;
     (void) len;
 }

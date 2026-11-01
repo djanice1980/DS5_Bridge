@@ -49,3 +49,11 @@ add_executable(bootloader_maintenance_test
 )
 target_include_directories(bootloader_maintenance_test PRIVATE ../../src)
 add_test(NAME bootloader_maintenance_test COMMAND bootloader_maintenance_test)
+
+add_executable(controller_input_delivery_test
+    controller_input_delivery_test.cpp
+    ../../src/dualsense_input_decoder.cpp
+    ../../src/persona/dualsense_persona.cpp
+)
+target_include_directories(controller_input_delivery_test PRIVATE ../../src)
+add_test(NAME controller_input_delivery_test COMMAND controller_input_delivery_test)

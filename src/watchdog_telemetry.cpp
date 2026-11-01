@@ -13,7 +13,10 @@ namespace {
 // Schema 2 adds the fault detail words in scratch[5]/[6]. scratch[4] is the SDK's
 // watchdog_enable magic and must never be touched; scratch[5..7] are only used by
 // watchdog_reboot(), which this firmware no longer calls.
-constexpr uint32_t kScratchSignature = 0x44540300u; // "DT", schema 3.
+// Schema 4 packs two more fields into bytes no record used: scratch[1] bits 8-15 carry the
+// consecutive abnormal-reset count, scratch[6] bits 8-31 the uptime in seconds.
+constexpr uint32_t kScratchSignature = 0x44540400u; // "DT", schema 4.
+constexpr uint32_t kUptimeSecondsMax = 0x00ffffffu;
 
 WatchdogTelemetrySnapshot state{};
 uint32_t current_sequence = 0;
@@ -21,6 +24,9 @@ uint8_t active_phase = 0;
 uint32_t active_phase_started_us = 0;
 uint8_t worst_phase_id = 0;
 uint32_t worst_phase_us = 0;
+// Kept current by every phase stamp so the fault path can record uptime without calling
+// the timer helpers, which live in flash.
+uint32_t last_uptime_s = 0;
 
 uint32_t now_ms() {
     return static_cast<uint32_t>(time_us_64() / 1000u);
@@ -78,8 +84,26 @@ void __not_in_flash_func(commit_words)(
         kScratchSignature | scratch_crc(word1, word2, word3, word4, word5, word6);
 }
 
+uint32_t __not_in_flash_func(phase_word)(uint8_t phase) {
+    return phase | (static_cast<uint32_t>(state.consecutive_abnormal_resets) << 8u);
+}
+
+uint32_t __not_in_flash_func(context_word)(uint8_t phase_before_fault) {
+    return phase_before_fault | (last_uptime_s << 8u);
+}
+
 void commit_phase(WatchdogMainLoopPhase phase) {
-    commit_words(static_cast<uint8_t>(phase), ++current_sequence, now_ms(), 0, 0, 0);
+    const uint32_t ms = now_ms();
+    const uint32_t seconds = ms / 1000u;
+    last_uptime_s = seconds > kUptimeSecondsMax ? kUptimeSecondsMax : seconds;
+    commit_words(
+        phase_word(static_cast<uint8_t>(phase)),
+        ++current_sequence,
+        ms,
+        0,
+        context_word(0),
+        0
+    );
 }
 
 } // namespace
@@ -106,14 +130,26 @@ void watchdog_telemetry_boot_capture() {
     // Validity is a property of the breadcrumb alone. Tying it to the reset predicate meant
     // a disagreeing predicate discarded a perfectly good phase record.
     state.prior_snapshot_valid = signature_valid && crc_valid;
+    uint8_t prior_consecutive = 0;
     if (state.prior_snapshot_valid) {
         state.prior_phase = static_cast<uint8_t>(word1);
+        prior_consecutive = static_cast<uint8_t>(word1 >> 8u);
         state.prior_sequence = word2;
         state.prior_phase_entered_at_ms = word3;
         state.prior_fault_address = word4;
         state.prior_phase_before_fault = static_cast<uint8_t>(word5);
+        state.prior_uptime_s = word5 >> 8u;
         state.prior_fault_arg0 = word6;
         current_sequence = word2;
+    }
+    // The broad predicate: on RP2350 it already excludes BOOTSEL and flash-update reboots, and
+    // every deliberate exit this firmware takes goes through BOOTSEL, so a set bit here means
+    // the bridge went down on its own. Without a valid breadcrumb the earlier count is lost,
+    // so this reset is the only one known.
+    if (timeout_reset) {
+        state.consecutive_abnormal_resets = !state.prior_snapshot_valid
+            ? 1u
+            : prior_consecutive == 0xffu ? 0xffu : static_cast<uint8_t>(prior_consecutive + 1u);
     }
 
     commit_phase(WatchdogMainLoopPhase::Boot);
@@ -149,7 +185,7 @@ void __not_in_flash_func(watchdog_telemetry_note_fault)(
     // active_phase is captured too, because stamping the fault phase overwrites the record
     // of what the main loop was doing -- and that is the context that makes the crash
     // address meaningful.
-    commit_words(static_cast<uint8_t>(phase), status, pc, fault_address, active_phase, arg0);
+    commit_words(phase_word(static_cast<uint8_t>(phase)), status, pc, fault_address, context_word(active_phase), arg0);
 }
 
 void watchdog_telemetry_worst_phase(uint8_t *phase, uint32_t *duration_us) {

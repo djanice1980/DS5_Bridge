@@ -110,6 +110,33 @@ public class LinuxBridgeCensusTests
     }
 
     [Fact]
+    public void TakesTheHidInstanceFromASysfsPath()
+    {
+        Assert.Equal(
+            "0003:054C:0CE6.0018",
+            LinuxBridgeCensus.HidInstanceFromSysfsPath(
+                "/sys/devices/pci0000:00/usb5/5-1/5-1.3/5-1.3:1.3/0003:054C:0CE6.0018/hidraw/hidraw15"));
+        Assert.Null(LinuxBridgeCensus.HidInstanceFromSysfsPath("/sys/devices/virtual/misc/uinput"));
+    }
+
+    [Fact]
+    public void SerialisesTheHidInstanceSoTheCompanionCanTellControllersApart()
+    {
+        // /dev/hidrawN is reused by the next device plugged in; the instance is not. The
+        // companion keys its per-controller cache on it.
+        var json = LinuxBridgeCensus.ToJson(LinuxBridgeCensus.Build(
+            Array.Empty<LinuxUsbBridgeTransport.BridgeDeviceInfo>(),
+            new[]
+            {
+                new LinuxBridgeCensus.HidDeviceInfo(
+                    "/dev/hidraw9", Sony, 0x0CE6, "DualSense Wireless Controller", "usb:5-2", "0003:054C:0CE6.0021")
+            }));
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+        var device = document.RootElement.GetProperty("hidDevices")[0];
+        Assert.Equal("0003:054C:0CE6.0021", device.GetProperty("instanceId").GetString());
+    }
+
+    [Fact]
     public void PortPathMatchesTheFormatTheTransportReports()
     {
         // If these two ever diverge the census can never mark a bridge "connected", because

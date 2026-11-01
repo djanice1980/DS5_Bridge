@@ -183,6 +183,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   pendingControllerProfileAssignment: null,
   pendingButtonRemappingAssignment: null,
   controllerHistory: [],
+  announcedBridgeRestarts: [],
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
   audioReactiveHapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,
@@ -980,6 +981,11 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     pendingControllerProfileAssignment: normalizeOptionalProfileId(value?.pendingControllerProfileAssignment),
     pendingButtonRemappingAssignment: normalizeOptionalProfileId(value?.pendingButtonRemappingAssignment),
     controllerHistory: normalizeControllerHistory(value?.controllerHistory),
+    announcedBridgeRestarts: Array.isArray(value?.announcedBridgeRestarts)
+      ? value.announcedBridgeRestarts
+        .filter((key): key is string => typeof key === 'string' && key.length > 0 && key.length <= 256)
+        .slice(0, 20)
+      : [],
     micVolumePercent: Number.isFinite(value?.micVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))
       : DEFAULT_SETTINGS.micVolumePercent,

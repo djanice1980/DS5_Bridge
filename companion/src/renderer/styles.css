@@ -7194,6 +7194,30 @@ button.trigger-lab-chip {
   justify-self: end;
 }
 
+.device-restart-row {
+  padding: 8px 0;
+}
+
+.device-restart-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+
+.device-restart-detail {
+  color: var(--text-muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+.device-restart-copy {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .device-control-row .custom-select {
   width: min(100%, 320px);
   justify-self: end;

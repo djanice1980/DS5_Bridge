@@ -18,7 +18,8 @@ static class LinuxBridgeCensus
         ushort VendorId,
         ushort ProductId,
         string? Product,
-        string? ContainerId);
+        string? ContainerId,
+        string? InstanceId = null);
 
     internal sealed record BridgeEntry(string Path, string? ContainerId);
 
@@ -28,7 +29,8 @@ static class LinuxBridgeCensus
         string? Product,
         string? ContainerId,
         bool IsBridge,
-        bool HidUnavailable = false);
+        bool HidUnavailable = false,
+        string? InstanceId = null);
 
     internal sealed record Census(IReadOnlyList<BridgeEntry> Bridges, IReadOnlyList<HidEntry> HidDevices);
 
@@ -62,7 +64,8 @@ static class LinuxBridgeCensus
                 device.ProductId,
                 device.Product,
                 device.ContainerId,
-                device.ContainerId is not null && bridgePorts.Contains(device.ContainerId)))
+                device.ContainerId is not null && bridgePorts.Contains(device.ContainerId),
+                InstanceId: device.InstanceId))
             .ToList();
 
         // A Sony controller that is on the USB bus but has NO hidraw node. This is not a
@@ -107,7 +110,8 @@ static class LinuxBridgeCensus
             product = device.Product,
             containerId = device.ContainerId,
             isBridge = device.IsBridge,
-            hidUnavailable = device.HidUnavailable
+            hidUnavailable = device.HidUnavailable,
+            instanceId = device.InstanceId
         })
     });
 
@@ -161,12 +165,14 @@ static class LinuxBridgeCensus
                     continue;
                 }
 
+                var resolved = ResolveSysfsPath(entry);
                 devices.Add(new HidDeviceInfo(
                     $"/dev/{Path.GetFileName(entry)}",
                     vendor,
                     product,
                     name,
-                    ResolvePortPath(entry)));
+                    resolved is null ? null : PortPathFromSysfsPath(resolved),
+                    resolved is null ? null : HidInstanceFromSysfsPath(resolved)));
             }
             catch
             {
@@ -182,11 +188,16 @@ static class LinuxBridgeCensus
     // rather than merely normalised.
     internal static string? ResolvePortPath(string hidrawSysfsPath)
     {
+        var resolved = ResolveSysfsPath(hidrawSysfsPath);
+        return resolved is null ? null : PortPathFromSysfsPath(resolved);
+    }
+
+    private static string? ResolveSysfsPath(string hidrawSysfsPath)
+    {
         try
         {
-            var resolved = Directory.ResolveLinkTarget(hidrawSysfsPath, returnFinalTarget: true)?.FullName
+            return Directory.ResolveLinkTarget(hidrawSysfsPath, returnFinalTarget: true)?.FullName
                 ?? Path.GetFullPath(hidrawSysfsPath);
-            return PortPathFromSysfsPath(resolved);
         }
         catch
         {
@@ -194,6 +205,24 @@ static class LinuxBridgeCensus
             return null;
         }
     }
+
+    // The HID device's own sysfs name, e.g. "0003:054C:0CE6.0018". The trailing number is
+    // allocated per HID device and never reused while the system is up, whereas /dev/hidrawN
+    // minors are handed straight to the next device plugged in. That makes it the token that
+    // tells two controllers apart at the same hidraw path.
+    internal static string? HidInstanceFromSysfsPath(string sysfsPath)
+    {
+        if (string.IsNullOrEmpty(sysfsPath))
+        {
+            return null;
+        }
+        return sysfsPath.Split('/')
+            .Reverse()
+            .FirstOrDefault(segment => HidInstancePattern.IsMatch(segment));
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex HidInstancePattern =
+        new(@"^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}\.[0-9A-Fa-f]{4}$");
 
     // Turn a resolved sysfs path into the same "usb:5-1.3" form LinuxUsbBridgeTransport
     // reports, so census entries and the active transport path compare equal.

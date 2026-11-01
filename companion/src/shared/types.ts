@@ -116,6 +116,8 @@ export interface CompanionSettings {
   buttonRemappingDraft: ButtonRemapMap;
   chordFunctions: ChordFunction[];
   chordAssignments: ChordAssignment[];
+  /** Bridge restarts already announced, newest first (bridge id + restart key). */
+  announcedBridgeRestarts: string[];
 }
 
 export interface HidDeviceSummary {
@@ -186,10 +188,33 @@ export interface BridgeDiagnostics {
   /** Set when the bridge's previous reset was a watchdog timeout (a main-loop hang),
    *  naming the phase that was running. Null when the last boot was clean. */
   lastWatchdogHang: string | null;
+  /** Why the bridge last restarted on its own, in plain terms. Null after a clean boot
+   *  (power-on or firmware update) or when the firmware cannot say. */
+  lastRestart?: BridgeRestart | null;
   /** Firmware pairing breadcrumbs, newest last, as "stage/status" pairs. Stage 12 was the
    *  connection-phase disagreement the phase-machine migration was gated on; the migration
    *  landed in firmware 1.6.60 and nothing emits it now. */
   pairingBreadcrumbs: string | null;
+}
+
+/** An abnormal bridge restart: a firmware crash, a hang the watchdog ended, or a stalled
+ *  audio core. Built by describeForkRestart / describeUpstreamRestart. */
+export interface BridgeRestart {
+  kind: 'crash' | 'hang' | 'audio-stall' | 'unknown';
+  /** One sentence for people, e.g. "The bridge's firmware crashed and the bridge restarted itself." */
+  summary: string;
+  /** What the firmware was doing, in plain words; null when the record does not say. */
+  area: string | null;
+  /** Abnormal restarts in a row, counting this one; null when the firmware does not count. */
+  consecutive: number | null;
+  /** How long the bridge had been running before it went down. */
+  uptimeBeforeSeconds: number | null;
+  /** When the restart happened, from the bridge's uptime at the time it was read. */
+  restartedAtUnixMs: number | null;
+  /** The raw record, for a bug report. */
+  technical: string;
+  /** Identifies this one restart, so it is announced once rather than on every app launch. */
+  key: string;
 }
 
 export interface BridgeSnapshot {

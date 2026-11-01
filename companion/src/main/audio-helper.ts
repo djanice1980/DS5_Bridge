@@ -186,6 +186,9 @@ export interface BridgeCensusHidDevice {
    *  bridge, so the kernel's playstation driver rejected the USB twin as a duplicate MAC and
    *  tore its HID down. The device exists, but only as a charging body. */
   hidUnavailable?: boolean;
+  /** Linux: the HID device's sysfs name (e.g. "0003:054C:0CE6.0018"). Unlike the hidraw path,
+   *  which the next device plugged in inherits, it is never reused while the system is up. */
+  instanceId?: string | null;
 }
 
 export interface BridgeCensus {
