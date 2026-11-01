@@ -323,6 +323,7 @@ export type ChordControllerSettingAction =
   | 'toggle-lightbar-override'
   | 'toggle-mic-mute'
   | 'sleep-controller'
+  | 'show-battery'
   | 'persona-dualsense'
   | 'persona-ds4'
   | 'persona-xbox'
