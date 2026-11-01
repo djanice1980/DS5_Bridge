@@ -718,20 +718,40 @@ void assert_mute_keyboard_chord_starter_is_deferred(std::filesystem::path const 
     }
 }
 
+// Ported from upstream 2.0.1 (1c8c00f).
+void assert_mute_button_reaches_host_only_in_normal_mode(std::filesystem::path const &root) {
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+    const std::string process_block = extract_between(
+        companion_cpp,
+        "void companion_process_controller_report(uint8_t *report, uint16_t len) {",
+        "\n}\n\nvoid companion_update_controller_report"
+    );
+    const auto guard_pos = process_block.find("if (mute_button_mode != MuteButtonNormal) {\n        report[9] &= static_cast<uint8_t>(~kMuteButtonBit);\n    }");
+    const auto toggle_pos = process_block.find("toggle_companion_mic_mute();");
+    if (guard_pos == std::string::npos || toggle_pos == std::string::npos || toggle_pos < guard_pos) {
+        throw std::runtime_error("Normal mute mode must pass the mute button to the host and still toggle the bridge mic (upstream #140)");
+    }
+    if (process_block.find("\n    report[9] &= static_cast<uint8_t>(~kMuteButtonBit);") != std::string::npos) {
+        throw std::runtime_error("The mute button must not be stripped from host reports unconditionally (upstream #140)");
+    }
+}
+
 void assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(std::filesystem::path const &root) {
     const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+    const auto gate_h = read_text(root / "src" / "home_chord_gate.h");
 
-    if (companion_cpp.find("constexpr uint32_t kHomeChordSuppressUs = 250000;") == std::string::npos) {
+    // Timing behavior itself is covered by home_chord_gate_test (upstream c1906b4).
+    if (gate_h.find("inline constexpr uint32_t kSuppressUs = 250000;") == std::string::npos) {
         throw std::runtime_error("PS/Home chord starter must be swallowed for the full 250ms chord window");
     }
-    if (companion_cpp.find("constexpr uint32_t kHomeChordFallbackReplayUs = 80000;") == std::string::npos) {
+    if (gate_h.find("inline constexpr uint32_t kFallbackReplayUs = 80000;") == std::string::npos) {
         throw std::runtime_error("Unconsumed PS/Home taps must replay as a host-visible 80ms press");
     }
 
     const std::string gate_enabled_block = extract_between(
         companion_cpp,
         "bool home_chord_gate_enabled() {",
-        "\n}\n\nvoid clear_home_chord_gate"
+        "\n}\n\nvoid apply_home_chord_gate"
     );
     if (
         gate_enabled_block.find("sleep_keybind_enabled || speaker_volume_shortcut_enabled") == std::string::npos
@@ -746,14 +766,28 @@ void assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(std::files
         "\n}\n\nbool dpad_direction_has"
     );
     if (
-        gate_block.find("if (home_chord_consumed)") == std::string::npos
+        gate_block.find("ds5::home_chord_gate::step(") == std::string::npos
+        || gate_block.find("home_chord_gate_enabled(),") == std::string::npos
+        || gate_block.find("report[9] |= kHomeButtonBit;") == std::string::npos
         || gate_block.find("report[9] &= static_cast<uint8_t>(~kHomeButtonBit);") == std::string::npos
-        || gate_block.find("home_chord_gate_until_us = now + kHomeChordSuppressUs;") == std::string::npos
-        || gate_block.find("if (!time_us_reached(now, home_chord_gate_until_us))") == std::string::npos
-        || gate_block.find("home_chord_replay_until_us = now + kHomeChordFallbackReplayUs;") == std::string::npos
-        || gate_block.find("if (home_chord_replay_until_us != 0 && !time_us_reached(now, home_chord_replay_until_us))") == std::string::npos
     ) {
-        throw std::runtime_error("PS/Home chord gate must mask PS/Home during the chord window and replay unconsumed taps by duration");
+        throw std::runtime_error("PS/Home chord gate must decide the host's PS/Home bit from the shared gate state machine");
+    }
+    // Fork-specific: a chord that uses PS as its target button clears the bit without being a
+    // PS starter; the gate must treat that as a chord use or it re-sets PS for the host.
+    if (
+        gate_block.find("const bool home_used_by_chord = home_chord_consumed\n        || (physical_home_pressed && (report[9] & kHomeButtonBit) == 0);") == std::string::npos
+        || gate_block.find("        home_used_by_chord,\n") == std::string::npos
+    ) {
+        throw std::runtime_error("PS/Home chord gate must count PS cleared as a chord target as used by the chord");
+    }
+    const std::string loop_block = extract_between(
+        companion_cpp,
+        "void companion_loop() {",
+        "\n}\n"
+    );
+    if (loop_block.find("home_chord_gate = {};") == std::string::npos) {
+        throw std::runtime_error("PS/Home chord gate must reset on controller disconnect (upstream d2b7323)");
     }
 
     const std::string dynamic_block = extract_between(
@@ -1227,6 +1261,7 @@ int main() {
         assert_usb_suspend_poweroff_is_debounced(source_root);
         assert_mute_keyboard_chord_starter_is_deferred(source_root);
         assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(source_root);
+        assert_mute_button_reaches_host_only_in_normal_mode(source_root);
         assert_mic_pass_through_defaults_to_enabled(source_root);
         assert_hid_channel_close_notes_the_phase(source_root);
         assert_vendor_control_gates_share_one_interface_predicate(source_root);

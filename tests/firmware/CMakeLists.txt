@@ -83,3 +83,7 @@ add_test(NAME ram_mem_test COMMAND ram_mem_test)
 add_executable(bounded_containers_test bounded_containers_test.cpp)
 target_include_directories(bounded_containers_test PRIVATE ../../src)
 add_test(NAME bounded_containers_test COMMAND bounded_containers_test)
+
+add_executable(home_chord_gate_test home_chord_gate_test.cpp)
+target_include_directories(home_chord_gate_test PRIVATE ../../src)
+add_test(NAME home_chord_gate_test COMMAND home_chord_gate_test)
