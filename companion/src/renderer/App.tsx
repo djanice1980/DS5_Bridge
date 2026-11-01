@@ -10143,6 +10143,7 @@ export function App() {
                     showSelectedCheck={false}
                     ariaLabel="UI theme"
                     disabled={pendingAction !== null}
+                    floatingMenu
                     renderValue={(label, value) => <ThemeOption label={label} value={value} />}
                     renderOption={(label, value) => <ThemeOption label={label} value={value} />}
                     onChange={(value) => {
@@ -10161,6 +10162,7 @@ export function App() {
                     showSelectedCheck={false}
                     ariaLabel="UI scale"
                     disabled={pendingAction !== null}
+                    floatingMenu
                     onChange={(value) => {
                       void runAction('ui-scale', () => window.bridge.setUiScalePercent(value));
                     }}
@@ -10231,6 +10233,7 @@ export function App() {
                       showSelectedCheck={false}
                       ariaLabel="Idle disconnect timeout"
                       disabled={!connected || !snapshot.settings.idleDisconnectEnabled}
+                      floatingMenu
                       onChange={(value) => {
                         void runAction('idle-timeout', () => window.bridge.setIdleDisconnectTimeoutMinutes(value));
                       }}

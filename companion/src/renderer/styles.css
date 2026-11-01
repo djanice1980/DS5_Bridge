@@ -1380,8 +1380,9 @@ button {
   top: auto;
   right: auto;
   width: min(760px, calc(100vw - 48px));
-  max-height: min(560px, calc(100vh - 48px));
-  overflow: visible;
+  max-height: calc(100vh - 48px);
+  overflow-x: hidden;
+  overflow-y: auto;
   animation: modal-panel-in 160ms ease-out;
 }
 
