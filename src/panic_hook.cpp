@@ -109,3 +109,42 @@ namespace std {
 }
 
 } // namespace std
+
+// Opus is compiled with cmake/opus_fatal_override.h, which rewrites celt_fatal(message, file,
+// line) to this argument-free hook so the diagnostic strings are never emitted and fprintf is
+// never linked. The hardening checks still run. (Ported from upstream 2.0, 75cc3d6.)
+extern "C" [[noreturn]] void ds5_celt_fatal_noargs() {
+    watchdog_telemetry_note_fault(
+        WatchdogMainLoopPhase::Panic,
+        reinterpret_cast<uint32_t>(__builtin_return_address(0)),
+        0, 0, 0);
+    reset_after_stamp();
+}
+
+// audio.cpp creates the speaker encoder with OPUS_APPLICATION_RESTRICTED_CELT, which never
+// allocates, initializes or runs the SILK encoder, so the link wraps both SILK entry points here
+// and --gc-sections discards that encoder tree from SRAM. Reaching either stub means the codec
+// configuration regressed. The SILK decoder stays for the microphone path.
+extern "C" [[noreturn]] void __wrap_silk_Encode() {
+    ds5_celt_fatal_noargs();
+}
+
+extern "C" [[noreturn]] void __wrap_silk_InitEncoder() {
+    ds5_celt_fatal_noargs();
+}
+
+// The encoder runs at complexity 0, below the threshold (7) at which Opus runs its tonality
+// analysis, so the analysis code and its MLP weights are retired the same way. Initialization and
+// reset are reached on every encoder create and OPUS_RESET_STATE; they only touched the analysis
+// state, which stays zeroed. tonality_get_info is only called after a completed analysis frame and
+// leaves the caller's AnalysisInfo at its "not valid" default.
+extern "C" [[noreturn]] void __wrap_run_analysis() {
+    ds5_celt_fatal_noargs();
+}
+
+// These three run from the SRAM codec on core 1, so they stay beside it.
+extern "C" void __not_in_flash_func(__wrap_tonality_analysis_init)(void *, int) {}
+
+extern "C" void __not_in_flash_func(__wrap_tonality_analysis_reset)(void *) {}
+
+extern "C" void __not_in_flash_func(__wrap_tonality_get_info)(void *, void *, int) {}

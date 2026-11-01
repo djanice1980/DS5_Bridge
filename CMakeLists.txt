@@ -80,24 +80,59 @@ target_include_directories(wdl_resampler PUBLIC
 )
 
 # Opus
+# The DualSense speaker path encodes CELT-only frames: audio.cpp creates the
+# encoder with OPUS_APPLICATION_RESTRICTED_CELT at 48 kHz stereo, 10 ms, CBR
+# 160 kbps, complexity 0 -- the mode this bitrate always selected anyway. That
+# application never allocates, initializes or runs the SILK encoder, and
+# complexity 0 never runs the tonality analysis. The linker wrappers on
+# ds5-bridge redirect those entry points so --gc-sections can discard both
+# trees instead of copying them to SRAM. The stack protector is disabled: its
+# canaries sat in every codec hot loop, while the hardening checks
+# (OPUS_HARDENING) stay enabled. (Ported from upstream 2.0, 75cc3d6.)
+set(OPUS_STACK_PROTECTOR OFF CACHE BOOL "DS5 Bridge keeps Opus hardening without stack canaries" FORCE)
+set(OPUS_STACK_PROTECTOR OFF)
 add_subdirectory(lib/opus)
 
-# Relocate libopus into Pico SDK .time_critical sections so the host fallback
-# encoder runs from SRAM instead of XIP flash.
+# Keep live Opus instructions and numerical tables in SRAM. Per-function
+# sections let the linker discard unused routines and tables instead of
+# copying whole objects; diagnostic strings stay in flash. Archives relocated
+# by older builds (whole-unit .time_critical.opus_* names) are normalized too.
 add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
-        COMMAND ${CMAKE_OBJCOPY}
-                --rename-section .text=.time_critical.opus_text
-                --rename-section .rodata=.time_critical.opus_rodata
-                --rename-section .rodata.str1.4=.time_critical.opus_strings
-                $<TARGET_FILE:opus>
+        COMMAND ${CMAKE_COMMAND}
+                "-DARCHIVE=$<TARGET_FILE:opus>"
+                "-DOBJDUMP=${CMAKE_OBJDUMP}"
+                "-DOBJCOPY=${CMAKE_OBJCOPY}"
+                -P "${CMAKE_SOURCE_DIR}/cmake/relocate_opus_sections.cmake"
         COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp
         DEPENDS $<TARGET_FILE:opus>
-        COMMENT "Relocating libopus to .time_critical.* sections"
+                "${CMAKE_SOURCE_DIR}/cmake/relocate_opus_sections.cmake"
+                "${CMAKE_SOURCE_DIR}/cmake/opus_sections.cmake"
+        COMMENT "Placing Opus code/tables in SRAM and diagnostic strings in flash"
         VERBATIM
 )
 add_custom_target(opus_ram_relocate ALL DEPENDS ${CMAKE_BINARY_DIR}/opus_ram_relocate.stamp)
 add_dependencies(ds5-bridge opus_ram_relocate)
+
+# Opus' hardening failure path normally formats a diagnostic through fprintf.
+# src/panic_hook.cpp supplies a stamped-reset implementation instead, and the
+# forced include discards the message and source-path strings before they are
+# emitted while the hardening checks keep running.
+target_compile_definitions(opus PRIVATE OVERRIDE_celt_fatal)
+target_compile_options(opus PRIVATE -O2 -ffunction-sections -fdata-sections)
+target_compile_options(opus PRIVATE
+        # SHELL: splits on whitespace, so quote the path (checkouts can contain spaces).
+        "SHELL:-include \"${CMAKE_CURRENT_SOURCE_DIR}/cmake/opus_fatal_override.h\""
+        # The rewritten celt_fatal prototype loses its parameter list in C.
+        -Wno-strict-prototypes)
+target_link_options(ds5-bridge PRIVATE
+        "LINKER:--wrap=silk_Encode"
+        "LINKER:--wrap=silk_InitEncoder"
+        "LINKER:--wrap=run_analysis"
+        "LINKER:--wrap=tonality_analysis_init"
+        "LINKER:--wrap=tonality_analysis_reset"
+        "LINKER:--wrap=tonality_get_info"
+)
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char -ffunction-sections)
 add_custom_command(TARGET wdl_resampler POST_BUILD
@@ -296,6 +331,24 @@ target_link_libraries(ds5-bridge
 # and the send-path ones ran on every HID report and audio packet. See docs/diagnostic-scaffolding.md.
 target_link_options(ds5-bridge PRIVATE
         -Wl,--wrap=panic
+)
+
+# Check the final map after every link: Opus code, tables and state in SRAM,
+# diagnostic strings (if any survive) in flash.
+add_custom_command(TARGET ds5-bridge POST_BUILD
+        COMMAND ${CMAKE_COMMAND}
+                "-DMAP=$<TARGET_FILE:ds5-bridge>.map"
+                -P "${CMAKE_SOURCE_DIR}/cmake/verify_opus_sections.cmake"
+        COMMAND ${CMAKE_COMMAND}
+                "-DMAP=$<TARGET_FILE:ds5-bridge>.map"
+                -P "${CMAKE_SOURCE_DIR}/cmake/verify_opus_strings.cmake"
+        COMMENT "Verifying Opus SRAM placement"
+        VERBATIM
+)
+set_property(TARGET ds5-bridge APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_SOURCE_DIR}/cmake/verify_opus_sections.cmake"
+        "${CMAKE_SOURCE_DIR}/cmake/opus_sections.cmake"
+        "${CMAKE_SOURCE_DIR}/cmake/verify_opus_strings.cmake"
 )
 
 pico_add_extra_outputs(ds5-bridge)

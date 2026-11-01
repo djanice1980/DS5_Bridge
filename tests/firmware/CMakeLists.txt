@@ -57,3 +57,8 @@ add_executable(controller_input_delivery_test
 )
 target_include_directories(controller_input_delivery_test PRIVATE ../../src)
 add_test(NAME controller_input_delivery_test COMMAND controller_input_delivery_test)
+
+# Opus section classification and final-map placement guard (ported from upstream 2.0, 75cc3d6).
+add_test(NAME opus_section_placement_test COMMAND ${CMAKE_COMMAND}
+    -DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/opus-section-placement-test
+    -P ${CMAKE_CURRENT_LIST_DIR}/opus_section_placement_test.cmake)
