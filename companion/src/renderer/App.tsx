@@ -6745,7 +6745,11 @@ export function App() {
             <button type="button" title="Maximize / Restore" onClick={() => void window.bridge.toggleMaximizeWindow()}>
               <Square size={14} />
             </button>
-            <button type="button" title="Hide to tray" onClick={() => void window.bridge.hideWindow()}>
+            <button
+              type="button"
+              title={snapshot?.settings.closeButtonQuits ? 'Quit DS5 Bridge' : 'Hide to tray'}
+              onClick={() => void window.bridge.hideWindow()}
+            >
               <X size={16} />
             </button>
           </div>
@@ -10254,6 +10258,24 @@ export function App() {
                     disabled={pendingAction !== null}
                     onClick={() => void runAction('battery-tray-icon', () => (
                       window.bridge.setShowBatteryPercentTrayIcon(!snapshot.settings.showBatteryPercentTrayIcon)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Quit on Close</strong>
+                    <span>Closing the window quits DS5 Bridge instead of keeping it in the tray. Chords, Audio Haptics and notifications stop until you open it again.</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.closeButtonQuits}
+                    className={`switch ${snapshot.settings.closeButtonQuits ? 'on' : ''}`}
+                    disabled={pendingAction !== null}
+                    onClick={() => void runAction('close-button-quits', () => (
+                      window.bridge.setCloseButtonQuits(!snapshot.settings.closeButtonQuits)
                     ))}
                   >
                     <span />

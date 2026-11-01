@@ -219,6 +219,16 @@ describe('SettingsStore', () => {
     expect(afterMutation.buttonRemappingDraft.square).toBe('square');
   });
 
+  it('keeps the window in the tray on close unless quitting there is persisted', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+    expect(store.get().closeButtonQuits).toBe(false);
+
+    expect(store.update({ closeButtonQuits: true }).closeButtonQuits).toBe(true);
+    expect(persistedSettings(userDataPath).closeButtonQuits).toBe(true);
+    expect(new SettingsStore(userDataPath).get().closeButtonQuits).toBe(true);
+  });
+
   it('persists the battery tray icon preference', () => {
     const userDataPath = tempUserDataPath();
     const store = new SettingsStore(userDataPath);

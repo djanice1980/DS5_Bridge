@@ -3098,6 +3098,14 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  setCloseButtonQuits(enabled: boolean): BridgeSnapshot {
+    this.snapshot.settings = this.settingsStore.update({
+      closeButtonQuits: enabled
+    });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   async setPollingRateMode(mode: PollingRateMode): Promise<BridgeSnapshot> {
     const normalizedMode = normalizePollingRateMode(mode);
     await this.sendSettingCommand(

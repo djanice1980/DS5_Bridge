@@ -31,6 +31,8 @@ export interface CompanionSettings {
   uiThemePreset: UiThemePreset;
   launchAtStartupEnabled: boolean;
   showBatteryPercentTrayIcon: boolean;
+  /** The window's close button quits the app instead of hiding it to the tray. */
+  closeButtonQuits: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
   feedbackBoostEnabled: boolean;

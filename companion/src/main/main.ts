@@ -57,6 +57,7 @@ let tray: Tray | null = null;
 let trayDefaultIcon: Electron.NativeImage | null = null;
 let bridgeService: BridgeService | null = null;
 let isQuitting = false;
+let picoFirmwareActionsRunning = 0;
 let shutdownComplete = false;
 const hasSingleInstanceLock = ALLOW_PARALLEL_AUTOMATION_INSTANCE || app.requestSingleInstanceLock();
 const audioHapticsIconCache = new Map<string, Promise<string | null> | string | null>();
@@ -497,7 +498,7 @@ function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
   window.on('close', (event) => {
     if (!isQuitting) {
       event.preventDefault();
-      window.hide();
+      closeMainWindow(window);
     }
   });
   window.on('will-move', () => bridgeService?.pausePollingFor(1200));
@@ -511,6 +512,18 @@ function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
     applyWindowScale(window, uiScalePercent, false);
   });
   return window;
+}
+
+// The close button hides to the tray unless the user chose to quit there.
+// While a Pico firmware action or bootloader confirmation is running it only
+// hides: quitting would cut a UF2 copy short and leave the bridge half flashed.
+function closeMainWindow(window: BrowserWindow | null): void {
+  const snapshot = bridgeService?.getSnapshot();
+  if (snapshot?.settings.closeButtonQuits && picoFirmwareActionsRunning === 0 && !snapshot.bootloaderConfirmation) {
+    app.quit();
+    return;
+  }
+  window?.hide();
 }
 
 let testerWindow: BrowserWindow | null = null;
@@ -1113,6 +1126,7 @@ async function runPicoFirmwareIpcAction(
   action: PicoFirmwareAction,
   task: () => Promise<PicoFirmwareActionResult>
 ): Promise<PicoFirmwareActionResult> {
+  picoFirmwareActionsRunning += 1;
   try {
     return await task();
   } catch (error) {
@@ -1121,6 +1135,8 @@ async function runPicoFirmwareIpcAction(
       action,
       message: picoFirmwareErrorMessage(error)
     };
+  } finally {
+    picoFirmwareActionsRunning -= 1;
   }
 }
 
@@ -1246,6 +1262,9 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:setShowBatteryPercentTrayIcon', (_event, value: boolean) => (
     service.setShowBatteryPercentTrayIcon(Boolean(value))
   ));
+  ipcMain.handle('bridge:setCloseButtonQuits', (_event, value: boolean) => (
+    service.setCloseButtonQuits(Boolean(value))
+  ));
   ipcMain.handle('bridge:setPollingRateMode', (_event, value: PollingRateMode) => (
     service.setPollingRateMode(value)
   ));
@@ -1356,7 +1375,7 @@ function registerIpc(service: BridgeService): void {
     }
   });
   ipcMain.handle('window:isMaximized', () => Boolean(mainWindow?.isMaximized()));
-  ipcMain.handle('window:hide', () => mainWindow?.hide());
+  ipcMain.handle('window:hide', () => closeMainWindow(mainWindow));
   ipcMain.handle('window:openExternal', (_event, url: string) => {
     if (!isAllowedExternalUrl(url)) {
       return;

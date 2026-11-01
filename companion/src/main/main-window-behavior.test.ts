@@ -34,4 +34,20 @@ describe('main window behavior', () => {
     expect(mainSource).toContain("powerMonitor.on('unlock-screen', () => scheduleMainWindowScaleRestore(true));");
     expect(mainSource).toContain("screen.on('display-metrics-changed', () => scheduleMainWindowScaleRestore(true));");
   });
+
+  it('hides the window on close unless the user chose to quit there', () => {
+    const closeMainWindow = extractFunction('closeMainWindow');
+    expect(closeMainWindow).toContain('snapshot?.settings.closeButtonQuits');
+    expect(closeMainWindow.indexOf('app.quit();')).toBeLessThan(closeMainWindow.indexOf('window?.hide();'));
+    // A firmware action or bootloader confirmation in flight only hides, so a
+    // UF2 copy is never cut short.
+    expect(closeMainWindow).toContain('picoFirmwareActionsRunning === 0');
+    expect(closeMainWindow).toContain('!snapshot.bootloaderConfirmation');
+    const runPicoFirmwareIpcAction = extractFunction('runPicoFirmwareIpcAction');
+    expect(runPicoFirmwareIpcAction).toContain('picoFirmwareActionsRunning += 1;');
+    expect(runPicoFirmwareIpcAction).toMatch(/finally \{\s*picoFirmwareActionsRunning -= 1;/);
+    expect(extractFunction('createWindow')).toMatch(/window\.on\('close', \(event\) => \{\s*if \(!isQuitting\) \{\s*event\.preventDefault\(\);\s*closeMainWindow\(window\);/);
+    expect(mainSource).toContain("ipcMain.handle('window:hide', () => closeMainWindow(mainWindow));");
+    expect(mainSource).toContain("ipcMain.handle('bridge:setCloseButtonQuits'");
+  });
 });
