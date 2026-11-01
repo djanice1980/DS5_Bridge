@@ -6,6 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const tabs = ['Haptics', 'Audio', 'Triggers', 'Lighting', 'System'];
 const testButtonTabs = ['Haptics', 'Audio', 'Triggers'];
+const presetHeaderExceptionTabs = new Set(['Audio']);
 const tolerancePx = 1;
 const buttonTolerancePx = 2;
 const startupTutorialStorageKey = 'ds5bridge.startupTutorialCompleted.v1';
@@ -69,6 +70,7 @@ try {
   let targetIconLeft = null;
   let targetTextLeft = null;
   let targetPresetTop = null;
+  let targetPresetTitleHeight = null;
 
   await controlsNav.getByRole('tab', { name: 'Overview' }).click();
   await page.waitForTimeout(150);
@@ -171,7 +173,8 @@ try {
       const activePage = document.querySelector('.control-page.active');
       const card = activePage?.querySelector('.feature-card-grid > .preset-card');
       const row = card?.querySelector(':scope > .segmented-row');
-      if (!card || !row) {
+      const title = card?.querySelector(':scope > .feature-card-title');
+      if (!card || !row || !title) {
         return null;
       }
       const cardRect = card.getBoundingClientRect();
@@ -179,23 +182,33 @@ try {
       return {
         top: rowRect.top - cardRect.top,
         centerY: rowRect.top + rowRect.height / 2 - cardRect.top,
-        height: rowRect.height
+        height: rowRect.height,
+        titleHeight: title.getBoundingClientRect().height
       };
     });
 
     if (presetMeasurement) {
       targetPresetTop ??= presetMeasurement.top;
-      const topDelta = Math.abs(presetMeasurement.top - targetPresetTop);
+      targetPresetTitleHeight ??= presetMeasurement.titleHeight;
+      // The Audio card's own speaker/mic Enabled switch takes a second header
+      // row (deec722), by design. Allow exactly that extra header height there;
+      // every other tab must line up with the first.
+      const headerAllowance = presetHeaderExceptionTabs.has(tab)
+        ? presetMeasurement.titleHeight - targetPresetTitleHeight
+        : 0;
+      const expectedTop = targetPresetTop + headerAllowance;
+      const topDelta = Math.abs(presetMeasurement.top - expectedTop);
       presetControlRows.push({
         tab,
         rowTop: Number(presetMeasurement.top.toFixed(2)),
         rowCenter: Number(presetMeasurement.centerY.toFixed(2)),
         rowHeight: Number(presetMeasurement.height.toFixed(2)),
-        delta: Number((presetMeasurement.top - targetPresetTop).toFixed(2))
+        headerAllowance: Number(headerAllowance.toFixed(2)),
+        delta: Number((presetMeasurement.top - expectedTop).toFixed(2))
       });
 
       if (topDelta > tolerancePx) {
-        failures.push(`${tab}: preset row top is ${presetMeasurement.top.toFixed(2)}px, expected ${targetPresetTop.toFixed(2)}px`);
+        failures.push(`${tab}: preset row top is ${presetMeasurement.top.toFixed(2)}px, expected ${expectedTop.toFixed(2)}px`);
       }
     }
   }
