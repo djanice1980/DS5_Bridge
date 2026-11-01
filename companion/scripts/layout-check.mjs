@@ -550,7 +550,7 @@ try {
     return {
       muteLabels: read('.system-fields .select-row > span'),
       deviceLabels: read('.device-row > span'),
-      systemSelectValues: read('.system-page .custom-select-button span')
+      systemSelectValues: read('.system-page .custom-select-button span').filter((sample) => sample.text)
     };
   });
 
