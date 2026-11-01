@@ -2825,6 +2825,7 @@ export class BridgeService extends EventEmitter {
           return;
         }
         await this.setMicMute(!settings.micMuted);
+        this.emitMicMuteToast(this.settingsStore.get().micMuted);
         return;
       case 'sleep-controller':
         await this.sleepController();
@@ -2995,6 +2996,7 @@ export class BridgeService extends EventEmitter {
       this.snapshot.status.micMuted = micMuted;
     }
     this.emitSnapshot();
+    this.emitMicMuteToast(micMuted);
     void this.updateMicKeepaliveEngine(Boolean(this.snapshot.status?.controllerConnected));
   }
 
@@ -3181,6 +3183,23 @@ export class BridgeService extends EventEmitter {
     this.lowBatteryToastActive = false;
     this.emitSnapshot();
     return this.getSnapshot();
+  }
+
+  async setNotifyMicMute(enabled: boolean): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.update({ notifyMicMute: enabled });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  /** For a mute change made on the controller, by its button or a chord. */
+  private emitMicMuteToast(micMuted: boolean): void {
+    if (!this.settingsStore.get().notifyMicMute) {
+      return;
+    }
+    this.emit('toast', {
+      title: 'DS5 Bridge',
+      body: micMuted ? 'Controller mic muted' : 'Controller mic unmuted'
+    } satisfies BridgeToast);
   }
 
   async testNotification(): Promise<BridgeSnapshot> {

@@ -263,7 +263,7 @@ type FeatureTipsPanelProps = {
   triggerLabOpen?: boolean;
 };
 type SettingsFocusTarget = 'controller-power-saving' | 'sleep-shortcut' | 'volume-shortcut';
-type NotificationFocusTarget = 'controller-status' | 'low-battery' | 'all';
+type NotificationFocusTarget = 'controller-status' | 'low-battery' | 'mic-mute' | 'all';
 
 const HAPTICS_STEP = 20;
 const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
@@ -3888,7 +3888,8 @@ export function App() {
   const sleepKeybindEnabled = Boolean(snapshot?.settings.sleepKeybindEnabled);
   const controllerToastEnabled = Boolean(snapshot?.settings.notifyControllerConnection);
   const lowBatteryToastEnabled = Boolean(snapshot?.settings.notifyLowBattery);
-  const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled;
+  const micMuteToastEnabled = Boolean(snapshot?.settings.notifyMicMute);
+  const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled || micMuteToastEnabled;
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const adaptiveTriggerOutputActive = Boolean(snapshot?.status?.adaptiveTriggerOutputRecent);
   const audioStatus = snapshot?.diagnostics.audioStatus;
@@ -4256,7 +4257,8 @@ export function App() {
   ].filter((item): item is { id: 'sleep' | 'volume'; label: string } => Boolean(item));
   const overviewNotificationItems = [
     controllerToastEnabled ? { id: 'controller-status', label: 'Controller Status' } : null,
-    lowBatteryToastEnabled ? { id: 'low-battery', label: 'Low Battery' } : null
+    lowBatteryToastEnabled ? { id: 'low-battery', label: 'Low Battery' } : null,
+    micMuteToastEnabled ? { id: 'mic-mute', label: 'Mic Mute' } : null
   ].filter((item): item is { id: NotificationFocusTarget; label: string } => Boolean(item));
   const overviewPowerSavingLabel = snapshot?.settings.controllerPowerSavingEnabled
     ? controllerPowerSavingActive
@@ -6426,6 +6428,13 @@ export function App() {
     ));
   }
 
+  function toggleMicMuteNotifications() {
+    if (!snapshot) return;
+    void runAction('notify-mic-mute', () => (
+      window.bridge.setNotifyMicMute(!snapshot.settings.notifyMicMute)
+    ));
+  }
+
   function setPollingRateMode(mode: PollingRateMode) {
     void runAction('polling-rate', () => window.bridge.setPollingRateMode(mode));
   }
@@ -6669,6 +6678,22 @@ export function App() {
                       className={`switch ${lowBatteryToastEnabled ? 'on' : ''}`}
                       disabled={pendingAction !== null}
                       onClick={toggleLowBatteryNotifications}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'mic-mute' || notificationFocusTarget === 'all' ? 'settings-menu-row-highlight' : ''}`}>
+                    <div>
+                      <strong>Mic Mute</strong>
+                      <span>Toast when the mic is muted or unmuted from the controller</span>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={micMuteToastEnabled}
+                      className={`switch ${micMuteToastEnabled ? 'on' : ''}`}
+                      disabled={pendingAction !== null}
+                      onClick={toggleMicMuteNotifications}
                     >
                       <span />
                     </button>
