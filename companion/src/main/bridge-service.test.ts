@@ -1657,6 +1657,69 @@ describe('BridgeService', () => {
     expect(snapshot.settings.audioReactiveHapticsSource).toEqual(appSource);
   });
 
+  it('keeps a selected audio haptics output mix instead of reverting to System', async () => {
+    const deviceSource = {
+      kind: 'output-device' as const,
+      deviceName: 'alsa_output.goxlr_games',
+      displayName: 'GoXLRMini Game'
+    };
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const selected = await service.setAudioReactiveHapticsConfig({ source: deviceSource });
+    expect(selected.settings.audioReactiveHapticsSource).toEqual(deviceSource);
+
+    const updated = await service.setAudioReactiveHapticsConfig({ gainPercent: 130 });
+    expect(updated.settings.audioReactiveHapticsSource).toEqual(deviceSource);
+
+    const nameless = await service.setAudioReactiveHapticsConfig({
+      source: { kind: 'output-device', deviceName: '   ' }
+    });
+    expect(nameless.settings.audioReactiveHapticsSource).toBe('system-audio');
+  });
+
+  it('starts system audio haptics on the selected output mix', async () => {
+    const deviceSource = {
+      kind: 'output-device' as const,
+      deviceName: 'alsa_output.goxlr_games',
+      displayName: 'GoXLRMini Game'
+    };
+    const service = serviceFixture({
+      audioReactiveHapticsEnabled: true
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ hostPersonaMode: 'ds4', supportedHostPersonaModesMask: 0x07 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const internals = service as unknown as {
+      systemAudioHapticsEngine: {
+        start: typeof start;
+        stop: typeof stop;
+        isActive(): boolean;
+      };
+    };
+    internals.systemAudioHapticsEngine = {
+      start,
+      stop,
+      isActive: () => true
+    };
+
+    await service.setAudioReactiveHapticsConfig({ source: deviceSource });
+
+    expect(start).toHaveBeenLastCalledWith(expect.objectContaining({
+      source: deviceSource
+    }), 'ds4');
+  });
+
   it('does not poll app audio sessions while the controller is disconnected', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();

@@ -554,6 +554,19 @@ function normalizeAudioReactiveHapticsSource(source: unknown): AudioReactiveHapt
   if (!source || typeof source !== 'object') {
     return 'system-audio';
   }
+  const deviceCandidate = source as Partial<Extract<AudioReactiveHapticsSource, { kind: 'output-device' }>>;
+  if (deviceCandidate.kind === 'output-device') {
+    const deviceName = normalizeOptionalString(deviceCandidate.deviceName);
+    if (!deviceName) {
+      return 'system-audio';
+    }
+    const displayName = normalizeOptionalString(deviceCandidate.displayName);
+    return {
+      kind: 'output-device',
+      deviceName,
+      ...(displayName ? { displayName } : {})
+    };
+  }
   const candidate = source as Partial<Extract<AudioReactiveHapticsSource, { kind: 'app-session' }>>;
   if (candidate.kind !== 'app-session') {
     return 'system-audio';
